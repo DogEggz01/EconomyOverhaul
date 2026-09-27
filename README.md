@@ -38,6 +38,7 @@
   - You will also receive reputation penalty, depends on your debt amount. You can only be reduce to rep 1 at minumum.
 - Add bankruptcy button in trade book. It will reset your currency and reputation in that region to 0, all your debt will be clear at that region.
 - Add Loan tab in Log menu. It record your current loan amount in each region, and each region's credit limit and interest rate.
+  - Under loan tab there is also a bankruptcy button that will bankrupt you in all region. I'm not sure when you will need it but i will leave it here.
 - This system is used to replace the Reputation discount in vanilla. Since it don't work on trade book purchase anyway.
   - There is still retail discount (buying things from vendors), raise with your reputation.
 ## Cargo water damage
