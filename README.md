@@ -1,4 +1,4 @@
-*Disclaimer: This mod is made with ChatGPT 6.0 Astra*
+*Disclaimer: This mod is made with ChatGPT 6.0 Astra and Opus 5.5*
 ## Port Capacity and Port production
 - All ports is separate into 4 tiers. Each tier have differenct port capacity, which affect their cargo hold capacity, production speed and demands.
 - Bigger the Port Capacity, more trade goods will be available, production/consumption will be faster.
@@ -39,11 +39,43 @@
 - Add bankruptcy button in trade book. It will reset your currency and reputation in that region to 0, all your debt will be clear at that region.
 - Add Loan tab in Log menu. It record your current loan amount in each region, and each region's credit limit and interest rate.
   - Under loan tab there is also a bankruptcy button that will bankrupt you in all region. I'm not sure when you will need it but i will leave it here.
+- Following condition will force you to payback loan right away in loaning currency
+  - Cargo despawned from you leaving too far away
+  - You open the sealed cargo
+  - You sacrifice the cargo to the cat
 - This system is used to replace the Reputation discount in vanilla. Since it don't work on trade book purchase anyway.
   - There is still retail discount (buying things from vendors), raise with your reputation.
 ## Cargo water damage
-
-
+- Most of the cargo will now receive water damage when they are soaked in water, under rain, or drop into sea.
+  - Trade goods that is not affect by water damage: 
+    - coconuts, gems, iron, gold, copper, tools, sculptures, logs, nails, marble, silver, sulfur, rubber.
+- Add water damage hint text for all water vulnerable trade good, when point at it will show current water damage level.
+  - It start from 0%, progress to 100%.
+  - This hint text can be toggle off in Configurator
+- Cargo that receive water damage will receive price penalty. For mission cargo, it also affect reputation.
+  - This effect start at 10% water damage, so you have some buffer.
+  - Loan principal and interest won't get discount, pay up sucker
+- Liquid cargo (All alcohol and water) also receive water damage, but won't get their price reduce until 100% water damage.
+  - You can still drink 100% water damage alcohol and water, you will be fine.
+- When water level in ship pass 5% of the cargo height, it will count as soaked and start damaging the cargo.
+  - This means smaller cargo is more easily to get damage, also this means you can avoid this by elevated the cargo.
+  - Water level over 5% don't increase damage rate. Soaking damage rate is fixed.
+- After 10% of water damage, your cargo will start having water stain, that's your visual cue that your cargo start decreasing value.
+- Water damage will also deepen your cargo's crate color.
+- Wetted cargo can be dried. As long as it's water damage is below 75% (include 75%). It can be dried back up to 20%
+  - 20% water damage will result in 90% value cargo (10% less than origin)
+  - Liquid cargo cannot be dried. So don't let it reach 100%.
+- Drying requires you to place cargo under open sky. Under full open sky and clear weather. A cargo can be dried from 75% to 20% in 24 in-game hour.
+  - If the cargo is covered by something on top of it partially, it will still dry, but slower.
+  - Fully covered cargo (either by other cargo, or by the ship structure) will not dry.
+  - Cargo that have water touching it but below it's 5% height will also not dry.
+  - Things without collision like canvas roof on dhow will be count as open sky.
+- Rain will damage uncovered cargo. Partially covered cargo still get rain damage, but at slower speed.
+  - If you are on small ship that don't have many hull structure to provide cover. Put things on top of cargo to cover it also work.
+- The speed that cargo get damage is tied to rain intensity. Inside the storm and at the outskirt of storm will have diffent water damage rate.
+- Water damage from rain and soaked water will stack.
+### Wood plank for repairing
+- Wood plank item is added so you have another way to counter the water damage.
 ## Trader, price infomation and tavern rumor change
 
 ## Vanilla mechanics fix
