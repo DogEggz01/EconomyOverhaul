@@ -21,9 +21,9 @@
   - For example: Tools need iron, copper, lumber and rubber. Thus Tool producing port will have increased need for these things. Sculpture need marble, wine need sulfur, sausage need meats, meats need salt...etc.
 - There is now 4 price curve that decide goods price: Essential, Basic supply, Industrial goods, Luxury
   - Essential: Lower price range, more stable price, you can sell/buy alot of goods and price don't move too much, unless there are severe deficiet or overstock, profit is limited.
-    - Stpales, meat, common fishes, water belongs to this
+    - Grain, Rice, Meat, Common fishes, fruit, water belongs to this
   - Basic supply: Smaller stable price range, price will incease/drop faster than Essential price curve, got a higher profit margin than Essential.
-    - Alcohol, Cheese,Fruit, Special fish(Tuna, eels, northfish), Goods, Medicine, Nails, Salt, textile material belongs to here
+    - Alcohol, Cheese, Orange, Special fish(Tuna, eels, northfish), Goods, Medicine, Nails, Salt, textile material belongs to here
   - Industrial goods: Liner price curve, predictable price change
     - Metals, tools, logs, lumber, sulfur, rubber belongs here
   - Luxury: Similar to vanilla price curve, overall most profitable, but price will drop sharply when the demand is not strong. Biggest price range.
