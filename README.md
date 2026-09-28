@@ -33,6 +33,7 @@
 - Loan button added in trade book UI, you can buy trade goods without spending your money, instead you spend your credit to get the cargo.
 - Interest will be paid, along with the principal, when you sell the loaned cargo. There is no time limit when you need to sell the cargo.
 - Higher the reputation, the more credit you can get, and lower the interest rate.
+  - Each region will have separate credit limit and interest rate, according to your reputation.
 - If your profit can cover both principal and interest, you will recive the local currency
 - If your profit cannot cover all, the debit amount will be taken from the currency you loan.
 - If you don't have enough money in loan currecny to pay back the debt, it will goes to negative money. While under debt you cannot do any action that will spend money until you make it positive again.
