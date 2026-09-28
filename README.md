@@ -77,6 +77,9 @@
 ### Wood plank for repairing
 - Wood plank item is added so you have another way to counter the water damage.
 ## Trader, price infomation and tavern rumor change
-
-## Vanilla mechanics fix
+## Currency mechanics change
+## Vanilla mechanics changed
 - Pushing cargo quantity over port capacity no longer stop production/consumption. Consumption will remain at max speed, and production will accerlate in deficit instead of stop producing.
+- All price now calculate against port capacity, instead of fixed capacity of 100
+- Game now only run market initialization once at new save, instead of everytime you load in game.
+- Chronos and FFL special trade good can be bought anywhere, if any NPC trader bring it out.
