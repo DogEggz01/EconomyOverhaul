@@ -88,6 +88,7 @@
   - When aquire plank from Wood Plank Bundle, it will be 1.6x the shipyard repair cost.
   - Currently most expansive hull - Jong, need 20 plank to fix 1% damage.
 - Plank fixing fee is calculated with 1x lumber price, so if lumber become more expensive/cheaper, it will change your repairing fee.
+- If you remove the plank, it's hammering progress will be reset
 ## Trader, price infomation and tavern rumor change
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
