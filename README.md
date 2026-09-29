@@ -83,10 +83,11 @@
   - Buy Wood Plank Bundle from Kicia bay furniture vendor. After unbundle it gives you 8 plank.
 - To fix the hull, attach the wood plank at any part of the hull, and start hammering it.
 - Each plank need 30s real life time to hammer. If the ship is already caulked with oakum, hammering time reduce by half.
-- Plank needed to fix 1% damage is related to shipyard repair fee.
+- Plank needed to fix 1% damage is related to shipyard repair fee. 
   - When aquire plank from lumber, it will roughtly be same cost as repairing in shipyard
   - When aquire plank from Wood Plank Bundle, it will be 1.6x the shipyard repair cost.
   - Currently most expansive hull - Jong, need 20 plank to fix 1% damage.
+- Plank fixing fee is calculated with 1x lumber price, so if lumber become more expensive/cheaper, it will change your repairing fee.
 ## Trader, price infomation and tavern rumor change
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
