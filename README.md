@@ -78,6 +78,15 @@
 - Water damage from rain and soaked water will stack.
 ### Wood plank for repairing
 - Wood plank item is added so you have another way to counter the water damage.
+- You can aquire wood plank in 2 way
+  - Unbundle Lumber trade good, which gives you 128 plank.
+  - Buy Wood Plank Bundle from Kicia bay furniture vendor. After unbundle it gives you 8 plank.
+- To fix the hull, attach the wood plank at any part of the hull, and start hammering it.
+- Each plank need 30s real life time to hammer. If the ship is already caulked with oakum, hammering time reduce by half.
+- Plank needed to fix 1% damage is related to shipyard repair fee.
+  - When aquire plank from lumber, it will roughtly be same cost as repairing in shipyard
+  - When aquire plank from Wood Plank Bundle, it will be 1.6x the shipyard repair cost.
+  - Currently most expansive hull - Jong, need 20 plank to fix 1% damage.
 ## Trader, price infomation and tavern rumor change
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
@@ -107,7 +116,7 @@
 - Change how trade good spawn so bulk trading can work
 - Add a toggle option in trade book to make bought/loaned cargo directly goes into cart, you will need to hire cart service first
   - Cart Transportation fee will be 10x if using this function
-- Same toggel option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
+- Same toggle option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
 ## Vanilla mechanics changed
 - Pushing cargo quantity over port capacity no longer stop production/consumption. Consumption will remain at max speed, and production will accerlate in deficit instead of stop producing.
 - All price now calculate against port capacity, instead of fixed capacity of 100
