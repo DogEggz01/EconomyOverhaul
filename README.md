@@ -47,7 +47,7 @@
   - You sacrifice the cargo to the cat
 - This system is used to replace the Reputation discount in vanilla. Since it don't work on trade book purchase anyway.
   - There is still retail discount (buying things from vendors), raise with your reputation.
-## Cargo water damage (CAN BE TOGGLE OF IN CONFIGURATOR)
+## Cargo water damage (CAN BE TOGGLE OFF IN CONFIGURATOR)
 - Most of the cargo will now receive water damage when they are soaked in water, under rain, or drop into sea.
   - Trade goods that is not affect by water damage: 
     - coconuts, gems, iron, gold, copper, tools, sculptures, logs, nails, marble, silver, sulfur, rubber.
