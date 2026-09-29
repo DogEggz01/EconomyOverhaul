@@ -80,6 +80,34 @@
 - Wood plank item is added so you have another way to counter the water damage.
 ## Trader, price infomation and tavern rumor change
 ## Currency mechanics change
+- Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
+- FX(foreign currency exchange) rate is increase to 5% at rep 0, down 0.5 % per reputation level. Rep 10 will be 0.1% fee.
+- Selling goods/currency for gold when incur double FX fee. Spending gold to buy currency/goods is free of FX fee.
+- Whenever you buy things in currency, it will strengthen said currency, cause it's exchange rate to go up. For selling it have opposite effect.
+  - Buying/sell with gold lion don't change anything
+  - So Export -> currency value goes up. Import -> currency value goes down.
+- The Amount of currency rate exchance will scale with the money spend/received
+- Background NPC trader also produce above effect, but at much smaller scale.
+- Above currency effect by export/import change is to replace the vanilla currency rate random fluctuation mechanics.
+- Currency rate change caused by buying/selling goods are updated daily, instead of instant change
+  - Direct currency exchange still cause rate to change immediately.
+- Currency rate WILL change the price of the good, but at a delayed rate and it's a gradually change. So there is some window you can engage with FX rate shenanigan.
+  - This also means loaning got some advantages, since actual repayment will be cheaper in terms of currency value, unless NPC trader decide to fuck you up.
+- 5 Days Historical FX rate chart is added in currency exchange UI
+- Pressing Shift can increase the exchange quantity option by x1000.
+- Exchange quanity limit is remove, the bulk exchange rate will be calculated as if you exchange 1 by 1.
+### Chronos change
+- Chronos now have it's own reputation, use GOLD LION as their local currency. This mean they loan in Gold lion too.
+- They only have 1/2 of the Gold lion exchange fee, so it's cheaper to accquire Gold lion in Chronos.
+## Trade book change
+- You can access to trade book start at rep 0 now.
+- Add Bulk trade QoL option. The price will be calcualated as you buy it 1 by 1
+  - Press Alt and hover over buy/sell/loan will do 5 cargo at a time
+  - press Ctrl do 10 cargos, shift do 20 cargos.
+- Change how trade good spawn so bulk trading can work
+- Add a toggle option in trade book to make bought/loaned cargo directly goes into cart, you will need to hire cart service first
+  - Cart Transportation fee will be 10x if using this function
+- Same toggel option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
 ## Vanilla mechanics changed
 - Pushing cargo quantity over port capacity no longer stop production/consumption. Consumption will remain at max speed, and production will accerlate in deficit instead of stop producing.
 - All price now calculate against port capacity, instead of fixed capacity of 100
