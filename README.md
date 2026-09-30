@@ -27,11 +27,11 @@
 - To help with this, Tavern sailor now will prioritize to tell you latest depart ship with more precise time and ship infos. 
 - Price infomation you can receive now tied to reputation
   - Rep 0: no price info
-  - Rep 1: Only get info from small local traders, price will be atleast 3 days old
-  - Rep 2: Get infos from medium/heavy trader, Happy bay trader and FFL-EA trader. Price will be atleast 2 days old.
-  - Rep 3: Get infos from Regional long range trader. Price will be atleast 1 days old.
-  - Rep 4: Get infos from independant trader. When you reach rank 4 at 1 region, it gives you 3 boat's infos. So you need to reach rep 4 at all region to get all 9. Price will be atleast 1 days old.
-  - Rep 5: Get infos from Chronos trader. You get access to latest report.
+  - Rep 1: Only get info from small local traders
+  - Rep 2: Get infos from medium/heavy trader, Happy bay trader and FFL-EA trader.
+  - Rep 3: Get infos from Regional long range trader.
+  - Rep 4: Get infos from independant trader. When you reach rank 4 at 1 region, it gives you 3 boat's infos. So you need to reach rep 4 at all region to get all 9.
+  - Rep 5: Get infos from Chronos trader.
 - Every port now will collect all the price it recieve during the day, and update it one time at midnight
   - It means both you and trader will get a slightly delayed price, aside from the reputation limit.
 - Cargo Mission now pays more than vanilla, but receive only 75% of rep(can be turn back to 100% in configurator). Mail is not affected.
