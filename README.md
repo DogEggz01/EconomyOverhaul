@@ -8,11 +8,36 @@
   - T3 Port (100 capacity): All other port
   - T4 Port (50 capacity): Al'ankh Academy, Alchemist Island, Albacore Town, Aestra Abbey, Sanctuary, On'na
   - For reference, Vanilla 3 main cities is at 100 capacity, all other port is 50 capacity)
+- Background trader would also contribute to port capacity, thus every port will grow in capacity overtime.
+- All port got their production/demand value redo. Production/consumption is overall much MUCH faster than vanilla. There will be more available goods around, and port consume trade good faster.
+## Background Trader, price infomation,mission and tavern rumor change
+- Background trader amount is increase to accommodate for increase production/demand.
+  - Current NPC trade fleet
+    - Small local trader: Each region 7, FFL 2. Move at 4.5 knots. Stop at port for 2.5h.
+    - Medium Local trader: Each region 1. Move at 5 knots. Stop at port for 4h.
+    - Heavy local trader: Aestrin only, 2 boat. Used for transporting heavy cargo. Move at 4 knots. Stop at port for 8h.
+    - FFL-EA trader: it trade between FFL and EA, only 1. Move at 6 knots. Stop at port for 6.5h.
+    - Happy Bay trader: It trade between Happy bay and Aestrin/EA region. Move at 6 knots. Stop at port for 6.5h.
+    - Regional long range trader: Each region 3, always trade to/back to home region. Move at 7 knots. Stop at port for 8h.
+    - Independent long range trader: total 9. Trade as they like. Move at 8 knots. Stop at port for 12h.
+    - Chronos Trader: Trade between 3 main city and Chronos. Move at 8.5 knots. Stop at port for 24h.
+    - Total 51 boat, compare to vanilla's 36 boat
+- All trader speed is faster, but wait in port longer.
+- Above 2 changes means you have higher chance to have NPC trader arrive sooner than you, cause your profit to be not as much as you thought.
+- To help with this, Tavern sailor now will prioritize to tell you latest depart ship with more precise time and ship infos. 
+- Price infomation you can receive now tied to reputation
+  - Rep 0: no price info
+  - Rep 1: Only get info from small local traders, price will be atleast 3 days old
+  - Rep 2: Get infos from medium/heavy trader, Happy bay trader and FFL-EA trader. Price will be atleast 2 days old.
+  - Rep 3: Get infos from Regional long range trader. Price will be atleast 1 days old.
+  - Rep 4: Get infos from independant trader. When you reach rank 4 at 1 region, it gives you 3 boat's infos. So you need to reach rep 4 at all region to get all 9. Price will be atleast 1 days old.
+  - Rep 5: Get infos from Chronos trader. You get access to latest report.
+- Every port now will collect all the price it recieve during the day, and update it one time at midnight
+  - It means both you and trader will get a slightly delayed price, aside from the reputation limit.
+- Cargo Mission now pays more than vanilla, but receive only 75% of rep(can be turn back to 100% in configurator). Mail is not affected.
 - Cargo Mission will now increase the port capacity. Also the cargo from mission will now fulfill the port's demand at half the rate(so 2 units of cargo fulfill 1 units of demand), thus it will move the price.
   - Local mission increase departure port by 2, arrival port by 1.
   - World mission increase departure port by 6, arrival port by 3.
-- Background trader would also contribute to port capacity, thus every port will grow in capacity overtime.
-- All port got their production/demand value redo. Production/consumption is overall much MUCH faster than vanilla. There will be more available goods around, and port consume trade good faster.
 ## Trade good category, distribution and price change
 - All trade good's produce number is redistribute. This mod try to stay as close to vanilla as possible, keep the regional/port special trade good identity.
 - Trade goods are sepearated into different category, which decide their consumption numbers for each tier of port.
@@ -89,7 +114,6 @@
   - Currently most expansive hull - Jong, need 20 plank to fix 1% damage.
 - Plank fixing fee is calculated with 1x lumber price, so if lumber become more expensive/cheaper, it will change your repairing fee.
 - If you remove the plank, it's hammering progress will be reset
-## Trader, price infomation and tavern rumor change
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
 - FX(foreign currency exchange) rate is increase to 5% at rep 0, down 0.5 % per reputation level. Rep 10 will be 0.1% fee.
@@ -99,11 +123,12 @@
   - So Export -> currency value goes up. Import -> currency value goes down.
 - The Amount of currency rate exchance will scale with the money spend/received
 - Background NPC trader also produce above effect, but at much smaller scale.
-- Above currency effect by export/import change is to replace the vanilla currency rate random fluctuation mechanics.
+- Above currency effect by export/import change is to replace the vanilla currency rate random fluctuation mechanics, so you at least have some way to interact with it.
 - Currency rate change caused by buying/selling goods are updated daily, instead of instant change
   - Direct currency exchange still cause rate to change immediately.
 - Currency rate WILL change the price of the good, but at a delayed rate and it's a gradually change. So there is some window you can engage with FX rate shenanigan.
   - This also means loaning got some advantages, since actual repayment will be cheaper in terms of currency value, unless NPC trader decide to fuck you up.
+- Currency rate will also affect all the things that you pay with non Gold lion currency.
 - 5 Days Historical FX rate chart is added in currency exchange UI
 - Pressing Shift can increase the exchange quantity option by x1000.
 - Exchange quanity limit is remove, the bulk exchange rate will be calculated as if you exchange 1 by 1.
