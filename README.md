@@ -108,7 +108,8 @@
   - Unbundle Lumber trade good, which gives you 128 plank.
   - Buy Wood Plank Bundle from Kicia bay furniture vendor. After unbundle it gives you 8 plank.
 - To fix the hull, attach the wood plank at any part of the hull, and start hammering it.
-- Each plank need 30s real life time to hammer. If the ship is already caulked with oakum, hammering time reduce by half.
+- Each plank need 20s real life time to hammer. If the ship is already caulked with oakum, hammering time reduce by half.
+  - A reminder that oakum lose 12% each day, remember to fill it up.
 - Plank needed to fix 1% damage is related to shipyard repair fee. 
   - When aquire plank from lumber, it will roughtly be same cost as repairing in shipyard
   - When aquire plank from Wood Plank Bundle, it will be 1.6x the shipyard repair cost.
