@@ -72,6 +72,7 @@
   - You sacrifice the cargo to the cat
 - This system is used to replace the Reputation discount in vanilla. Since it don't work on trade book purchase anyway.
   - There is still retail discount (buying things from vendors), raise with your reputation.
+  - This WILl make buying trade good from vendor cheaper, but it's respawn time is increase to 10min.
 ## Cargo water damage (CAN BE TOGGLE OFF IN CONFIGURATOR)
 - Most of the cargo will now receive water damage when they are soaked in water, under rain, or drop into sea.
   - Trade goods that is not affect by water damage: 
