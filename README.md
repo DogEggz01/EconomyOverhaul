@@ -31,8 +31,8 @@
 - To help with this, Tavern sailor now will prioritize to tell you latest depart ship with more precise time and ship infos. 
 - Price infomation you can receive now tied to reputation
   - Rep 0: no price info
-  - Rep 1: Only get info from small local traders
-  - Rep 2: Get infos from medium/heavy trader, Happy bay trader and FFL-EA trader.
+  - Rep 1: Only get info from 4 of the small local traders
+  - Rep 2: Get infos from rest of the small trader, medium/heavy trader, Happy bay trader and FFL-EA trader.
   - Rep 3: Get infos from Regional long range trader.
   - Rep 4: Get infos from independant trader. When you reach rank 4 at 1 region, it gives you 3 boat's infos. So you need to reach rep 4 at 3 regions to get all 9.
   - Rep 5: Get infos from Chronos trader.
