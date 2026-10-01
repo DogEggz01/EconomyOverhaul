@@ -1,4 +1,5 @@
 *Disclaimer: This mod is made with ChatGPT 6.0 Astra and Opus 5.5*
+
 Mod's goal is to make Sailwind's economy bigger and more robost, and player have less influence compare to vanilla game.
 
 Early game will likely be harder with less price info and more fee, but do provide you leverage option so you can take the risk to progress.
