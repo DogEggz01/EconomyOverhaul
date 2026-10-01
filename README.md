@@ -72,6 +72,7 @@
   - There is still retail discount (buying things from vendors), raise with your reputation.
   - This WILL make buying trade good from vendor cheaper, but it's respawn time is increase to 10 real life min.
 - Add bankruptcy button in trade book. It will reset your currency and reputation in that region to 0, all your debt and loan will be clear at that region.
+  - For Bottomry loan, your pledged ship will be taken away.
 - Add Loan tab in Log menu. It record your current loan amount in each region, and each region's credit limit and interest rate.
   - Under loan tab there is also a bankruptcy button that will bankrupt you in all region. I'm not sure when you will need it but i will leave it here.
 ## Respondentia Loan (Cargo loan)
