@@ -182,6 +182,7 @@
 ### Chronos change
 - Chronos now have it's own reputation, use GOLD LION as their local currency. This mean they loan in Gold lion too.
 - They only have 1/2 of the Gold lion exchange fee, so it's cheaper to accquire Gold lion in Chronos.
+- Chronos need double the rep to level it up. Aside from level 10, which is same as other reputation.
 ## Vanilla mechanics changed
 - Pushing cargo quantity over port capacity no longer stop production/consumption. Consumption will remain at max speed, and production will accerlate in deficit instead of stop producing.
 - All price now calculate against port capacity, instead of fixed capacity of 100
