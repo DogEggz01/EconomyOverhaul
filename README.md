@@ -115,6 +115,9 @@
 - There is no time limit for renting, but every 20 days there will be a repayment to pay all accumulated daily rent. Taken directly from your money.
   - If you don't have enough money for payment(you need to pay in the currency you loan), rent will be forced terminated and you need to payback everything. You will be teleport back to your other ship.
 - If you don't have enough money to pay back, your currency will goes into negative. Same as Respondentia stituation.
+- You cannot pledge rental ship at the region you rent it for Bottomry loan, but you can pledge it at other region. (please be responsible to your finance)
+- If you sink your rental ship while it was pledged. Bottomry loan won't be canceled since they will find out you're a scam.
+- The debt will be add on the price of the rented boat. So it will cause you more in future if you still want to buy or rent that ship.
 ## Cargo water damage (CAN BE TOGGLE OFF IN CONFIGURATOR)
 - Most of the cargo will now receive water damage when they are soaked in water, under rain, or drop into sea.
   - Trade goods that is not affect by water damage: 
