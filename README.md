@@ -38,7 +38,7 @@ But that's not the main goal of this mod. Later game money should be solved by o
   - Rep 1: Only get info from small local traders
   - Rep 2: Get infos from medium/heavy trader, Happy bay trader and FFL-EA trader.
   - Rep 3: Get infos from Regional long range trader.
-  - Rep 4: Get infos from independant trader. When you reach rank 4 at 1 region, it gives you 3 boat's infos. So you need to reach rep 4 at all region to get all 9.
+  - Rep 4: Get infos from independant trader. When you reach rank 4 at 1 region, it gives you 3 boat's infos. So you need to reach rep 4 at 3 regions to get all 9.
   - Rep 5: Get infos from Chronos trader.
 - Every port now will collect all the price it recieve during the day, and update it one time at midnight
   - It means both you and trader will get a slightly delayed price, aside from the reputation limit.
