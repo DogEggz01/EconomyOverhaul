@@ -95,7 +95,7 @@
 - Access burrowing in Currency Exchange box, at top right corner will add a "Bottomry" button to enter new UI.
 - It will list out all the ship you moored in current port, money you will get, interest rate and due days.
 - Two option to pay back loan:
-  - Goes to any currency exchange box in the loaning region, use bottomry UI to pay back your loan.
+  - Goes to any currency exchange box, use bottomry UI to pay back your loan.
   - Remote repayment button in Loan tab of Log. You will need to pay double interest with this option.
 - If you fail to pay back the loan. Your pledged ship will be taken away, your money will be reduce until 0, the rest of the debt amount will be add on top of the ship's price(means it will be more expensive to buy).
 - You can buy your ship back later, if you have enough funds again. 
