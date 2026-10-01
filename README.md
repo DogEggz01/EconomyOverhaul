@@ -1,4 +1,11 @@
 *Disclaimer: This mod is made with ChatGPT 6.0 Astra and Opus 5.5*
+Mod's goal is to make Sailwind's economy bigger and more robost, and player have less influence compare to vanilla game.
+
+Early game will likely be harder with less price info and more fee, but do provide you leverage option so you can take the risk to progress.
+
+This mod didn't solve the late game economy problem that is money too easy to come by, in fact it might be more severe since Larger economy = more goods to sell.
+
+But that's not the main goal of this mod. Later game money should be solved by other means.
 ## Port Capacity and Port production
 - All ports is separate into 4 tiers. Each tier have differenct port capacity, which affect their cargo hold capacity, production speed and demands.
 - Bigger the Port Capacity, more trade goods will be available, production/consumption will be faster.
