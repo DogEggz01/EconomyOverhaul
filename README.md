@@ -66,7 +66,7 @@
 - Add a toggle option in trade book to make bought/loaned cargo directly goes into cart, you will need to hire cart service first
   - Cart Transportation fee will be 10x if using this function
 - Same toggle option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
-## Loaning
+## Taking Loan
 - 2 Loan added, Respondentia Loan (Cargo loan) and Bottomry Loan (Ship Loan)
 - This system is used to replace the Reputation discount in vanilla. Since it don't work on trade book purchase anyway.
   - There is still retail discount (buying things from vendors), raise with your reputation.
