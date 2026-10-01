@@ -2,7 +2,7 @@
 
 Mod's goal is to make Sailwind's economy bigger and more robost, and player have less influence compare to vanilla game.
 
-Early game will likely be harder with less price info and more fee, but do provide you leverage option so you can take the risk to progress.
+Early game will likely be harder with less price info and more NPC trader to compete, but do provide you leverage option so you can take the risk to progress.
 
 This mod didn't solve the late game economy problem that is money too easy to come by, in fact it might be more severe since Larger economy = more goods to sell.
 
@@ -70,7 +70,8 @@ But that's not the main goal of this mod. Later game money should be solved by o
 - If your profit can cover both principal and interest, you will recive the local currency
 - If your profit cannot cover all, the debit amount will be taken from the currency you loan.
 - If you don't have enough money in loan currecny to pay back the debt, it will goes to negative money. While under debt you cannot do any action that will spend money until you make it positive again.
-  - You will also receive reputation penalty, depends on your debt amount. You can only be reduce to rep 1 at minumum.
+  - You will also receive reputation penalty, depends on your debt amount. 
+- If your ship sink, your Respondentia loan will be canceled, but your local reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again.
 - Add bankruptcy button in trade book. It will reset your currency and reputation in that region to 0, all your debt will be clear at that region.
 - Add Loan tab in Log menu. It record your current loan amount in each region, and each region's credit limit and interest rate.
   - Under loan tab there is also a bankruptcy button that will bankrupt you in all region. I'm not sure when you will need it but i will leave it here.
@@ -81,6 +82,32 @@ But that's not the main goal of this mod. Later game money should be solved by o
 - This system is used to replace the Reputation discount in vanilla. Since it don't work on trade book purchase anyway.
   - There is still retail discount (buying things from vendors), raise with your reputation.
   - This WILL make buying trade good from vendor cheaper, but it's respawn time is increase to 10 real life min.
+## Bottomry Loan (Ship Loan)
+- Unlock after rep 1 and you owned more than 1 ship
+- You can pledge your ship moored in the port for double amount of your ship's value in the currency you want. Interest rate and repayment due day is affect by local reputation.
+- Access burrowing in Currency Exchange box, at top right corner will add a "Bottomry" button to enter new UI.
+- It will list out all the ship you moored in current port, money you will get, interest rate and due days.
+- Two option to pay back loan:
+  - Goes to any currency exchange box in the loaning region, use bottomry UI to pay back your loan.
+  - Remote repayment button in Loan tab of Log. You will need to pay double interest with this option.
+- If you fail to pay back the loan. Your pledged ship will be taken away, your money will be reduce until 0, the rest of the debt amount will be add on top of the ship's price.
+- You can buy your ship back later, if you have enough funds again. 
+- If you pay later then due day, each day will increase your interest by 10%, at 10 days it will be double interest.
+- At 11 days if you still haven't pay the loan back. You will be forced recover to where your other ship is along with your pledge ship, and go thorugh repayment process right away.
+- You can pledge one ship to several region to get cash, and you can pledge multiple ship at once. (please be responsible to your finance).
+- If your ship sink, the loan will be canceled. You can keep your ship. But your local reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again. 
+## Renting Ship
+- Unlock after Rep 3.
+- You can rent any ship that you haven't bought yet. The rent button will be on top of buying ship UI.
+- 10% of ship value for deposit. Daily rent will be 5% of ship value. Deposit will be return after you return the ship.
+- When you want to return your ship, sail it back to where it was tied before, moored the cleat and return option will pop out on ship.
+  - When you're on ship, the return cleat will be highlighted. You need to tied both cleat for the return option to show up.
+- Aside from the daily rent, you also need to pay for repairing fee and cleaning fee. It will charge double of the fee compare to shipyard if you didn't do it there before you return it.
+  - If you rent small boat, prepare to pay for some additional fee. Broom to clean ship can reduce the cleaning fee. It's possible to not paying anything if you REALLY clean your ship well.
+- Rented ship can enter shipyard, but can only use repair and clean option. You cannot change the rigging and hull.
+- There is no time limit for renting, but every 20 days there will be a repayment to pay all accumulated daily rent. Taken directly from your money.
+  - If you don't have enough money for payment(you need to pay in the currency you loan), rent will be forced terminated and you need to payback everything. You will be teleport back to your other ship.
+- If you don't have enough money to pay back, your currency will goes into negative. Same as Respondentia stituation.
 ## Cargo water damage (CAN BE TOGGLE OFF IN CONFIGURATOR)
 - Most of the cargo will now receive water damage when they are soaked in water, under rain, or drop into sea.
   - Trade goods that is not affect by water damage: 
