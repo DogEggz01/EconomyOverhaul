@@ -66,6 +66,14 @@
 - Add a toggle option in trade book to make bought/loaned cargo directly goes into cart, you will need to hire cart service first
   - Cart Transportation fee will be 10x if using this function
 - Same toggle option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
+## Loaning
+- 2 Loan added, Respondentia Loan (Cargo loan) and Bottomry Loan (Ship Loan)
+- This system is used to replace the Reputation discount in vanilla. Since it don't work on trade book purchase anyway.
+  - There is still retail discount (buying things from vendors), raise with your reputation.
+  - This WILL make buying trade good from vendor cheaper, but it's respawn time is increase to 10 real life min.
+- Add bankruptcy button in trade book. It will reset your currency and reputation in that region to 0, all your debt will be clear at that region.
+- Add Loan tab in Log menu. It record your current loan amount in each region, and each region's credit limit and interest rate.
+  - Under loan tab there is also a bankruptcy button that will bankrupt you in all region. I'm not sure when you will need it but i will leave it here.
 ## Respondentia Loan (Cargo loan)
 - Unlock at local rep level 1.
 - Loan button added in trade book UI, you can buy trade goods without spending your money, instead you spend your credit to get the cargo.
@@ -77,16 +85,10 @@
 - If you don't have enough money in loan currecny to pay back the debt, it will goes to negative money. While under debt you cannot do any action that will spend money until you make it positive again.
   - You will also receive reputation penalty, depends on your debt amount. 
 - If your ship sink, your Respondentia loan will be canceled, but your local reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again.
-- Add bankruptcy button in trade book. It will reset your currency and reputation in that region to 0, all your debt will be clear at that region.
-- Add Loan tab in Log menu. It record your current loan amount in each region, and each region's credit limit and interest rate.
-  - Under loan tab there is also a bankruptcy button that will bankrupt you in all region. I'm not sure when you will need it but i will leave it here.
 - Following condition will force you to payback loan right away in loaning currency
   - Cargo despawned from you leaving too far away
   - You open the sealed cargo
   - You sacrifice the cargo to the cat
-- This system is used to replace the Reputation discount in vanilla. Since it don't work on trade book purchase anyway.
-  - There is still retail discount (buying things from vendors), raise with your reputation.
-  - This WILL make buying trade good from vendor cheaper, but it's respawn time is increase to 10 real life min.
 ## Bottomry Loan (Ship Loan)
 - Unlock after rep 1 and you owned more than 1 ship
 - You can pledge your ship moored in the port for double amount of your ship's value in the currency you want. Interest rate and repayment due day is affect by local reputation.
