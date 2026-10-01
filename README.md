@@ -61,6 +61,15 @@ But that's not the main goal of this mod. Later game money should be solved by o
     - Metals, tools, logs, lumber, sulfur, rubber belongs here
   - Luxury: Similar to vanilla price curve, overall most profitable, but price will drop sharply when the demand is not strong. Biggest price range.
     - Non essential food and item, gold, gems, silver
+## Trade book change
+- You can access to trade book start at rep 0 now.
+- Add Bulk trade QoL option. The price will be calcualated as you buy it 1 by 1
+  - Press Alt and hover over buy/sell/loan will do 5 cargo at a time
+  - press Ctrl do 10 cargos, shift do 20 cargos.
+- Change how trade good spawn so bulk trading can work
+- Add a toggle option in trade book to make bought/loaned cargo directly goes into cart, you will need to hire cart service first
+  - Cart Transportation fee will be 10x if using this function
+- Same toggle option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
 ## Respondentia Loan (Cargo loan)
 - Unlock at local rep level 1.
 - Loan button added in trade book UI, you can buy trade goods without spending your money, instead you spend your credit to get the cargo.
@@ -172,15 +181,6 @@ But that's not the main goal of this mod. Later game money should be solved by o
 ### Chronos change
 - Chronos now have it's own reputation, use GOLD LION as their local currency. This mean they loan in Gold lion too.
 - They only have 1/2 of the Gold lion exchange fee, so it's cheaper to accquire Gold lion in Chronos.
-## Trade book change
-- You can access to trade book start at rep 0 now.
-- Add Bulk trade QoL option. The price will be calcualated as you buy it 1 by 1
-  - Press Alt and hover over buy/sell/loan will do 5 cargo at a time
-  - press Ctrl do 10 cargos, shift do 20 cargos.
-- Change how trade good spawn so bulk trading can work
-- Add a toggle option in trade book to make bought/loaned cargo directly goes into cart, you will need to hire cart service first
-  - Cart Transportation fee will be 10x if using this function
-- Same toggle option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
 ## Vanilla mechanics changed
 - Pushing cargo quantity over port capacity no longer stop production/consumption. Consumption will remain at max speed, and production will accerlate in deficit instead of stop producing.
 - All price now calculate against port capacity, instead of fixed capacity of 100
