@@ -97,7 +97,7 @@
 - Two option to pay back loan:
   - Goes to any currency exchange box in the loaning region, use bottomry UI to pay back your loan.
   - Remote repayment button in Loan tab of Log. You will need to pay double interest with this option.
-- If you fail to pay back the loan. Your pledged ship will be taken away, your money will be reduce until 0, the rest of the debt amount will be add on top of the ship's price.
+- If you fail to pay back the loan. Your pledged ship will be taken away, your money will be reduce until 0, the rest of the debt amount will be add on top of the ship's price(means it will be more expensive to buy).
 - You can buy your ship back later, if you have enough funds again. 
 - If you pay later then due day, each day will increase your interest by 10%, at 10 days it will be double interest.
 - At 11 days if you still haven't pay the loan back. You will be forced recover to where your other ship is along with your pledge ship, and go thorugh repayment process right away.
