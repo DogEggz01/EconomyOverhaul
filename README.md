@@ -73,6 +73,7 @@
   - This WILL make buying trade good from vendor cheaper, but it's respawn time is increase to 10 real life min.
 - Add bankruptcy button in trade book. It will reset your currency and reputation in that region to 0, all your debt and loan will be clear at that region.
   - For Bottomry loan, your pledged ship will be taken away.
+  - If you still renting ship, you need to return the rented ship first.
 - Add Loan tab in Log menu. It record your current loan amount in each region, and each region's credit limit and interest rate.
   - Under loan tab there is also a bankruptcy button that will bankrupt you in all region. I'm not sure when you will need it but i will leave it here.
 ## Respondentia Loan (Cargo loan)
@@ -98,27 +99,29 @@
 - Two option to pay back loan:
   - Goes to any currency exchange box, use bottomry UI to pay back your loan.
   - Remote repayment button in Loan tab of Log. You will need to pay double interest with this option.
-- If you fail to pay back the loan. Your pledged ship will be taken away, your money will be reduce until 0, the rest of the debt amount will be add on top of the ship's price(means it will be more expensive to buy).
+- If you fail to pay back the loan. Your pledged ship will be taken away to pay back the debt, if after ship is sold there is still debt, your coins goes negative.
 - You can buy your ship back later, if you have enough funds again. 
 - If you pay later then due day, each day will increase your interest by 10%, at 10 days it will be double interest.
-- At 11 days if you still haven't pay the loan back. You will be forced recover to where your other ship is along with your pledge ship, and go thorugh repayment process right away.
+- At 11 days if you still haven't pay the loan back. You will be forced recover to where your other ship if you are onboard of siezed ship. Your pledge ship will goes back to where it is sold, and you're force to start repayment.
 - You can pledge one ship to several region to get cash, and you can pledge multiple ship at once. (please be responsible to your finance).
 - If your ship sink, the loan will be canceled. You can keep your ship. But your local reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again. 
 ## Renting Ship
 - Unlock after Rep 3.
 - You can rent any ship that you haven't bought yet. The rent button will be on top of buying ship UI.
-- 10% of ship value for deposit. Daily rent will be 5% of ship value. Deposit will be return after you return the ship.
+- 20% of ship value for deposit. Daily rent will be 5% of ship value. Deposit will be return after you return the ship.
 - When you want to return your ship, sail it back to where it was tied before, moored the cleat and return option will pop out on ship.
-  - When you're on ship, the return cleat will be highlighted. You need to tied both cleat for the return option to show up.
+  - When you're on ship, the return cleat will be highlighted in red. You need to tied to both cleat for the return option to show up.
 - Aside from the daily rent, you also need to pay for repairing fee and cleaning fee. It will charge double of the fee compare to shipyard if you didn't do it there before you return it.
-  - If you rent small boat, prepare to pay for some additional fee. Broom to clean ship can reduce the cleaning fee. It's possible to not paying anything if you REALLY clean your ship well.
+  - If you rent small boat, prepare to pay for some additional fee since there is no shipyard.
+  - Broom to clean ship can reduce the cleaning fee. It's possible to not paying anything if you REALLY clean your ship well.
+  - If you have plank, you can use it to repair ship (see below)
 - Rented ship can enter shipyard, but can only use repair and clean option. You cannot change the rigging and hull.
 - There is no time limit for renting, but every 20 days there will be a repayment to pay all accumulated daily rent. Taken directly from your money.
-  - If you don't have enough money for payment(you need to pay in the currency you loan), rent will be forced terminated and you need to payback everything. You will be teleport back to your other ship.
+  - If you don't have enough money for payment(you need to pay in the currency you loan), rent will be forced terminated and you need to payback everything. You will be teleport back to your other ship if you're on rented boat.
 - If you don't have enough money to pay back, your currency will goes into negative. Same as Respondentia stituation.
 - You cannot pledge rental ship at the region you rent it for Bottomry loan, but you can pledge it at other region. (please be responsible to your finance)
-- If you sink your rental ship while it was pledged. Bottomry loan won't be canceled since they will find out you're a scam.
-- The debt will be add on the price of the rented boat. So it will cause you more in future if you still want to buy or rent that ship.
+- If you default bottomry loan on rent ship till they want to seized your ship, the debt will be on you and you won't have ship to pay them, so you pay all from yourself. Also you need to pay for rent.
+- If you sink your rental ship while it was pledged. Bottomry loan won't be canceled since they will find out you're a scam, and they won't let you rent that ship anymore.
 ## Cargo water damage (CAN BE TOGGLE OFF IN CONFIGURATOR)
 - Most of the cargo will now receive water damage when they are soaked in water, under rain, or drop into sea.
   - Trade goods that is not affect by water damage: 
@@ -129,17 +132,18 @@
 - Cargo that receive water damage will receive price penalty. For mission cargo, it also affect reputation.
   - This effect start at 10% water damage, so you have some buffer.
   - Loan principal and interest won't get discount, pay up sucker
-- Liquid cargo (All alcohol and water) also receive water damage, but won't get their price reduce until 100% water damage.
+- Liquid cargo (All alcohol and water) also receive water damage, but won't get their price reduce until 100% water damage. When at 100% water damage, liquid cargo lose value.
   - You can still drink 100% water damage alcohol and water, you will be fine.
 - When water level in ship pass 5% of the cargo height, it will count as soaked and start damaging the cargo.
   - This means smaller cargo is more easily to get damage, also this means you can avoid this by elevated the cargo.
   - Water level over 5% don't increase damage rate. Soaking damage rate is fixed.
 - After 10% of water damage, your cargo will start having water stain, that's your visual cue that your cargo start decreasing value.
 - Water damage will also deepen your cargo's crate color.
-- Wetted cargo can be dried. As long as it's water damage is below 75% (include 75%). It can be dried back up to 20%
-  - 20% water damage will result in 90% value cargo (10% less than origin)
-  - Liquid cargo cannot be dried. So don't let it reach 100%.
-- Drying requires you to place cargo under open sky. Under full open sky and clear weather. A cargo can be dried from 75% to 20% in 24 in-game hour.
+- Wetted cargo can be dried. As long as it's water damage is below 80% (include 80%). It can be dried back up to 20%
+  - 20% water damage will result in 90% good price
+- Trade good using luxury curve can only be dried up to 50% (60% of good price)
+- Liquid cargo cannot be dried. So don't let it reach 100%.
+- Drying requires you to place cargo under open sky. Under full open sky and clear weather, every in game day will dry 30% of water damage.
   - If the cargo is covered by something on top of it partially, it will still dry, but slower.
   - Fully covered cargo (either by other cargo, or by the ship structure) will not dry.
   - Cargo that have water touching it but below it's 5% height will also not dry.
@@ -162,6 +166,7 @@
   - Currently most expansive hull - Jong, need 20 plank to fix 1% damage.
 - Plank fixing fee is calculated with 1x lumber price, so if lumber become more expensive/cheaper, it will change your repairing fee.
 - If you remove the plank, it's hammering progress will be reset
+- If the lumber is wet, you will get less plank, depends on how wet it is.
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
 - FX(foreign currency exchange) rate is increase to 5% at rep 0, down 0.5 % per reputation level. Rep 10 will be 0.1% fee.
@@ -169,10 +174,10 @@
 - Whenever you buy things in currency, it will strengthen said currency, cause it's exchange rate to go up. For selling it have opposite effect.
   - Buying/sell with gold lion don't change anything
   - So Export -> currency value goes up. Import -> currency value goes down.
-- The Amount of currency rate exchance will scale with the money spend/received
+- The Amount of currency rate change will scale with the money spend/received
 - Background NPC trader also produce above effect, but at much smaller scale.
 - Above currency effect by export/import change is to replace the vanilla currency rate random fluctuation mechanics, so you at least have some way to interact with it.
-- Currency rate change caused by buying/selling goods are updated daily, instead of instant change
+- Currency rate change caused by spending/recieving money are updated daily, instead of instant change
   - Direct currency exchange still cause rate to change immediately.
 - Currency rate WILL change the price of the good, but at a delayed rate and it's a gradually change. So there is some window you can engage with FX rate shenanigan.
   - This also means loaning got some advantages, since actual repayment will be cheaper in terms of currency value, unless NPC trader decide to fuck you up.
