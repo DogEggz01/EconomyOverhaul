@@ -12,7 +12,7 @@
   - T3 Port (100 capacity): All other port
   - T4 Port (50 capacity): Al'ankh Academy, Alchemist Island, Albacore Town, Aestra Abbey, Sanctuary, On'na
   - For reference, Vanilla 3 main cities is at 100 capacity, all other port is 50 capacity)
-- Background trader would also contribute to port capacity, thus every port will grow in capacity overtime.
+- Background trader would contribute to port capacity, thus every port will grow in capacity overtime.
 - All port got their production/demand value redo. Production/consumption is overall much MUCH faster than vanilla. There will be more available goods around, and port consume trade good faster.
 ## Background Trader, price infomation,mission and tavern rumor change
 - Background trader amount is increase to accommodate for increase production/demand.
