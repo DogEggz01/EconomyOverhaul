@@ -39,6 +39,7 @@
 - Every port now will collect all the price it recieve during the day, and update it one time at midnight
   - It means both you and trader will get a slightly delayed price, aside from the reputation limit.
 - Cargo Mission now pays more than vanilla, but receive only 75% of rep(can be turn back to 100% in configurator). Mail is not affected.
+  - I advise using my other mod "postal expansion" for rep grind.
 - Cargo mission will now always take the good that have most stock in the port.
 - Cargo Mission will now increase the port capacity. Also the cargo from mission will now fulfill the port's demand at half the rate(so 2 units of cargo fulfill 1 units of demand), thus it will move the price.
   - Local mission increase departure port by 2, arrival port by 1.
