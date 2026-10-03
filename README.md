@@ -197,3 +197,4 @@
 - All price now calculate against port capacity, instead of fixed capacity of 100
 - Game now only run market initialization once at new save, instead of everytime you load in game.
 - Chronos and FFL special trade good can be bought anywhere, if any NPC trader bring it out.
+- Market will now produce once per day, instead of 1.x day.
