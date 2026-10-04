@@ -101,14 +101,14 @@
 - Access burrowing in Currency Exchange box, at top right corner will add a "Bottomry" button to enter new UI.
 - It will list out all the ship you moored in current port, money you will get, interest rate and due days.
 - Two option to pay back loan:
-  - Goes to any currency exchange box, use bottomry UI to pay back your loan.
+  - Goes to any currency exchange box, use bottomry UI to pay back your loan. Repaying at box in non-lending region will charge extra 10% interest.
   - Remote repayment button in Loan tab of Log. You will need to pay double interest with this option.
-- If you fail to pay back the loan. Your pledged ship will be taken away to pay back the debt, if after ship is sold there is still debt, your coins goes negative.
+- If you fail to pay back the loan. They will take all your money first, if there is not enough, they will sell your boat, if after ship is sold there is still debt, your coins goes negative.
 - You can buy your ship back later, if you have enough funds again. 
 - If you pay later then due day, each day will increase your interest by 10%, at 10 days it will be double interest.
-- At 11 days if you still haven't pay the loan back. You will be forced recover to where your other ship if you are onboard of siezed ship. Your pledge ship will goes back to where it is sold, and you're force to start repayment.
+- At 11 days if you still haven't pay the loan back. You will be forced teleport to your other ship if you are onboard of siezed ship. Your pledge ship will goes back to where it is sold, and you're force repay your debt.
 - You can pledge one ship to several region to get cash, and you can pledge multiple ship at once. (please be responsible to your finance).
-- If your ship sink, the loan will be canceled. You can keep your ship. But your local reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again.
+- If your ship sink, the loan will be canceled. You can keep your ship. But your lending region reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again. You cannot pledge sinked ship to get loan anymore.
 - Since house count as ship, house can be used for bottomry loan, too. (House loan in sailwind, yeah)
 ## Renting Ship
 - Unlock after Rep 3.
