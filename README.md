@@ -51,6 +51,7 @@
 - Cargo Mission will now increase the port capacity. Also the cargo from mission will now fulfill the port's demand at half the rate(so 2 units of cargo fulfill 1 units of demand), thus it will move the price.
   - Local mission increase departure port by 2, arrival port by 1.
   - World mission increase departure port by 6, arrival port by 3.
+- Cargo mission can now be assign to every port, if the route is profitably enough
 ## Trade good category, distribution and price change
 - All trade good's produce number is redistribute. This mod try to stay as close to vanilla as possible, keep the regional/port special trade good identity.
 - Trade goods are sepearated into different category, which decide their consumption numbers for each tier of port.
