@@ -1,4 +1,5 @@
 *Disclaimer: This mod is made with ChatGPT 6.0 Astra and Opus 5.5*
+### NEED TO START ON NEW SAVE
 ## Mod goal
 - Make Sailwind's economy bigger and more robost, and add risk when trading by adding cargo water damage, price intransparency, NPC trader competition and loans.
 - Early game will likely be harder with less price info, more NPC trader to compete, and lack of rain cover on small boat. but do provide you leverage option so you can take the risk to progress.
