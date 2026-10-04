@@ -90,6 +90,7 @@
 - If you don't have enough money in loan currecny to pay back the debt, it will goes to negative money. While under debt you cannot do any action that will spend money until you make it positive again.
   - You will also receive reputation penalty, depends on your debt amount. 
 - If your ship sink, your Respondentia loan will be canceled, but your local reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again.
+  - If you have dangerous water mod, your loaned good seize by pirate will be count as sinking.
 - Following condition will force you to payback loan right away in loaning currency
   - Cargo despawned from you leaving too far away
   - You open the sealed cargo
@@ -107,7 +108,8 @@
 - If you pay later then due day, each day will increase your interest by 10%, at 10 days it will be double interest.
 - At 11 days if you still haven't pay the loan back. You will be forced recover to where your other ship if you are onboard of siezed ship. Your pledge ship will goes back to where it is sold, and you're force to start repayment.
 - You can pledge one ship to several region to get cash, and you can pledge multiple ship at once. (please be responsible to your finance).
-- If your ship sink, the loan will be canceled. You can keep your ship. But your local reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again. 
+- If your ship sink, the loan will be canceled. You can keep your ship. But your local reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again.
+- Since house count as ship, house can be used for bottomry loan, too. (House loan in sailwind, yeah)
 ## Renting Ship
 - Unlock after Rep 3.
 - You can rent any ship that you haven't bought yet. The rent button will be on top of buying ship UI.
@@ -155,6 +157,7 @@
   - If you are on small ship that don't have many hull structure to provide cover. Put things on top of cargo to cover it also work.
 - The speed that cargo get damage is tied to rain intensity. Inside the storm and at the outskirt of storm will have diffent water damage rate.
 - Water damage from rain and soaked water will stack.
+- Water damage will only count when ship is near you, so you don't need to worry far away cargo on your other ship become wet
 ### Wood plank for repairing
 - Wood plank item is added so you have another way to counter the water damage.
 - You can aquire wood plank in 2 way
