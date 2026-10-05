@@ -1,5 +1,6 @@
 *Disclaimer: This mod is made with ChatGPT 6.0 Astra and Opus 5.5*
 ### NEED TO START ON NEW SAVE
+### Currently not compatible with scramble sea mod
 ## Recommend mod
 - Mooring Line Fix: For seized ship to properly moored at the port
   - https://github.com/DogEggz01/MooringLineFix/releases/latest
