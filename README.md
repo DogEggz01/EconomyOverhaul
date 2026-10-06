@@ -182,6 +182,16 @@
 - Plank fixing fee is calculated with 1x lumber price, so if lumber become more expensive/cheaper, it will change your repairing fee.
 - If you remove the plank, it's hammering progress will be reset
 - If the lumber is wet, you will get less plank, depends on how wet it is.
+### Canvas pack for rain shelter
+- Canvas pack now sold at every vendor that also sell oakum
+- When holding the pack, you can aim at ship's fixed surface and line(shroud/stay), press R to set the corner of the tarp, you need to set 4 corner.
+  - If you misclick, drop the pack will reset the set corner.
+- To take off the tarp, go to one of the corner and press R. You will get the canvas pack back.
+- Tarp will act like full cover, protecting it from rain, but also prevent it from drying. Partial cover/drying work like before.
+- Tarp have 10 in game days lifespan, it will become darker overtime, on 10th day, it will be torn and stop provide cover.
+  - Taking out the torn tarp won't produce the canvas pack.
+  - Tarp in Canvas pack won't progress their lifespan, you can keep it forever
+- Tarp you left on other ship will still progress their lifespan, remember to take it down if you want to go sail other ship!
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
 - FX(foreign currency exchange) rate is increase to 5% at rep 0, down 0.5 % per reputation level. Rep 10 will be 0.1% fee.
