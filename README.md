@@ -185,6 +185,7 @@
 - Canvas pack now sold at every vendor that also sell oakum
 - When holding the pack, you can aim at ship's fixed surface and line(shroud/stay), press R to set the corner of the tarp, you need to set 4 corner.
   - If you misclick, drop the pack will reset the set corner.
+   - All 4 corner need to be either on land or on ship.
 - To take off the tarp, go to one of the corner and press R. You will get the canvas pack back.
 - Tarp will act like full cover, protecting it from rain, but also prevent it from drying. Partial cover/drying work like before.
 - Tarp have 10 in game days lifespan, it will become darker overtime, on 10th day, it will be torn and stop provide cover.
