@@ -161,7 +161,6 @@
   - If the cargo is covered by something on top of it partially, it will still dry, but slower.
   - Fully covered cargo (either by other cargo, or by the ship structure) will not dry.
   - Cargo that have water touching it but below it's 5% height will also not dry.
-  - Things without collision like canvas roof on dhow will be count as open sky.
 - Rain will damage uncovered cargo. Partially covered cargo still get rain damage, but at slower speed.
   - If you are on small ship that don't have many hull structure to provide cover. Put things on top of cargo to cover it also work.
 - The speed that cargo get damage is tied to rain intensity. Inside the storm and at the outskirt of storm will have diffent water damage rate.
