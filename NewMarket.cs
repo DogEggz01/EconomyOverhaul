@@ -1394,14 +1394,22 @@ namespace EconomyOverhaul
             if(action!=TradeAction.Sell){
                 try{
                     for(int i=0;i<count;i++){
-                        var obj=UnityEngine.Object.Instantiate(PrefabsDirectory.instance.GetGood(g).gameObject,m.transform.position+Vector3.up,m.transform.rotation);
+                        var obj=UnityEngine.Object.Instantiate(PrefabsDirectory.instance.GetGood(g).gameObject,m.transform.position+Vector3.up,CargoPlacement.Frame(m));
                         var good=obj.GetComponent<Good>();staged.Add(good);
                         var item=obj.GetComponent<ShipItem>();item.sold=true;
                         obj.GetComponent<SaveablePrefab>().RegisterToSave();good.RegisterAsMissionless();
                         if(CargoCondition.Track(item)==null)throw new InvalidOperationException("Cargo registration failed");
                     }
-                    if(batch.Carrier)CartDelivery.Stage(batch,staged);else CargoPlacement.Place(m,staged);
-                }catch(Exception e){foreach(var good in staged)if(good)good.GetComponent<ShipItem>().DestroyItem();Plugin.Log?.LogWarning(e);Loans.Notify(e.Message+"; no trade was charged.");return;}
+                    if(batch.Carrier)CartDelivery.Stage(batch,staged);
+                    else if(!CargoPlacement.Place(m,staged,out int found)){
+                        // No room even turned: a bulk order is refused; a single unit drops the game's own way.
+                        if(count>1)throw new CargoPlacement.NoRoom(found,count);
+                        CargoPlacement.Drop(m,staged[0]);
+                    }
+                }catch(Exception e){
+                    foreach(var good in staged)if(good)good.GetComponent<ShipItem>().DestroyItem();
+                    Plugin.Log?.LogWarning(e);Loans.Notify(e is CargoPlacement.NoRoom?CargoPlacement.NoRoom.Notice:e.Message+"; no trade was charged.");return;
+                }
             }
             int[] walletBefore=(int[])PlayerGold.currency.Clone();
             float stockBefore=m.currentSupply[g];
@@ -1509,7 +1517,19 @@ namespace EconomyOverhaul
                 }
             }
         }
+        // The parts the health check looks for (TradeLoanUI.Check).
+        internal IEnumerable<string> Missing()
+        {
+            if(!ui)yield return "bulk controls' book link";
+            if(!cartRoot)yield return "cart box";
+            if(!cart)yield return "cart box button";
+            if(!buy||!sell)yield return "Buy/Sell buttons the bulk labels use";
+        }
         private void LateUpdate()
+        {
+            try{Tick();}catch(Exception e){BookLog.Error("updating the bulk and cart controls",e);}
+        }
+        private void Tick()
         {
             if(cartRoot)cartRoot.SetActive(ui&&ui.uiActive);
             if(!ui||!ui.uiActive||World.Loading){cartSelected=false;return;}
@@ -1519,6 +1539,10 @@ namespace EconomyOverhaul
             if(key!=previousKey||hover!=previousHover||timer<=0){previousKey=key;previousHover=hover;timer=.15f;Refresh();}
         }
         internal void Refresh()
+        {
+            try{RefreshLabels();}catch(Exception e){BookLog.Error("refreshing the bulk labels",e);}
+        }
+        private void RefreshLabels()
         {
             if(!ui||!ui.uiActive||!World.Ready||Startup.BlocksGameplay)return;
             var current=Fields.Get<IslandMarket>(ui,"currentIsland");
@@ -1724,7 +1748,15 @@ namespace EconomyOverhaul
         private sealed class Candidate
         {
             internal Vector3 Center;
-            internal bool ReservedSupport;
+            internal bool ReservedSupport, Stack;
+        }
+        // How far a crate's bottom would sit above the ground (not cargo) under its centre.
+        private static float AboveGround(Vector3 center, float halfHeight, HashSet<Collider> own)
+        {
+            var bottom = center - Vector3.up * (halfHeight + Gap);
+            foreach (var hit in Physics.RaycastAll(bottom + Vector3.up * .01f, Vector3.down, 30, ~0, QueryTriggerInteraction.Ignore).OrderBy(h => h.distance))
+                if (!own.Contains(hit.collider) && !Cargo(hit.collider)) return bottom.y - hit.point.y;
+            return float.PositiveInfinity;
         }
         private static bool Ignored(Collider c, HashSet<Collider> own) => own.Contains(c) || (c.isTrigger && !Cargo(c));
         private static bool StableCargo(Collider c)
@@ -1754,6 +1786,67 @@ namespace EconomyOverhaul
                     (Cargo(hit.collider) ? !StableCargo(hit.collider) : hit.collider.attachedRigidbody != null)) return false;
             }
             return true;
+        }
+        // Uneven floors and slopes (the user, 2026-10-08: placed cargo must never slide or move). Where the level test above fails,
+        // the crate rests on the plane through the highest ground under it (an upper face of the ground points' hull with its
+        // centre inside), tilted to that plane, if the tilt is within its shape's limit. Tested in game (-SlopeProbe, 10 s of the
+        // game's physics): nothing slid below 30°; tall thin cargo tips first, at atan(thickness / height) (rabbit furs 16°,
+        // lumber 8°). The limit keeps TipMargin under that, and under MaxTilt (3°, see RoughPorts).
+        // Only at the ports whose warehouses are rough ground (the user, 2026-10-08): Al'Nilem (1) and Mirage Mountain (32) (Dragon Cliffs tried: it lost capacity). Measured
+        // with the game's physics (-WarehouseSurvey, 10 s after a full warehouse): there nothing moved at 3°, a 5 cm dip,
+        // stacked only on level crates (40 and 20 standard crates; 29 and 12 before). MaxStack (no limit) is for measuring.
+        internal static readonly HashSet<int> RoughPorts = new HashSet<int> { 1, 32 };
+        internal static float MaxTilt = 3f, TipMargin = 4f, MaxStack = float.PositiveInfinity, MaxDip = .05f;
+        private static float FloorNormal => Mathf.Cos(MaxTilt * Mathf.Deg2Rad);
+        private const float LevelTop = .99995f;   // cos 0.57°
+        internal static float TiltLimit(Vector3 size) => Mathf.Min(MaxTilt, Mathf.Atan2(Mathf.Min(size.x, size.z), size.y) * Mathf.Rad2Deg - TipMargin);
+        // level: the crate stands on a level floor (the test above); only such a crate takes another on top.
+        private static bool Rest(ref Vector3 center, ref Quaternion rotation, Vector3 half, HashSet<Collider> own, bool rough, out bool level)
+        {
+            level = Supported(center, half, rotation, own); if (level || !rough) return level;
+            float limit = TiltLimit(half * 2); if (limit <= 0) return false;
+            float floorY = center.y - half.y - Gap, rise = .1f + .55f * Mathf.Max(half.x, half.z);
+            int nx = half.x > 1.2f ? 5 : 4, nz = half.z > 1.2f ? 5 : 4;
+            var points = new List<Vector3>();
+            for (int ix = 0; ix < nx; ix++) for (int iz = 0; iz < nz; iz++)
+            {
+                var local = new Vector3(Mathf.Lerp(-half.x + .02f, half.x - .02f, ix / (nx - 1f)), 0, Mathf.Lerp(-half.z + .02f, half.z - .02f, iz / (nz - 1f)));
+                var world = center + rotation * local; var start = new Vector3(world.x, floorY + rise, world.z);
+                var hit = Physics.RaycastAll(start, Vector3.down, rise * 2, ~0, QueryTriggerInteraction.Collide).Where(h => !Ignored(h.collider, own)).OrderBy(h => h.distance).Select(h => (RaycastHit?)h).FirstOrDefault();
+                if (!hit.HasValue) return false;   // a hole or an overhang under the crate
+                var c = hit.Value.collider;
+                if (Cargo(c) ? !StableCargo(c) : c.attachedRigidbody != null) return false;
+                points.Add(new Vector3(local.x, hit.Value.point.y, local.z));
+            }
+            if (points.Count < 3) return false;
+            // The face the crate's centre (0, 0) rests on: three points around the centre (not near an edge), all others below.
+            for (int i = 0; i < points.Count; i++) for (int j = i + 1; j < points.Count; j++) for (int k = j + 1; k < points.Count; k++)
+            {
+                Vector3 a = points[i], b = points[j], c = points[k];
+                var n = Vector3.Cross(b - a, c - a); if (Mathf.Abs(n.y) < 1e-5f) continue; if (n.y < 0) n = -n;
+                float area2 = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+                if (Mathf.Abs(area2) < 1e-6f) continue;
+                float u = (b.x * c.z - c.x * b.z) / area2, v = (c.x * a.z - a.x * c.z) / area2, w = 1 - u - v;   // barycentric of (0, 0)
+                if (u < .1f || v < .1f || w < .1f) continue;
+                n.Normalize(); bool below = true;
+                foreach (var q in points) { float off = Vector3.Dot(q - a, n); if (off > .002f || off < -MaxDip) { below = false; break; } }
+                if (!below) continue;
+                // n is in the crate's level frame (x, z level; y up): its tilt, and the plane's height under the centre.
+                if (Vector3.Angle(n, Vector3.up) > limit) return false;
+                float y0 = a.y - (n.x * (0 - a.x) + n.z * (0 - a.z)) / n.y;
+                var normal = (rotation * new Vector3(n.x, 0, n.z) + Vector3.up * n.y).normalized;
+                rotation = Quaternion.FromToRotation(Vector3.up, normal) * rotation;
+                center = new Vector3(center.x, y0, center.z) + normal * (Gap + half.y);
+                return true;
+            }
+            return false;
+        }
+        // A crate's box, turned its own way, measured along the order's frame (level crates: exactly half its size).
+        private static Vector3 Extent(Quaternion rotation, Quaternion frame, Vector3 size)
+        {
+            var r = Quaternion.Inverse(frame) * rotation; Vector3 e = Vector3.zero;
+            for (int k = 0; k < 3; k++) { var axis = r * new Vector3(k == 0 ? 1 : 0, k == 1 ? 1 : 0, k == 2 ? 1 : 0) * size[k] * .5f; e += new Vector3(Mathf.Abs(axis.x), Mathf.Abs(axis.y), Mathf.Abs(axis.z)); }
+            return e;
         }
         // Follow connected paving from a known low floor, not a ray cast from above
         // the building. Cargo is never a floor-map surface (stacking is separate).
@@ -1806,13 +1899,72 @@ namespace EconomyOverhaul
                 height=0;return !float.IsNaN(heights[x,z])&&Surface(point,heights[x,z],out height);
             }
         }
-        internal static void Place(IslandMarket market, List<Good> goods)
+        // The placement's upright turn. A market standing upright (every port but Serpent Isle) keeps its own turn exactly;
+        // Serpent Isle's market (and its warehouse box) is tipped 90° on its side: its most level axis becomes "forward".
+        internal static Quaternion Frame(IslandMarket market)
         {
+            var t = market.transform;
+            if (Vector3.Dot(t.up, Vector3.up) > .9999f) return t.rotation;
+            var forward = Vector3.ProjectOnPlane(t.forward, Vector3.up);
+            if (forward.sqrMagnitude < .25f) forward = Vector3.ProjectOnPlane(t.up, Vector3.up);
+            return Quaternion.LookRotation(forward.normalized, Vector3.up);
+        }
+        // An order that fits nowhere, even turned. The log keeps the count; the player sees the notice.
+        internal sealed class NoRoom : InvalidOperationException
+        {
+            internal const string Notice = "Not enough space for Bulk Trading. Please buy one by one";
+            internal NoRoom(int found, int count) : base("Found space for " + found + " of " + count + " cargo; full order needs more clear warehouse space") { }
+        }
+        // The whole order as the market faces, else turned a quarter turn one way, else the other (the user, 2026-10-08). At the rough
+        // ports (RoughPorts) crate by crate instead: as many as fit as faced, then the rest turned, until a round places none.
+        internal static bool Place(IslandMarket market, List<Good> goods, out int found)
+        {
+            var frame = Frame(market); var left = new List<Good>(goods); found = 0; bool progress = true;
+            var turns = new[] { frame, frame * Quaternion.Euler(0, 90, 0), frame * Quaternion.Euler(0, -90, 0) };
+            bool rough = RoughPorts.Contains(market.GetPortIndex());
+            if (!rough)
+            {
+                foreach (var turn in turns)
+                {
+                    foreach (var good in goods) good.transform.rotation = turn;
+                    int placed = Plan(market, goods, turn, false, false);
+                    if (placed == goods.Count) { found = placed; return true; }
+                    found = Math.Max(found, placed);
+                }
+                return false;
+            }
+            while (left.Count > 0 && progress)
+            {
+                progress = false;
+                foreach (var turn in turns)
+                {
+                    if (left.Count == 0) break;
+                    foreach (var good in left) good.transform.rotation = turn;
+                    int placed = Plan(market, left, turn, rough, true);
+                    if (placed > 0) { found += placed; left.RemoveRange(0, placed); progress = true; }
+                }
+            }
+            return left.Count == 0;
+        }
+        // The game's own way (IslandMarket.SpawnGood): 1 m above the market, left to physics; upright.
+        internal static void Drop(IslandMarket market, Good good)
+        {
+            good.transform.SetPositionAndRotation(market.transform.position + Vector3.up, Frame(market));
+            Physics.SyncTransforms();
+            CoverDropWatcher.Attach(good.GetComponent<ShipItem>());
+        }
+        // Places as many of the goods (in order) as fit with this turn; returns how many.
+        // rough: the rough-ground rules above; partial: place what fits (else only a full order is placed).
+        private static int Plan(IslandMarket market, List<Good> goods, Quaternion rotation, bool rough, bool partial)
+        {
+            float floorNormal = rough ? FloorNormal : .98f, stackTop = rough ? LevelTop : .98f, maxStack = rough ? MaxStack : float.PositiveInfinity;
             var area = market.GetWarehouseArea().GetComponent<BoxCollider>();
             if (!area) throw new InvalidOperationException("Warehouse placement area unavailable");
             Physics.SyncTransforms();
             var own = new HashSet<Collider>(goods.SelectMany(g => g.GetComponentsInChildren<Collider>()));
-            var origin = market.transform.position; var rotation = market.transform.rotation;
+            var origin = market.transform.position;
+            // No warehouse floor under the sea (beside Serpent Isle's docks the box takes in the sea bed).
+            float sea = Crest.OceanRenderer.Instance ? Crest.OceanRenderer.Instance.transform.position.y : float.NegativeInfinity;
             var bounds = Footprint(goods[0], rotation); var half = bounds.extents;
             var inverse = Quaternion.Inverse(rotation);
             var min = Vector3.one * float.PositiveInfinity; var max = Vector3.one * float.NegativeInfinity;
@@ -1830,20 +1982,20 @@ namespace EconomyOverhaul
                 var start = new Vector3(p.x, origin.y + .1f, p.z);
                 float distance = Mathf.Max(4, start.y - area.bounds.min.y + 1);
                 foreach (var hit in Physics.RaycastAll(start, Vector3.down, distance, ~0, QueryTriggerInteraction.Collide).OrderBy(h => h.distance)) {
-                    if (Ignored(hit.collider, own) || Cargo(hit.collider) || hit.collider.attachedRigidbody || hit.normal.y < .98f) continue;
+                    if (Ignored(hit.collider, own) || Cargo(hit.collider) || hit.collider.attachedRigidbody || hit.normal.y < floorNormal) continue;
                     floor.Add(new Candidate { Center = new Vector3(p.x, hit.point.y + Gap + half.y, p.z) }); break;
                 }
                 start.y = area.bounds.max.y + .1f;
                 foreach (var hit in Physics.RaycastAll(start, Vector3.down, area.bounds.size.y + .2f, ~0, QueryTriggerInteraction.Collide)) {
-                    if (!Ignored(hit.collider, own) && StableCargo(hit.collider) && hit.normal.y > .98f)
-                        stacks.Add(new Candidate { Center = new Vector3(p.x, hit.point.y + Gap + half.y, p.z) });
+                    if (!Ignored(hit.collider, own) && StableCargo(hit.collider) && hit.normal.y > stackTop)
+                        stacks.Add(new Candidate { Center = new Vector3(p.x, hit.point.y + Gap + half.y, p.z), Stack = true });
                 }
             }
             floor = floor.OrderBy(c => (c.Center - origin).sqrMagnitude).ToList();
-            var positions = new List<Vector3>();
+            var positions = new List<Vector3>(); var turns = new List<Quaternion>();
             Vector3? seed=floor.Count>0?(Vector3?)(floor[0].Center-Vector3.up*(Gap+half.y)):null;
             if(!seed.HasValue)foreach(var hit in Physics.RaycastAll(origin+Vector3.up*.1f,Vector3.down,Mathf.Max(4,origin.y-area.bounds.min.y+1),~0,QueryTriggerInteraction.Ignore).OrderBy(h=>h.distance))
-                if(!Ignored(hit.collider,own)&&!Cargo(hit.collider)&&!hit.collider.attachedRigidbody&&hit.normal.y>=.98f){seed=hit.point;break;}
+                if(!Ignored(hit.collider,own)&&!Cargo(hit.collider)&&!hit.collider.attachedRigidbody&&hit.normal.y>=floorNormal){seed=hit.point;break;}
             bool searchedGaps=false,stacksSorted=false;
             int floorIndex=0;
 
@@ -1865,15 +2017,15 @@ namespace EconomyOverhaul
                         // pickup-height probe, even across a step larger than the map limit.
                         var lowStart=new Vector3(p.x,origin.y+.1f,p.z);
                         foreach(var hit in Physics.RaycastAll(lowStart,Vector3.down,Mathf.Max(4,lowStart.y-area.bounds.min.y+1),~0,QueryTriggerInteraction.Collide).OrderBy(hit=>hit.distance)){
-                            if(Ignored(hit.collider,own)||Cargo(hit.collider)||hit.collider.attachedRigidbody||hit.normal.y<.98f)continue;
+                            if(Ignored(hit.collider,own)||Cargo(hit.collider)||hit.collider.attachedRigidbody||hit.normal.y<floorNormal)continue;
                             if(!found||hit.point.y>h)h=hit.point.y;found=true;break;
                         }
                         if(found)floor.Add(new Candidate{Center=new Vector3(p.x,h+Gap+half.y,p.z)});
                         // Existing stacks can also be offset from the original grid.
                         var start=new Vector3(p.x,area.bounds.max.y+.1f,p.z);
                         foreach(var hit in Physics.RaycastAll(start,Vector3.down,area.bounds.size.y+.2f,~0,QueryTriggerInteraction.Collide))
-                            if(!Ignored(hit.collider,own)&&StableCargo(hit.collider)&&hit.normal.y>.98f)
-                                stacks.Add(new Candidate{Center=new Vector3(p.x,hit.point.y+Gap+half.y,p.z)});
+                            if(!Ignored(hit.collider,own)&&StableCargo(hit.collider)&&hit.normal.y>stackTop)
+                                stacks.Add(new Candidate{Center=new Vector3(p.x,hit.point.y+Gap+half.y,p.z),Stack=true});
                     }
                     floor=floor.OrderBy(c=>(c.Center-origin).sqrMagnitude).ToList();
                     if(floor.Count==0&&stacks.Count==0)break;
@@ -1884,34 +2036,37 @@ namespace EconomyOverhaul
                     if(!stacksSorted){stacks=stacks.OrderByDescending(c=>c.Center.y).ThenByDescending(c=>(c.Center-origin).sqrMagnitude).ToList();stacksSorted=true;}
                     candidate=stacks[stacks.Count-1];stacks.RemoveAt(stacks.Count-1);
                 }
-                var center = candidate.Center;
-                if (!Inside(area, center, half + Vector3.one * .005f, rotation)) continue;
-                if (!candidate.ReservedSupport && !Supported(center, half, rotation, own)) continue;
+                var center = candidate.Center; var turn = rotation;
+                if (candidate.Stack && maxStack < float.PositiveInfinity && AboveGround(center, half.y, own) > maxStack) continue;
+                bool level = true;
+                if (!candidate.ReservedSupport && !Rest(ref center, ref turn, half, own, rough, out level)) continue;
+                var extent = Extent(turn, rotation, bounds.size);
+                if (center.y - extent.y - Gap < sea) continue;
+                if (!Inside(area, center, half + Vector3.one * .005f, turn)) continue;
                 bool fits = true;
-                foreach (var other in positions) {
-                    var d = inverse * (center - other);
-                    if (Mathf.Abs(d.x) < bounds.size.x + Gap-.0001f && Mathf.Abs(d.y) < bounds.size.y + Gap-.0001f && Mathf.Abs(d.z) < bounds.size.z + Gap-.0001f) { fits = false; break; }
+                for (int i = 0; i < positions.Count; i++) {
+                    var d = inverse * (center - positions[i]); var e = extent + Extent(turns[i], rotation, bounds.size);
+                    if (Mathf.Abs(d.x) < e.x + Gap-.0001f && Mathf.Abs(d.y) < e.y + Gap-.0001f && Mathf.Abs(d.z) < e.z + Gap-.0001f) { fits = false; break; }
                 }
                 if (!fits) continue;
                 // Keep vertical tolerance below the drop gap: distant ports lose
                 // millimetres of precision in world-space floor ray hits.
-                foreach (var hit in Physics.OverlapBox(center, half + new Vector3(Gap-.005f,.005f,Gap-.005f), rotation, ~0, QueryTriggerInteraction.Collide)) {
+                foreach (var hit in Physics.OverlapBox(center, half + new Vector3(Gap-.005f,.005f,Gap-.005f), turn, ~0, QueryTriggerInteraction.Collide)) {
                     if (own.Contains(hit) || hit == area || hit.isTrigger && !Cargo(hit)) continue;
                     fits = false; break;
                 }
                 if (!fits) continue;
-                positions.Add(center);
-                if (positions.Count == goods.Count) {
-                    for (int i = 0; i < goods.Count; i++) goods[i].transform.position = positions[i] - rotation * bounds.center;
-                    Physics.SyncTransforms();
-                    // A crate stacked on existing cargo covers it: rescan what lies below once each settles.
-                    foreach (var good in goods) CoverDropWatcher.Attach(good.GetComponent<ShipItem>());
-                    return;
-                }
-                stacks.Add(new Candidate { Center = center + Vector3.up * (bounds.size.y + Gap), ReservedSupport = true });
-                stacksSorted=false;
+                positions.Add(center); turns.Add(turn);
+                if (positions.Count == goods.Count) break;
+                // Only a level crate takes another on top before it is placed.
+                if (level) { stacks.Add(new Candidate { Center = center + Vector3.up * (bounds.size.y + Gap), ReservedSupport = true, Stack = true }); stacksSorted=false; }
             }
-            throw new InvalidOperationException("Found space for "+positions.Count+" of "+goods.Count+" cargo; full order needs more clear warehouse space");
+            if (!partial && positions.Count < goods.Count) return positions.Count;
+            for (int i = 0; i < positions.Count; i++) goods[i].transform.SetPositionAndRotation(positions[i] - turns[i] * bounds.center, turns[i]);
+            Physics.SyncTransforms();
+            // A crate stacked on existing cargo covers it: rescan what lies below once each settles.
+            for (int i = 0; i < positions.Count; i++) CoverDropWatcher.Attach(goods[i].GetComponent<ShipItem>());
+            return positions.Count;
         }
     }
 

@@ -39,7 +39,10 @@ namespace EconomyOverhaul
         // the clear-day rate, cloudy night at 1/2.
         public const double ClearDayDryingPerHour = 30 / (11 + 13 * .75);
         public static float EffectiveRain(float raw) => float.IsNaN(raw) || float.IsInfinity(raw) || raw < RainThreshold ? 0 : raw;
-        public static bool DamagingImmersion(double depth, double cargoHeight) => cargoHeight > 0 && depth > 0 && depth >= cargoHeight * .05;
+        // Water aboard (bilge) or the sea damages cargo once it reaches 14% of the cargo's height (user, 2026-10-10; was 5%).
+        // Shallower water neither damages nor lets it dry.
+        public const double ImmersionStart = .14;
+        public static bool DamagingImmersion(double depth, double cargoHeight) => cargoHeight > 0 && depth > 0 && depth >= cargoHeight * ImmersionStart;
         // Proportional to rain with no minimum, scaled by the exposed share of the cargo's top face.
         public static double RainDamagePerHour(double rain, double exposed) =>
             ImmersionPerHour * Math.Max(0, rain) / RainAtImmersionRate * Clamp(exposed, 0, 1);
@@ -67,14 +70,17 @@ namespace EconomyOverhaul
         // before our lines moves them down only half a hint line, 0.3 of a look line, and each line after the first lifts them
         // as much. Three blank lines clear a two-line look text (the crate quantity layout of 0.5.5); each further look line
         // needs 10/3 more, rounded up.
-        public static string HintSuffix(string description, string lookText, int percent, bool loan)
+        // cover: the share of the cargo's top under cover in whole percent, or -1 for no line (user, 2026-10-10: an option, off
+        // by default). With a one-line look text a third line lifts the block too: one more blank line per line beyond two.
+        public static string HintSuffix(string description, string lookText, int percent, bool loan, int cover = -1)
         {
-            var lines = new List<string>(2);
+            var lines = new List<string>(3);
             if (percent >= 0) lines.Add("Water Damage: " + percent.ToString(CultureInfo.InvariantCulture) + "%");
+            if (cover >= 0) lines.Add("Cover: " + cover.ToString(CultureInfo.InvariantCulture) + "%");
             if (loan) lines.Add("Respondentia");
             if (lines.Count == 0) return "";
             int look = TextLines(lookText), own = TextLines(description);
-            int padding = Math.Max(1, look - own + 1);
+            int padding = Math.Max(1, look - own + 1) + Math.Max(0, lines.Count - 2);
             if (look >= 2) padding = Math.Max(padding, 3 + (lines.Count - 1) + ((look - 2) * 10 + 2) / 3 - Math.Max(1, own) + 1);
             return new string('\n', padding) + string.Join("\n", lines);
         }
@@ -109,6 +115,17 @@ namespace EconomyOverhaul
         // (item y): a bundle's plank is the half of the board it replaces (0-7), a lumber plank the piece of the top
         // layer above it (8-23), the same for every layer.
         public static int PlankLook(bool lumber, int i, int k, int j) => lumber ? 8 + 4 * i + j : 4 * i + 2 * k + j;
+
+        // Canvas tarps: health 0-100, worn 10 a game day while tied. Repair with a held pack (user, 2026-10-09): the tarp's
+        // health plus the pack's, at most 100 (the rest is lost; the pack is always used up).
+        public const float TarpFullHealth = 100, TarpWearPerDay = 10;
+        public static float RepairedHealth(float tarp, float pack) =>
+            Math.Min(TarpFullHealth, Math.Max(0, Finite(tarp)) + Math.Max(0, Finite(pack)));
+        // A tarp's health from its health and the game's clock when it was tied, loaded or re-based. With the option "Tarp
+        // wearing" off (user, 2026-10-09) it stays where it is.
+        public static float TarpHealth(float startHealth, double startClock, double now, bool wearing) =>
+            (float)Clamp(wearing ? Finite(startHealth) - TarpWearPerDay * Math.Max(0, now - startClock) : Finite(startHealth), 0, TarpFullHealth);
+        private static float Finite(float x) => float.IsNaN(x) || float.IsInfinity(x) ? 0 : x;
     }
 
     // ---- Cargo condition ----
@@ -173,7 +190,7 @@ namespace EconomyOverhaul
         private string suffix;
         private string hintDescription;
         private string hintLookText;
-        private int hintPercent = -2;
+        private int hintPercent = -2, hintCover = -2;
         private bool hintLoan;
         private sealed class AppearanceBinding
         {
@@ -494,14 +511,17 @@ namespace EconomyOverhaul
             // Water damage, 0% undamaged to 100%; ruined (health below 19.5) shows 81% or more.
             int percent = Settings.WaterEnabled && Settings.WaterHintEnabled && !Immune.Contains(state.good)
                 ? Mathf.RoundToInt(100 - Mathf.Clamp(state.health, 0, 100)) : -1;
-            if (hintPercent == percent && hintLoan == state.loan && item.description == hintDescription && hintLookText == item.lookText) return;
+            // Cover, 0% open sky to 100% fully covered, once its cover is scanned (option "Show cover percentage", off by default).
+            int cover = Settings.WaterEnabled && Settings.CoverHintEnabled && !Immune.Contains(state.good) && state.exposure != 0
+                ? Mathf.RoundToInt(100 * Mathf.Clamp01(coveredFraction)) : -1;
+            if (hintPercent == percent && hintCover == cover && hintLoan == state.loan && item.description == hintDescription && hintLookText == item.lookText) return;
             // Never replace vanilla mission/name/fullness information.
             if (!string.IsNullOrEmpty(suffix) && item.description != null && item.description.EndsWith(suffix, StringComparison.Ordinal))
                 item.description = item.description.Substring(0, item.description.Length - suffix.Length);
-            suffix = Rules.HintSuffix(item.description, item.lookText, percent, state.loan);
+            suffix = Rules.HintSuffix(item.description, item.lookText, percent, state.loan, cover);
             hintDescription = item.description = (item.description ?? "") + suffix;
             hintLookText = item.lookText;
-            hintPercent = percent; hintLoan = state.loan;
+            hintPercent = percent; hintCover = cover; hintLoan = state.loan;
         }
         private void RefreshAppearance()
         {
@@ -550,6 +570,7 @@ namespace EconomyOverhaul
         // keeps its own look (NANDTweaks 1.7.5's mission label: a copy of the crate's mesh, "<size>(Clone)", with an opaque
         // Standard material at queue 2000, which the queue rule below cannot tell from the crate). No prefab found: all count.
         private HashSet<string> ownParts;
+        internal const int WetQueue = 1999;   // the wet look's material queue (see BindSources)
         private bool Own(MeshRenderer r)
         {
             if (ownParts == null)
@@ -597,7 +618,10 @@ namespace EconomyOverhaul
                 for (int i = 0; i < original.Length; i++)
                 {
                     var source = original[i];
-                    if (source) owned[i] = new Material(source) { shader = CargoStainMaterial.Shader, name = source.name + " (EconomyOverhaul instance)" };
+                    // Queue 1999: drawn before anything at the opaque queue (2000), so a mark another mod draws on the crate's
+                    // surface without writing depth (NANDTweaks' mission logo: Standard in fade mode at 2000) paints over the wet
+                    // crate as over the dry one; the shader's Offset covers marks that do write depth (user, 2026-10-10).
+                    if (source) { owned[i] = new Material(source) { shader = CargoStainMaterial.Shader, name = source.name + " (EconomyOverhaul instance)" }; owned[i].renderQueue = WetQueue; }
                 }
                 var binding = new AppearanceBinding { renderer = r, mesh = mesh, originals = original, owned = owned };
                 r.sharedMaterials = owned;
@@ -1537,7 +1561,7 @@ namespace EconomyOverhaul
 
     // ---- Canvas tarp ----
     // The canvas pack (prefab 642): a tarp folded up, drawn with the mail parcel's model while it is an item. Tying its four
-    // corners makes a tarp (CANVAS_DRAFT.md); untying gives a pack back.
+    // corners makes a tarp (as built: CANVAS.md); untying gives a pack back.
     internal static class Tarps
     {
         internal const int PackIndex = 642, MailGood = 51;
@@ -1546,7 +1570,7 @@ namespace EconomyOverhaul
         internal const float PackScale = .7f; internal const string LookName = "canvas pack look";
         // Wear (user, 2026-10-05): a tied tarp loses 10 health a game day, 100 to 0 in 10 days; a folded pack keeps its health
         // (in ShipItem.health, which the game saves with every item). The health is never shown.
-        internal const float FullHealth = 100, WearPerDay = 10;
+        internal const float FullHealth = Rules.TarpFullHealth, WearPerDay = Rules.TarpWearPerDay;
         internal static double Now => GameState.day + (Sun.sun ? Sun.sun.globalTime / 24.0 : 0);
         internal static GameObject PackTemplate;
         internal static bool Registered => PackTemplate;
@@ -1657,7 +1681,9 @@ namespace EconomyOverhaul
             if (onShip != null)
             {
                 var h = onShip.Value;
-                if (h.collider.GetComponentInParent<ItemRigidbody>() || h.collider.GetComponentInParent<ShipItem>() || MovingWalk(frame, h.collider.transform))
+                // An item nailed with the hammer is fixed to her too (user, 2026-10-10): whatever the game let a hammer nail
+                // (big items such as crates, trade goods and furniture; hangables; wall items). Loose items stay refused.
+                if (!NailedItem(h.collider, held) && (h.collider.GetComponentInParent<ItemRigidbody>() || h.collider.GetComponentInParent<ShipItem>()) || MovingWalk(frame, h.collider.transform))
                 { Why = "item, hatch or door on the walk copy: " + Path(h.collider.transform); return null; }
                 Why = null;
                 // On a stay's walk copy too, the knot goes on its rope line rather than on its collider's surface.
@@ -1674,6 +1700,15 @@ namespace EconomyOverhaul
         internal static string Why;   // why the last Find gave no corner (for logs and tests)
         private static string Path(Transform t) => t.parent ? t.parent.name + "/" + t.name : t.name;
         private static bool Own(Collider c, ShipItem held) => held && (c.transform.IsChildOf(held.transform) || held.itemRigidbodyC && c.transform.IsChildOf(held.itemRigidbodyC.transform));
+        // A collider of a bought item's physics copy that the hammer has nailed (the game's ShipItem.nailed).
+        internal static ShipItem Nailed(Collider c) { var body = c ? c.GetComponentInParent<ItemRigidbody>() : null; var item = body ? body.GetShipItem() : null; return item && item.sold && item.nailed ? item : null; }
+        private static bool NailedItem(Collider c, ShipItem held) { var item = Nailed(c); return item && item != held; }
+        // A surface a dropped pack may rest on: not an item, unless nailed (or the one given, just un-nailed).
+        private static bool Floor(Collider c, ShipItem also)
+        {
+            var body = c.GetComponentInParent<ItemRigidbody>();
+            return !body || Nailed(c) || also && body.GetShipItem() == also;
+        }
         // Walk copies sit apart from the world; a ray in the world never ties to one.
         private static bool OnWalkCopy(Transform t) { for (; t; t = t.parent) if (t.CompareTag("WalkColBoat")) return true; return false; }
         // A sail's invisible volumes (its wind shadow box) never block a corner; its visible parts and every item or control do.
@@ -1864,7 +1899,7 @@ namespace EconomyOverhaul
                 KnotLook(k.transform, KnotSize, KnotMaterial, KnotLookName); k.AddComponent<PackLook>().child = KnotLookName; tarp.knots[i] = k;
                 // The pointer clicks it (its ray hits triggers): unties the tarp.
                 var touch = k.AddComponent<SphereCollider>(); touch.isTrigger = true; touch.radius = .15f; touch.center = new Vector3(0, 0, -KnotSize / 2);
-                var button = k.AddComponent<TarpKnot>(); button.tarp = tarp; button.corner = i; button.lookText = "untie canvas"; button.description = "";
+                var button = k.AddComponent<TarpKnot>(); button.tarp = tarp; button.corner = i; button.lookText = TarpKnot.UntieText; button.description = "";
             }
             tarp.SetCover(layout.points); RecheckUnder(tarp);
             Plugin.Log?.LogInfo("Canvas tarp " + (tarp.torn ? "torn" : "tied") + " " + (onShip ? "on " + parent.name : "on land") + ": sides " + string.Join(" ", Sides(corners).Select(s => s.ToString("F1"))) + " m, "
@@ -1881,6 +1916,36 @@ namespace EconomyOverhaul
             if (LastTarp == old) LastTarp = torn;
             UnityEngine.Object.Destroy(old.gameObject);
             return torn;
+        }
+
+        // ---- Repair ----
+        // R on a corner knot with a bought pack in hand (user, 2026-10-09): the tarp is rebuilt where it hangs (as a tear
+        // rebuilds it) with its health plus the pack's, at most 100: no holes (a pack is never at 0), the colour of that
+        // health, cover again. The pack is always used up; nothing comes back from the old canvas.
+        internal const string Repaired = "Canvas repaired";
+        internal static Tarp LastRepaired;
+        internal static string Repair(Tarp old, ShipItem pack)
+        {
+            if (!old || !pack || !Registered) return null;
+            float was = old.Health, added = pack.health, health = Rules.RepairedHealth(was, added);
+            Cancel(false);
+            Tarp.All.Remove(old);
+            var fresh = Build(old.transform.parent, old.onShip, old.corners, old.turns, health, old.transform);
+            if (LastTarp == old) LastTarp = fresh;
+            LastRepaired = fresh;
+            UnityEngine.Object.Destroy(old.gameObject);
+            var hand = pack.held; if (hand) hand.DropItem();
+            pack.DestroyItem();
+            if (UISoundPlayer.instance) UISoundPlayer.instance.PlayUISound(UISounds.itemPickup, .55f, 1);
+            Plugin.Log?.LogInfo("Canvas tarp repaired: health " + was.ToString("F1") + " + pack " + added.ToString("F1") + " = " + health.ToString("F1") + ".");
+            return Repaired;
+        }
+        // The corner knot the game's pointer points at (its own private choice of button), if any.
+        internal static TarpKnot PointedKnot(GoPointer pointer)
+        {
+            if (!pointer) return null;
+            try { return Fields.Get<GoPointerButton>(pointer, "pointedAtButton") as TarpKnot; }
+            catch (Exception e) { Plugin.Log?.LogWarning("Canvas: the pointed knot not read; repair is off. " + e.Message); return null; }
         }
         // Where a torn tarp's holes go (user, 2026-10-05: small frayed holes scattered round the middle section, the edges
         // mostly intact), seeded by its size, so the same after a load: 2 to 12 small holes (one per 3 m²; 0.15-0.3 m, up to 1.5x
@@ -2092,6 +2157,16 @@ namespace EconomyOverhaul
             t.shown = health;
             if (t.material && t.material.HasProperty("_Color")) t.material.color = Color.Lerp(FadedColor, WornColor, 1 - health / FullHealth);
         }
+        // The option "Tarp wearing" changed (wasWearing: its value before): every tied tarp, also on ships switched off far
+        // away, keeps the health it has now and wears (or stays) from here. Returns the option's value now.
+        internal static bool Rebase(bool wasWearing)
+        {
+            // Also tarps built under a ship that has stayed switched off (they are not in Tarp.All until she is switched on).
+            var tarps = Tarp.All.Concat(Resources.FindObjectsOfTypeAll<Tarp>()).Where(t => t).Distinct().ToList();
+            foreach (var tarp in tarps) tarp.Rebase(wasWearing);
+            Plugin.Log?.LogInfo("Tarp wearing " + (Settings.TarpWearing ? "on" : "off") + ": " + tarps.Count + " tarp(s) re-based.");
+            return Settings.TarpWearing;
+        }
         internal static Color ClothColor => ClothMaterial.HasProperty("_Color") ? ClothMaterial.color : Color.white;
         // Weathered: the cloth as seen (the canvas strip's mean times its colour) turned to a grey of the same brightness, 15% darker;
         // as a tint on its colour (the Dhow roof's cream cloth goes a dull grey).
@@ -2130,7 +2205,8 @@ namespace EconomyOverhaul
         // free hands, else onto the deck or ground under that corner (on a ship over open water: her deck's middle). A torn
         // tarp gives nothing back (user, 2026-10-05).
         internal static ShipItem LastPack;
-        internal static void Untie(Tarp tarp, int corner, GoPointer pointer)
+        // floor: an item the pack may land on although it is no longer nailed (the one just un-nailed under that corner).
+        internal static void Untie(Tarp tarp, int corner, GoPointer pointer, ShipItem floor = null)
         {
             if (!tarp || !Registered) return;
             float health = tarp.Health; LastPack = null;
@@ -2139,14 +2215,44 @@ namespace EconomyOverhaul
             Vector3 at; Quaternion turn;
             var flat = Vector3.ProjectOnPlane(pointer ? pointer.transform.forward : -knot.forward, Vector3.up); if (flat.sqrMagnitude < 1e-4f) flat = Vector3.forward;
             if (hand) { at = pointer.transform.position + pointer.transform.forward * 1.3f - pointer.transform.up * .5f; turn = Quaternion.LookRotation(flat.normalized); }
-            else { at = Under(knot, frame) + Vector3.up * .6f; turn = Quaternion.LookRotation(flat.normalized); }
+            else { at = Under(knot, frame, floor) + Vector3.up * .6f; turn = Quaternion.LookRotation(flat.normalized); }
             RecheckUnder(tarp);   // runs next frame, when the tarp is gone
             UnityEngine.Object.Destroy(tarp.gameObject);
             if (UISoundPlayer.instance) UISoundPlayer.instance.PlayUISound(UISounds.itemPickup, .55f, 1);
             if (health > 0 && Plugin.Instance) Plugin.Instance.StartCoroutine(Give(at, turn, frame, hand ? pointer : null, health));
         }
+        // Un-nailing an item a corner is tied to unties that tarp (user, 2026-10-10): its pack drops under that corner, as a
+        // click on a knot does (a torn tarp gives none). "Tied to it": the knot within 5 cm of the item's physics copy (on her
+        // walk copy), found from geometry, so it holds after a load too. Corners still waiting on it are cleared.
+        internal const float OnItem = .05f;
+        internal static int UntieFrom(ShipItem item)
+        {
+            if (!item || !item.itemRigidbodyC) return 0;
+            var colliders = item.itemRigidbodyC.GetComponentsInChildren<Collider>(true).Where(c => c && !c.isTrigger).ToArray();
+            if (colliders.Length == 0) return 0;
+            if (Pending.Any(c => c.part && colliders.Contains(c.part))) Cancel(true);
+            int untied = 0;
+            foreach (var tarp in Tarp.All.ToList())
+            {
+                if (!tarp || !tarp.onShip || tarp.knots == null) continue;
+                var frame = tarp.transform.parent; var walk = frame ? Link(frame)?.walkCollider : null;
+                if (!walk) continue;
+                for (int i = 0; i < tarp.knots.Length; i++)
+                {
+                    if (!tarp.knots[i]) continue;
+                    var p = walk.TransformPoint(frame.InverseTransformPoint(tarp.knots[i].transform.position));
+                    if (!colliders.Any(c => (Closest(c, p) - p).sqrMagnitude <= OnItem * OnItem)) continue;
+                    Plugin.Log?.LogInfo("Canvas tarp untied: " + item.name + " was un-nailed under corner " + i + ".");
+                    Untie(tarp, i, null, item); untied++; break;
+                }
+            }
+            return untied;
+        }
+        // The game answers ClosestPoint only for primitives and convex meshes; a concave mesh uses its bounds.
+        private static Vector3 Closest(Collider c, Vector3 p) => c is MeshCollider m && !m.convex ? c.bounds.ClosestPoint(p) : c.ClosestPoint(p);
         // The deck or ground under a corner knot, found from just off the part it is tied to (the knot faces into it).
-        private static Vector3 Under(Transform knot, Transform frame)
+        // A nailed item is floor (a corner on top of a nailed crate drops its pack on the crate, not inside it), and so is floor.
+        private static Vector3 Under(Transform knot, Transform frame, ShipItem floor = null)
         {
             var from = knot.position - knot.forward * .3f + Vector3.up * .1f;
             var walk = frame ? Link(frame)?.walkCollider : null;
@@ -2154,7 +2260,7 @@ namespace EconomyOverhaul
             {
                 var p = walk.TransformPoint(frame.InverseTransformPoint(from));
                 var hit = Physics.RaycastAll(p, -walk.up, 30, ~0, QueryTriggerInteraction.Ignore)
-                    .Where(h => h.collider.transform.IsChildOf(walk) && !h.collider.GetComponentInParent<ItemRigidbody>()).OrderBy(h => h.distance).FirstOrDefault();
+                    .Where(h => h.collider.transform.IsChildOf(walk) && Floor(h.collider, floor)).OrderBy(h => h.distance).FirstOrDefault();
                 if (hit.collider) return frame.TransformPoint(walk.InverseTransformPoint(hit.point));
                 var ship = Up<PurchasableBoat>(frame);
                 return ship ? ForcedMove.DropPoint(ship) - Vector3.up * 1.5f : knot.position;
@@ -2401,11 +2507,17 @@ namespace EconomyOverhaul
             if (notify && any) Loans.Notify(Cleared);
         }
         // Each frame with a pack in hand: the targeter shows a knot where R would tie; corners wait only while their pack is held.
+        // Whether the player's pointer holds a bought canvas pack (set each frame; the knots' look text follows it).
+        internal static bool HoldingPack;
+        internal static bool HoldsPack(GoPointer pointer) { var held = pointer ? pointer.GetHeldItem() as ShipItem : null; return held && held.sold && IsPack(held); }
         internal static void Watch(GoPointer pointer)
         {
             if (Pending.Count > 0 && (!PendingPack || !PendingPack.held || Pending.Any(c => c.onShip && !c.frame))) Cancel(true);
             var pack = pointer.GetHeldItem() as ShipItem;
-            if (!pack || !pack.sold || !IsPack(pack)) { ShowGhost(null); return; }
+            HoldingPack = HoldsPack(pointer);
+            if (!HoldingPack) { ShowGhost(null); return; }
+            // On a knot R repairs rather than ties: no ghost of a corner there.
+            if (PointedKnot(pointer)) { ShowGhost(null); return; }
             Aboard(out var frame, out var walk);
             ShowGhost(Find(new Ray(pointer.transform.position, pointer.transform.forward), frame, walk, pack, out _));
         }
@@ -2502,7 +2614,13 @@ namespace EconomyOverhaul
         // Wear: its health when tied (or loaded) and the game's clock then; torn at 0. Worked out from the clock, so a tarp on a
         // ship switched off far away wears too (it tears once she is back).
         internal float startHealth = Tarps.FullHealth; internal double startClock; internal bool torn; internal Material material; internal Texture2D texture; internal float shown = -1;
-        internal float Health => torn ? 0 : Mathf.Clamp(startHealth - (float)(Tarps.WearPerDay * Math.Max(0, Tarps.Now - startClock)), 0, Tarps.FullHealth);
+        internal float Health => torn ? 0 : Rules.TarpHealth(startHealth, startClock, Tarps.Now, Settings.TarpWearing);
+        // The option "Tarp wearing" changed: the health so far (worn as the option was) becomes the start, from now.
+        internal void Rebase(bool wasWearing)
+        {
+            if (!torn) startHealth = Rules.TarpHealth(startHealth, startClock, Tarps.Now, wasWearing);
+            startClock = Tarps.Now;
+        }
         // The cover shape: the modelled sheet, then what the cloth settled to 2 s after tying (in the cloth's own frame).
         internal Vector3[] coverShape; internal Bounds coverBounds;
         private bool capped;
@@ -2540,11 +2658,20 @@ namespace EconomyOverhaul
         }
     }
 
-    // A corner knot: the pointer's look text "untie canvas"; a click unties the tarp.
+    // A corner knot: the pointer's look text "untie canvas"; a click unties the tarp. With a bought canvas pack in hand (and
+    // only then, user 2026-10-09) a second line: R repairs it (TarpTiePatch).
     internal sealed class TarpKnot : GoPointerButton
     {
+        internal const string UntieText = "untie canvas", RepairText = UntieText + "\nR: repair canvas";
         internal Tarp tarp; internal int corner;
         public override void OnActivate(GoPointer activatingPointer) => Tarps.Untie(tarp, corner, activatingPointer);
+        // The game's per-frame hook on every button (GoPointerButton.LateUpdate): by what the pointer looking at it holds (the
+        // game's pointedAtBy), else by the player's pointer, so the text is ready before it is looked at.
+        public override void ExtraLateUpdate()
+        {
+            var by = isLookedAt ? pointedAtBy : null;
+            lookText = (by ? Tarps.HoldsPack(by) : Tarps.HoldingPack) ? RepairText : UntieText;
+        }
     }
 
     // R with a canvas pack in hand ties a corner (the game's R on a held item calls this; a plain item does nothing with it).
@@ -2553,10 +2680,31 @@ namespace EconomyOverhaul
         static bool Prefix(GoPointerButton __instance, GoPointer activatingPointer)
         {
             if (!(__instance is ShipItem pack) || !activatingPointer || activatingPointer.GetHeldItem() != pack || !pack.sold || !Tarps.IsPack(pack)) return true;
+            // On a corner knot (the game's pointer points at it while a pack is held): repair that tarp; anywhere else: tie.
+            var knot = Tarps.PointedKnot(activatingPointer);
+            if (knot && knot.tarp) { var repaired = Tarps.Repair(knot.tarp, pack); if (repaired != null) Loans.Notify(repaired); return false; }
             Tarps.Aboard(out var frame, out var walk);
             var notice = Tarps.Tie(pack, new Ray(activatingPointer.transform.position, activatingPointer.transform.forward), frame, walk);
             if (notice != null) Loans.Notify(notice);
             return false;
+        }
+    }
+    // R with the hammer on a nailed item un-nails it (the game's ShipItemHammer.OnAltActivate); a tarp tied to it is then untied.
+    [HarmonyPatch(typeof(ShipItemHammer), "OnAltActivate", new Type[0])] internal static class TarpUnnailPatch
+    {
+        // First of every prefix: another mod's prefix may un-nail the item itself (Dizzy's Nudge does, and skips the game's
+        // code), after which the item no longer reads as nailed. The postfix runs whoever un-nailed it.
+        [HarmonyPriority(Priority.First), HarmonyBefore("com.dizzy.sailwind.nudge")]
+        static void Prefix(ShipItemHammer __instance, out ShipItem __state)
+        {
+            var item = __instance && __instance.sold && __instance.held ? __instance.held.GetPointedAtItem() : null;
+            __state = item && item.nailed ? item : null;
+        }
+        static void Postfix(ShipItem __state)
+        {
+            if (!__state || __state.nailed || !Tarps.Registered) return;
+            int untied = Tarps.UntieFrom(__state);
+            Plugin.Log?.LogInfo("Hammer un-nailed " + __state.name + ": " + untied + " canvas tarp(s) untied from it.");
         }
     }
     [HarmonyPatch(typeof(GoPointer), "LateUpdate")] internal static class TarpAimPatch

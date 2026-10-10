@@ -1618,6 +1618,19 @@ namespace EconomyOverhaul
             if (widest > maxWidth) transform.localScale = originalScale * (maxWidth / widest);
         }
     }
+    // Trade-book errors in the mod's own log, at most once a minute per place.
+    internal static class BookLog
+    {
+        private static readonly Dictionary<string, float> last = new Dictionary<string, float>();
+        internal static void Error(string where, Exception e)
+        {
+            float now = Time.realtimeSinceStartup;
+            if (last.TryGetValue(where, out float at) && now - at < 60) return;
+            last[where] = now;
+            Plugin.Log?.LogError("Trade book error while " + where + ": " + e);
+        }
+    }
+    [HarmonyPatch(typeof(EconomyUI), "OpenUI")] internal static class TradeBookHealthPatch { static void Postfix(EconomyUI __instance) => TradeLoanUI.Check(__instance); }
     public sealed class TradeLoanUI : MonoBehaviour
     {
         private EconomyUI ui; private GameObject root; private LoanAction loan; private BankruptcyPrompt bankrupt;
@@ -1625,7 +1638,28 @@ namespace EconomyOverhaul
         private float timer;
         private bool quoteInitialized, lastWaterEnabled;
         private int lastPort = -1, lastGood = -1, lastCargoId, lastCurrency = -1, lastGross;
-        internal static void Attach(EconomyUI ui) { if (!ui.GetComponent<TradeLoanUI>()) ui.gameObject.AddComponent<TradeLoanUI>().Build(ui); }
+        internal static void Attach(EconomyUI ui)
+        {
+            if (ui.GetComponent<TradeLoanUI>()) return;
+            try { ui.gameObject.AddComponent<TradeLoanUI>().Build(ui); }
+            catch (Exception e) { BookLog.Error("building the mod's controls (Loan, Bankruptcy, cart box, bulk labels); the book works without them", e); }
+        }
+        // When the book opens: which of the mod's controls are missing (another mod may have removed them). Logged once per change.
+        private static string lastMissing;
+        internal static void Check(EconomyUI ui)
+        {
+            var loanUi = ui ? ui.GetComponent<TradeLoanUI>() : null; var bulk = ui ? ui.GetComponent<BulkTradeUI>() : null;
+            var missing = new List<string>();
+            if (!loanUi) missing.Add("loan controls (TradeLoanUI)");
+            else { if (!loanUi.root) missing.Add("loan controls root"); if (!loanUi.loan) missing.Add("Loan button"); if (!loanUi.ui) missing.Add("loan controls' book link"); }
+            if (!bulk) missing.Add("bulk and cart controls (BulkTradeUI)");
+            else missing.AddRange(bulk.Missing());
+            string text = string.Join(", ", missing.ToArray());
+            if (text == lastMissing) return;
+            lastMissing = text;
+            if (missing.Count > 0) Plugin.Log?.LogWarning("Trade book opened without the mod's " + text + " (removed or never built; see any earlier 'Trade book' error).");
+            else Plugin.Log?.LogInfo("Trade book controls present again.");
+        }
         internal void InvalidateQuote() { quoteInitialized = false; timer = 0; }
         private void Build(EconomyUI target)
         {
@@ -1668,6 +1702,10 @@ namespace EconomyOverhaul
             root.SetActive(false);
         }
         private void LateUpdate()
+        {
+            try { Tick(); } catch (Exception e) { BookLog.Error("updating the loan controls", e); }
+        }
+        private void Tick()
         {
             if (!root) return; root.SetActive(ui.uiActive);
             if (!ui.uiActive) bankrupt.Stop(); else bankrupt.Tick();

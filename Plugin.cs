@@ -38,7 +38,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "0.9.0";
+        public const string Version = "0.9.2";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -264,9 +264,12 @@ namespace EconomyOverhaul
     // ---- Settings ----
     internal static class Settings
     {
-        internal static ConfigEntry<bool> WaterDamage, WaterDamageHint;
+        internal static ConfigEntry<bool> WaterDamage, WaterDamageHint, CoverHint, TarpWear;
+        internal static bool CoverHintEnabled => CoverHint?.Value ?? false;
         internal static ConfigEntry<string> MissionReputation;
         internal static bool WaterEnabled => WaterDamage?.Value ?? true;
+        internal static bool TarpWearing => TarpWear?.Value ?? true;
+        private static bool tarpWearWas = true;   // the option's value before its last change
         internal static bool WaterHintEnabled => WaterDamageHint?.Value ?? true;
         internal static float MissionRepFactor => MissionReputation?.Value == "Vanilla (100%)" ? 1 : .75f;
         internal static void Bind(ConfigFile config)
@@ -278,8 +281,16 @@ namespace EconomyOverhaul
             MissionReputation = config.Bind("Missions", "Mission reputation reward", "75%",
                 new ConfigDescription("Ordinary cargo-mission reputation before water condition. Vanilla mail and Postal Expansion are excluded. Applies immediately to deliveries.",
                     new AcceptableValueList<string>("75%", "Vanilla (100%)")));
+            CoverHint = config.Bind("Cargo", "Show cover percentage", false,
+                "Show how much of vulnerable cargo's top is under cover (a deck, a roof or a canvas tarp), 0% to 100%, below its water damage line. Hidden when water damage is disabled. This setting only changes the hint.");
+            CoverHint.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshHint(); };
+            TarpWear = config.Bind("Canvas", "Tarp wearing", true,
+                "Tied canvas tarps lose 10 health a game day and tear at 0. When off, every tarp's health, colour and holes stay as they are. Turning it back on continues wearing from there.");
             WaterDamage.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshSettings(); };
             WaterDamageHint.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshHint(); };
+            // Each tarp's health so far, worn as the option was, becomes its start from now (user, 2026-10-09).
+            TarpWear.SettingChanged += (s,e) => { tarpWearWas = Tarps.Rebase(tarpWearWas); };
+            tarpWearWas = TarpWear.Value;
         }
     }
 
