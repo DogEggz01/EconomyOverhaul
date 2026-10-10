@@ -222,3 +222,8 @@
 - Game now only run market initialization once at new save, instead of everytime you load in game.
 - Chronos and FFL special trade good can be bought anywhere, if any NPC trader bring it out.
 - Market will now produce once per day, instead of 1.x day.
+## Configurator options
+- Water damage: toggle on/off. Default on
+- Water damage hint: show when pointing at cargo. Default on
+- Cargo Cover ratio: show when pointing at cargo. Default off
+- Tarp Wearing: make tarp wear across 10 days. Default on.
