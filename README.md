@@ -139,6 +139,8 @@
 - Most of the cargo will now receive water damage when they are soaked in water, under rain, or drop into sea.
   - Trade goods that is not affect by water damage: 
     - coconuts, gems, iron, gold, copper, tools, sculptures, logs, nails, marble, silver, sulfur, rubber.
+  - Water damage from soaking in water will start when cargo soaked 15% of it's height in water
+    - This means make cargo stand on narror side will make it less vulnerable to water damage.
 - Add water damage hint text for all water vulnerable trade good, when point at it will show current water damage level.
   - It start from 0%, progress to 100%.
   - This hint text can be toggle off in Configurator
@@ -182,7 +184,7 @@
 - If the lumber is wet, you will get less plank, depends on how wet it is.
 ### Canvas pack for rain shelter
 - Canvas pack now sold at every vendor that also sell oakum
-- When holding the pack, you can aim at ship's fixed surface and line(shroud/stay), press R to set the corner of the tarp, you need to set 4 corner.
+- When holding the pack, you can aim at ship's fixed surface and line(shroud/stay), or any item you hammered on board, press R to set the corner of the tarp, you need to set 4 corner.
   - If you misclick, drop the pack will reset the set corner.
    - All 4 corner need to be either on land or on ship.
 - To take off the tarp, go to one of the corner and press R. You will get the canvas pack back.
@@ -191,6 +193,7 @@
   - Taking out the torn tarp won't produce the canvas pack.
   - Tarp in Canvas pack won't progress their lifespan, you can keep it forever
 - Tarp you left on other ship will still progress their lifespan, remember to take it down if you want to go sail other ship!
+- You can repaire tarp by using another canvas pack. Hold the canvas pack, aim at 1 of the corner and press R.
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
 - FX(foreign currency exchange) rate is increase to 5% at rep 0, down 0.5 % per reputation level. Rep 10 will be 0.1% fee.
