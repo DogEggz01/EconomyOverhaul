@@ -154,7 +154,14 @@ namespace EconomyOverhaul
         private static readonly HashSet<int> LiquidCargo = new HashSet<int> { 10, 11, 12, 13, 36, 58 };
         private const int CoverGrid = 5;                                  // 5x5 rays over the top face
         private static readonly int[] CoverFirst = { 0, 4, 20, 24, 12 };  // corner cells and centre cell
-        private const float CoverRayHeight = 400;                         // rays start this far above the cargo
+        // Rays start this far above the cargo: under the invisible ceilings the cities have for the player (Gold Rock City's
+        // COL slab 10-35 m over its streets, its col_1/col_2 at 139 m; the user, 2026-10-11: cargo there read 100% cover in
+        // open air; was 400 m). Real shelter (roofs, cabins, tarps, stacked cargo) is within a few metres.
+        private const float CoverRayHeight = 15;
+        // Layer 12 (OnlyPlayerCol): the invisible walls and ceilings the cities have for the player (Gold Rock City's COL slab is
+        // one). Cargo bodies pass through them (the physics settings: layer 12 ignores loose items, 2, and those aboard, 8), so
+        // they are never shelter. The player, boats and small items (18) do collide with them.
+        private const int PlayerOnlyLayers = 1 << 12;
         private const float UpdateSeconds = 2;                            // condition updates, each crate on its own phase
         private const float MoveRecheck = 100;                            // aboard: one rescan once the boat has gone this far
         private float phase;
@@ -348,7 +355,7 @@ namespace EconomyOverhaul
             Bounds local = LocalMeshBounds();
             Matrix4x4 m = transform.localToWorldMatrix;
             var frame = CoverFrame.Of(m, local, up);
-            const int excluded = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 8) | (1 << 11) | (1 << 13) |
+            const int excluded = PlayerOnlyLayers | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 8) | (1 << 11) | (1 << 13) |
                 (1 << 14) | (1 << 16) | (1 << 21) | (1 << 22) | (1 << 23) | (1 << 24) | (1 << 26) | (1 << 27);
             Physics.SyncTransforms();
             Vector3 walkUp = boat && walk ? walk.TransformDirection(boat.InverseTransformDirection(up)).normalized : up;
@@ -359,7 +366,7 @@ namespace EconomyOverhaul
             {
                 Vector3 p = frame.Point(n % CoverGrid, n / CoverGrid, CoverGrid);
                 return Covered(p, up, ~excluded, null) || Covered(p, up, 1 << 2, null, itemsOnly: true) ||
-                    boat && walk && Covered(walk.TransformPoint(boat.InverseTransformPoint(p)), walkUp, -1, walk) ||
+                    boat && walk && Covered(walk.TransformPoint(boat.InverseTransformPoint(p)), walkUp, ~PlayerOnlyLayers, walk) ||
                     Tarps.CoverAbove(p, CoverRayHeight);   // canvas tarps and the ships' cloth roofs (no colliders)
             }
             var rays = new bool[CoverGrid * CoverGrid];
@@ -1429,6 +1436,12 @@ namespace EconomyOverhaul
             if (caulked) hull.oakum = Mathf.Max(0, hull.oakum - .01f * capacity / planks);
             hull.oakum = Mathf.Min(hull.oakum, hull.hullDamage * capacity);
             if (job != null && job.plank == plank) EndJob();
+            // Its physics body switched off first, as for an unbundled bundle (Retire): removed as it is, the game's ExitBoat
+            // would put the body back at the visible plank, against the hull, still kinematic for one physics step, and the
+            // boat would be thrown off it once (user, 2026-10-11). Cargo under it is rescanned with the bounds it has now
+            // (Retire hides it, and DestroyItem's own rescan would then see a point).
+            CoverEvents.RecheckBeneath(plank, CoverEvents.WorldBounds(plank));
+            Retire(plank);
             plank.DestroyItem();
             if (UISoundPlayer.instance) UISoundPlayer.instance.PlayUISound(UISounds.winchUnclick, 1f, .6f);
         }
