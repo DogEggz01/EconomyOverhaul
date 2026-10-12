@@ -195,6 +195,12 @@
   - Tarp in Canvas pack won't progress their lifespan, you can keep it forever
 - Tarp you left on other ship will still progress their lifespan, remember to take it down if you want to go sail other ship!
 - You can repair tarp by using another canvas pack. Hold the canvas pack, aim at 1 of the corner and press R.
+### Wood pole
+- Sold beside canvas pack, as a 4 poles bundle
+- Press Q/E to increase/decrease pole length. It can be attached like lantern hook onto surface.
+- After nailed, it can be use to attach tarp (don't have to be attaching, just nailed will do)
+- Wood pole can support tarp after nailed, so you can make tent/bimini like structure
+- Wood pole can attached to another nailed wood pole
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
 - FX(foreign currency exchange) rate is increase to 5% at rep 0, down 0.5 % per reputation level. Rep 10 will be 0.1% fee.
