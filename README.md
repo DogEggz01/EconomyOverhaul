@@ -198,13 +198,23 @@
 - Tarp you left on other ship will still progress their lifespan, remember to take it down if you want to go sail other ship!
 - You can repair tarp by using another canvas pack. Hold the canvas pack, aim at 1 of the corner and press R.
 ### Wood pole
-<img width="1536" height="864" alt="image" src="https://github.com/user-attachments/assets/3c698a67-177f-4590-989a-52264f2d8e31" />
+<img width="3840" height="2160" alt="20E978~1" src="https://github.com/user-attachments/assets/76e1bdbb-07ce-415f-9337-56bec8d42296" />
 
 - Sold beside canvas pack, as a 4 poles bundle
 - Press Q/E to increase/decrease pole length. It can be attached like lantern hook onto surface.
 - After nailed, it can be use to attach tarp (don't have to be attaching, just nailed will do)
 - Wood pole can support tarp after nailed, so you can make tent/bimini like structure
-- Wood pole can attached to another nailed wood pole
+- If unnailed the pole, the tarp will be drop or become unsupported.
+- All wall attachtable item can attach to nailed wood pole, including other wood pole
+- If nailed the item on wood pole, when you pick up the wood pole it will stay on the pole.
+  - If you didn't nail the item, it will be drop when picked up
+  - When there is item nailed on the pole, you cannot change it's length.
+- Press H while holding a wood pole to switch to bracing mode, under this mod you can push the ship, fending and punting.
+  - To push, just treat the tip of the pole as extension of your hand, still press F to push.
+  - To fend, aim the pole at any surface, when it touch something it will automatically fend for you.
+    - At 8m long (longest length for a single pole), you can stop a ship running at 5 knots toward the solid things.
+  - To punt, aim your pole at sea bed and press F like you push the ship.
+- Under bracing mode, pressing F won't drop the pole, pressing T (throw button) still drop it.
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
 - FX(foreign currency exchange) rate is increase to 5% at rep 0, down 0.5 % per reputation level. Rep 10 will be 0.1% fee.
