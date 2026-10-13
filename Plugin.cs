@@ -38,7 +38,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "0.9.4";
+        public const string Version = "0.9.5";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -267,6 +267,7 @@ namespace EconomyOverhaul
         internal static ConfigEntry<bool> WaterDamage, WaterDamageHint, CoverHint, TarpWear;
         internal static bool CoverHintEnabled => CoverHint?.Value ?? false;
         internal static ConfigEntry<string> MissionReputation;
+        internal static ConfigEntry<KeyboardShortcut> BraceKey;   // a shortcut: the configurator sets it by a key press (the user, 2026-10-13)
         internal static bool WaterEnabled => WaterDamage?.Value ?? true;
         internal static bool TarpWearing => TarpWear?.Value ?? true;
         private static bool tarpWearWas = true;   // the option's value before its last change
@@ -284,6 +285,10 @@ namespace EconomyOverhaul
             CoverHint = config.Bind("Cargo", "Show cover percentage", false,
                 "Show how much of vulnerable cargo's top is under cover (a deck, a roof or a canvas tarp), 0% to 100%, below its water damage line. Hidden when water damage is disabled. This setting only changes the hint.");
             CoverHint.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshHint(); };
+            BraceKey = config.Bind("Wood pole", "Brace key", new KeyboardShortcut(KeyCode.H),
+                "While holding a wood pole, this key braces it (held at your side, pointing forward: with the pick-up key held (the left mouse by default) it pushes boats, docks or the sea bed) or holds it loosely again.");
+            // "Braced pole hand force" and "Braced pole collision" were removed (the user, 2026-10-13: a braced pole has no collision);
+            // a config file from 0.9.5 keeps their lines, unused.
             TarpWear = config.Bind("Canvas", "Tarp wearing", true,
                 "Tied canvas tarps lose 10 health a game day and tear at 0. When off, every tarp's health, colour and holes stay as they are. Turning it back on continues wearing from there.");
             WaterDamage.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshSettings(); };

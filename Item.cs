@@ -39,8 +39,22 @@ namespace EconomyOverhaul
         // layer above it (8-23), the same for every layer.
         public static int PlankLook(bool lumber, int i, int k, int j) => lumber ? 8 + 4 * i + j : 4 * i + 2 * k + j;
 
-        // The wood pole (user, 2026-10-12): 0.5-5 m in 0.1 m steps, 2 kg a metre, price 60; 2 m in the shops.
-        public const float PoleMin = .5f, PoleMax = 5, PoleStep = .1f, PoleShopLength = 2, PoleKgPerMetre = 2;
+        // The wood pole (user, 2026-10-12): 0.2-8 m in 0.1 m steps (user, 2026-10-13; was 0.5-5), 2 kg a metre, price 60; 2 m in
+        // the shops.
+        public const float PoleMin = .2f, PoleMax = 8, PoleStep = .1f, PoleShopLength = 2, PoleKgPerMetre = 2;
+        // Pushing with a braced pole (user, 2026-10-13): 1.25 times the game's own push without one.
+        public const float PolePush = 1.25f;
+        // The fender from aboard (the user, 2026-10-13): the dock push 1.115 times, so an 8 m pole stops at most 2.57 m/s (5 knots).
+        public const float PoleFender = 1.115f;
+        // The pole's wood strip in the items' atlas is one dark brown only from v .25 to .61, a lighter wood above it (the user's
+        // picture, 2026-10-13: a light tip from about 3.9 m; pole-brace-48 measured the change at .61) and a lighter line below .25
+        // (an 8 m pole, turning back at v .25, showed a brown ring there: the user). 3.4 m of it is used, from v .26 to .5745 (clear
+        // of both edges), a longer pole running back along it, mirrored (the user: one colour along the whole pole). Where along the
+        // strip a point d metres from the pole's base lies.
+        public const double PoleStrip = 3.4;
+        public static double PoleGrain(double d) { double period = 2 * PoleStrip, m = (d % period + period) % period; return m <= PoleStrip ? m : period - m; }
+        // Eased 0-1 at both ends (smoothstep): a pole laid down and raised.
+        public static double Eased(double t) { t = Clamp(t, 0, 1); return t * t * (3 - 2 * t); }
         public const int PoleValue = 60;
         // The wood pole bundle the shops sell (user, 2026-10-12): four 2 m poles, four poles' price and weight.
         public const int PoleBundleCount = 4, PoleBundleValue = PoleValue * PoleBundleCount;
@@ -552,8 +566,9 @@ namespace EconomyOverhaul
         internal const float Thickness = .08f;   // 8 cm across (the user, 2026-10-12; was 12)
         private const int Sides = 12;
         // The lumber's material is the items' atlas (senna items paint), mostly black: the pole takes one long board strip of it,
-        // the one the planks use (u .7637-.7773, v .236-.861), at the planks' scale (a 0.87 m board face spans 0.08 along the grain).
-        private const float UvPerMetre = .0925f, U0 = .7645f, UWidth = .0120f, V0 = .25f;
+        // the one the planks use (u .7637-.7773, v .236-.861; one dark brown only from v .25 to .61, used from .26: Rules.PoleStrip),
+        // at the planks' scale (a 0.87 m board face spans 0.08 along the grain).
+        private const float UvPerMetre = .0925f, U0 = .7645f, UWidth = .0120f, V0 = .26f;
         internal static GameObject Template, BundleTemplate;
         internal static bool Registered => Template;
         internal static readonly HashSet<ShipItem> Live = new HashSet<ShipItem>();   // every wood pole in the game (PoleHeldLook)
@@ -609,14 +624,19 @@ namespace EconomyOverhaul
             if (meshes.TryGetValue(key, out var cached) && cached) return cached;
             float length = key / 10f, r = Thickness / 2;
             var v = new List<Vector3>(); var n = new List<Vector3>(); var uv = new List<Vector2>(); var t = new List<int>();
+            // Along it the strip's dark wood runs to and fro over 3.4 m lengths, mirrored (Rules.PoleGrain): one colour at any length
+            // (the user, 2026-10-13: a pole changed colour beyond 3.9 m, and an 8 m pole showed a ring where it turned at v .25).
+            var rings = new List<float> { 0 };
+            for (double d = Rules.PoleStrip; d < length - .001; d += Rules.PoleStrip) rings.Add((float)d);
+            rings.Add(length);
             for (int i = 0; i <= Sides; i++)   // across the strip and back again (mirrored: no seam, half the stretch)
             {
                 float a = i * 2 * Mathf.PI / Sides; var out_ = new Vector3(Mathf.Cos(a), Mathf.Sin(a), 0);
                 float u = U0 + UWidth * (1 - Mathf.Abs(2f * i / Sides - 1));
-                v.Add(out_ * r); n.Add(out_); uv.Add(new Vector2(u, V0));
-                v.Add(out_ * r + Vector3.back * length); n.Add(out_); uv.Add(new Vector2(u, V0 + length * UvPerMetre));
+                foreach (var d in rings) { v.Add(out_ * r + Vector3.back * d); n.Add(out_); uv.Add(new Vector2(u, V0 + (float)Rules.PoleGrain(d) * UvPerMetre)); }
             }
-            for (int i = 0; i < Sides; i++) { int p = 2 * i; t.AddRange(new[] { p, p + 1, p + 2, p + 2, p + 1, p + 3 }); }
+            int k = rings.Count;
+            for (int i = 0; i < Sides; i++) for (int j = 0; j < k - 1; j++) { int p = i * k + j, q = p + k; t.AddRange(new[] { p, p + 1, q, q, p + 1, q + 1 }); }
             foreach (var (z, normal) in new[] { (0f, Vector3.forward), (-length, Vector3.back) })
             {
                 int centre = v.Count; v.Add(new Vector3(0, 0, z)); n.Add(normal); uv.Add(new Vector2(U0 + UWidth / 2, V0 + r * UvPerMetre));
@@ -712,13 +732,14 @@ namespace EconomyOverhaul
         // (the user, 2026-10-12). The root keeps its own mesh and direction: the placement ghost shows where it will stand.
         internal const string HeldLookName = "wood pole held look";
         private static readonly Vector3 HeldAxis = new Vector3(0, Mathf.Cos(15 * Mathf.Deg2Rad), Mathf.Sin(15 * Mathf.Deg2Rad));
+        internal static void HeldLocal(float length, out Vector3 at, out Quaternion turn) { turn = Quaternion.FromToRotation(Vector3.back, HeldAxis); at = -HeldAxis * (length / 3) + Vector3.right * .3f; }
         internal static void HeldPose(Transform look, float length)
-        { look.localRotation = Quaternion.FromToRotation(Vector3.back, HeldAxis); look.localPosition = -HeldAxis * (length / 3) + Vector3.right * .3f; look.localScale = Vector3.one; }
+        { HeldLocal(length, out var at, out var turn); look.localRotation = turn; look.localPosition = at; look.localScale = Vector3.one; }
 
         // Q longer, E shorter, 0.1 m a press; held, repeating after 0.4 s. Only a held pole that is bought and isn't nailed (a
         // shop's pole can be picked up before buying it: resized, it would go back to its stall at the new length).
         private static KeyCode repeating; private static float repeatAt;
-        // On another pole (the user, 2026-10-12: only on a nailed one). The game's own wall ray starts at the held pole's base,
+        // On a nailed pole (the user, 2026-10-12: only on a nailed one), any wall item (2026-10-13: not only another pole). The game's own wall ray starts at the held pole's base,
         // about 1 m ahead, and runs along the pole, so it hardly ever meets an 8 cm pole (measured by -PoleAttach). With the
         // crosshair on a nailed pole within reach (2.55 m, as a tarp's corner) the held pole attaches where it points: on its side
         // sticking straight out of it, on its end standing on it; loose items are seen through, solid surfaces are not. The game's green ghost shows it, its drop attaches it there
@@ -741,7 +762,7 @@ namespace EconomyOverhaul
             ShipItem target = null; float near = AttachReach; Vector3 normal = default;
             foreach (var pole in Live)
             {
-                if (!pole || pole == held || !pole.sold || !pole.nailed) continue;
+                if (!pole || pole == held || !pole.sold || !pole.nailed || PoleCarry.Riding(pole)) continue;
                 var box = pole.GetComponent<BoxCollider>(); if (!box) continue;
                 var t = pole.transform; Vector3 o = t.InverseTransformPoint(eye.origin) - box.center, d = t.InverseTransformDirection(eye.direction), half = box.size / 2;
                 float enter = 0, leave = near; int axis = -1; float sign = 0; bool miss = false;
@@ -792,9 +813,12 @@ namespace EconomyOverhaul
             pole.itemRigidbodyC.ForceRigidbodyToWalkCol(); pole.itemRigidbodyC.attached = true;
         }
 
+        // Picked up: its length and the keys, or that things locked on it fix its length (the user, 2026-10-13).
+        internal static string PickupNotice(ShipItem pole) => "Wood pole " + Format(Length(pole)) + (PoleCarry.Carries(pole) ? " (things on it: length fixed)" : " (Q/E: length)");
         internal static void Keys(GoPointer pointer)
         {
             var held = pointer ? pointer.GetHeldItem() as ShipItem : null;
+            PoleBrace.Keys(pointer, held);
             if (!GameState.playing || !IsPole(held) || !held.sold || held.nailed) { repeating = KeyCode.None; return; }
             int step = 0;
             foreach (var (key, d) in new[] { (KeyCode.Q, 1), (KeyCode.E, -1) })
@@ -804,9 +828,11 @@ namespace EconomyOverhaul
             }
             if (repeating != KeyCode.None && !Input.GetKey(repeating)) repeating = KeyCode.None;
             if (step == 0) return;
+            if (PoleCarry.Carries(held)) { Loans.Notify(PoleCarry.LengthFixed); return; }   // what is on it would be left off it (PoleCarry)
             float before = Length(held), after = Rules.PoleLength(before + step * Rules.PoleStep);
             if (after != before) SetLength(held, after);
-            Loans.Notify("Wood pole " + Format(after) + (after != before ? "" : step > 0 ? " (longest)" : " (shortest)"));
+            // A notice only at the shortest or longest (user, 2026-10-13): the pole's hint text shows its length.
+            if (after >= Rules.PoleMax || after <= Rules.PoleMin) Loans.Notify("Wood pole " + Format(after) + (after >= Rules.PoleMax ? " (longest)" : " (shortest)"));
         }
     }
     // Shows the held look while the pole is in a hand, the pole itself otherwise; switched only when that changes.
@@ -822,27 +848,642 @@ namespace EconomyOverhaul
             shown = held; if (look) look.SetActive(held); if (root) root.enabled = !held;
         }
     }
+    // ---- The length while a pole is held (the user, 2026-10-13) ----
+    // The game's one text holder (LookUI) shows either the held item's text or a pointed thing's (a dock's "push"), one at a time, so
+    // the length would vanish while pushing a dock. The mod draws its own line in the game's hint-line style (a copy of LookUI's hint
+    // line, where the game shows a pole's length when one looks at it), at a fixed spot just below where the game draws a dock's push text (LookUI.ShowLookText: 0.75 m ahead of the eye,
+    // 0.25 m down), so the two never overlap.
+    internal static class PoleText
+    {
+        internal const float Ahead = .75f, Down = .25f, Below = .12f;
+        internal static TextMesh Text;
+        private static Transform root; private static GoPointer owner;
+        private static readonly AccessTools.FieldRef<LookUI, TextMesh> hintText = AccessTools.FieldRefAccess<LookUI, TextMesh>("hintText");
+        internal static void Update(GoPointer pointer)
+        {
+            var held = pointer ? pointer.GetHeldItem() as ShipItem : null; var cam = Camera.main;
+            bool holds = held && WoodPoles.IsPole(held) && held.sold && cam && pointer.lookUI && GameState.playing && !GameState.inCursorMenu && !GameState.sleeping;
+            if (!holds)
+            {
+                if (pointer == owner || !owner) { owner = null; if (root) root.gameObject.SetActive(false); }
+                return;
+            }
+            if ((!root || !Text) && !Make(pointer.lookUI)) return;
+            owner = pointer;
+            var eye = cam.transform;
+            root.position = eye.position + eye.forward * Ahead - Vector3.up * (Down + Below);
+            root.LookAt(eye);   // as LookUI turns itself to the camera
+            string line = "wood pole " + WoodPoles.Format(WoodPoles.Length(held));
+            if (Text.text != line) Text.text = line;
+            if (!root.gameObject.activeSelf) root.gameObject.SetActive(true);
+        }
+        private static bool Make(LookUI look)
+        {
+            var source = hintText(look); if (!source) return false;
+            if (root) UnityEngine.Object.Destroy(root.gameObject);
+            root = new GameObject("EconomyOverhaul pole length").transform; UnityEngine.Object.DontDestroyOnLoad(root.gameObject);
+            var copy = UnityEngine.Object.Instantiate(source.gameObject, root, false);
+            foreach (Transform child in copy.transform) UnityEngine.Object.Destroy(child.gameObject);
+            foreach (var c in copy.GetComponents<Component>()) if (!(c is Transform || c is TextMesh || c is MeshRenderer || c is MeshFilter)) UnityEngine.Object.Destroy(c);
+            // Turned and sized as the game's own line is on its holder.
+            copy.transform.localPosition = Vector3.zero; copy.transform.localRotation = Quaternion.Inverse(look.transform.rotation) * source.transform.rotation;
+            copy.transform.localScale = source.transform.lossyScale;
+            Text = copy.GetComponent<TextMesh>();
+            return Text;
+        }
+    }
+    // ---- A braced wood pole (the user, 2026-10-13; as built in CANVAS.md) ----
+    // The brace key (the option "Brace key", H) braces a held pole that is bought and not nailed: from the staff in the hand it is laid
+    // down over a second to the brace, held at the right side of the body pointing where one looks, tilted by the mouse wheel as the
+    // game tilts any held item (at most 80 degrees), from its butt 0.4 m behind the hand (a length change moves only its far tip). The
+    // key again raises it back over a second, and it is held as before. It is never solid (the user, 2026-10-13: no collision): its
+    // physics copy is a trigger, as the game makes a held item's, and follows the hold exactly, kinematic, as any held item does (the
+    // user: no hands' force); it knocks nothing and nothing catches it. It ignores the water's floating. It lives where items live,
+    // in the world on land and on her walk copy aboard, so aboard it moves with her; a jump of the hand no hands could make (boarding
+    // or leaving her while braced, a teleport) puts it at the hold at once.
+    // What the pole meets in the world (a 2 cm sphere along it from the hand) its tip rests on, outlined as the game outlines a push
+    // part; there, with the pick-up input held, it pushes 1.25 times as hard as the game's own push without one: a boat from land
+    // (GPButtonBoatPushCol's push, with her own values), one's own boat off a dock, the ground or the sea bed from aboard
+    // (DockPushCol's), and from aboard another boat, both apart. When that closes in on the hand it fends on its own: from land as it
+    // pushes, from aboard the dock push 1.115 times over the closing speed (an 8 m pole stops 2.57 m/s), two boats' masses as one.
+    // The pick-up input doesn't drop it; the throw key still drops or throws it, which ends the brace.
+    internal static class PoleBrace
+    {
+        internal const float GripRight = .3f, GripDown = .45f, GripAhead = .35f, Behind = .4f, Radius = .02f, TipGap = .01f;
+        internal const float FenderSpeed = .05f, LetGoAngle = 30;
+        // Round 4 (the user, 2026-10-13): laid down and raised over a second each; tilted by the wheel at most 80 degrees; put straight
+        // at the hold on a jump of the hand over 2 m.
+        internal const float LaySeconds = 1, MaxTilt = 80, Jump = 2;
+        // The game's DockPushCol value (its own boat pushed back from where one looks): -0.55 in the game, or what a mod writes into
+        // every dock push collider each physics step (the user's Hercules Throw: its "Dock push force multiplier"; the user,
+        // 2026-10-13). Kept from the last active one seen (DockSeen, after the game's step and every mod's prefix: HarmonyX runs them
+        // even when this mod skips the game's own push); away from every dock the last one seen, -0.55 before any.
+        internal const float GameDockPush = -.55f;
+        internal static float DockPush { get; private set; } = GameDockPush;
+        private static readonly AccessTools.FieldRef<DockPushCol, float> dockPushMult = AccessTools.FieldRefAccess<DockPushCol, float>("pushForceMult");
+        internal static void DockSeen(DockPushCol col) { if (col) DockPush = dockPushMult(col); }
+        internal static ShipItem Braced;
+        internal static float Lay { get; private set; }   // 0 the staff in the hand, 1 braced
+        internal static bool Raising { get; private set; }
+        // What its tip rests on: a collider and the point on it in its own frame (moving with her, or with a world shift).
+        internal static Collider ContactCol; internal static Rigidbody ContactBoat; private static Vector3 contactLocal;
+        internal static Vector3 ContactPoint => ContactCol ? ContactCol.transform.TransformPoint(contactLocal) : default;
+        internal static Vector3 LastForce, LastAxis, LastButt; internal static float LastSpeed, LastClosing; internal static Rigidbody LastForceOn; internal static bool LastFender;   // for tests
+        internal static bool TestPush;   // tests: as if the pick-up input were held
+        internal static Func<Transform> TestEye;   // tests: the eye to hold it from
+        internal static readonly AccessTools.FieldRef<ItemRigidbody, BoxCollider> boxCol = AccessTools.FieldRefAccess<ItemRigidbody, BoxCollider>("boxCol");
+        internal static readonly AccessTools.FieldRef<ItemRigidbody, bool> onBoat = AccessTools.FieldRefAccess<ItemRigidbody, bool>("onBoat");
+        private static readonly AccessTools.FieldRef<ItemRigidbody, SimpleFloatingObject> floater = AccessTools.FieldRefAccess<ItemRigidbody, SimpleFloatingObject>("floater");
+        internal static Behaviour Floater(ItemRigidbody copy) => copy ? floater(copy) : null;   // the water's floating on an item's body (Crest's SimpleFloatingObject)
+        internal static readonly AccessTools.FieldRef<GoPointerButton, bool> isClicked = AccessTools.FieldRefAccess<GoPointerButton, bool>("isClicked");
+        private static readonly AccessTools.FieldRef<GoPointer, float> throwPower = AccessTools.FieldRefAccess<GoPointer, float>("currentThrowPower");
+
+        // From GoPointer.LateUpdate (WoodPoles.Keys): the brace key on the pole in that hand (again: raised, or laid down again while
+        // it rises); a pole no longer held lets go.
+        internal static void Keys(GoPointer pointer, ShipItem held)
+        {
+            if ((object)Braced != null && (!Braced || !Braced.held)) Release();   // also one destroyed while braced
+            if (!pointer || !WoodPoles.IsPole(held) || !held.sold || held.nailed || !GameState.playing || GameState.inCursorMenu) return;
+            var key = Settings.BraceKey?.Value ?? new BepInEx.Configuration.KeyboardShortcut(KeyCode.H);
+            if (key.MainKey != KeyCode.None && key.IsDown()) { if (Braced == held) Raising = !Raising; else Brace(held); }
+        }
+        internal static void Brace(ShipItem pole)
+        {
+            if ((object)Braced != null) Release();
+            var copy = pole ? pole.itemRigidbodyC : null; var body = copy ? copy.GetBody() : null;
+            if (!body || !pole.held || !pole.sold || pole.nailed) return;
+            Braced = pole; pole.wallAttachment = false; hasLast = false; Lay = 0; Raising = false;   // no wall ghost, and no attaching on a drop
+            // It starts where it is seen: the staff in the hand.
+            var (sp, sr) = Staff(pole); var (p, r) = ToBody(pole, copy, sp, sr);
+            copy.transform.SetPositionAndRotation(p, r); body.position = p; body.rotation = r;
+            PoleCarry.Hook();
+        }
+        // The brace key again (tests call it for the key): raised back to the staff, then held as before.
+        internal static void Raise() { if (Braced) Raising = true; }
+        internal static void Release()
+        {
+            var pole = Braced; Braced = null; ContactCol = null; ContactBoat = null; LastForce = Vector3.zero; LastForceOn = null; planted = false;
+            Lay = 0; Raising = false; Unlight();
+            if (!pole) return;
+            pole.wallAttachment = true;
+            WoodPoles.SetLength(pole, WoodPoles.Length(pole));   // its whole box again, and the held look back in the hand
+        }
+        // The wheel's tilt (the game's heldRotationOffset, which it turns a held item by about the view's side-to-side axis), at most
+        // 80 degrees either way so the pole never points back through the player.
+        internal static float Tilt(ShipItem pole) => Mathf.Clamp(Mathf.DeltaAngle(0, pole.heldRotationOffset), -MaxTilt, MaxTilt);
+        // The staff in the hand (WoodPoles.HeldPose on the item the game holds ahead of the eye): where the pole is seen before it is
+        // braced, its butt a third of it below the hand.
+        internal static (Vector3, Quaternion) Staff(ShipItem pole)
+        {
+            WoodPoles.HeldLocal(WoodPoles.Length(pole), out var at, out var turn);
+            return (pole.transform.TransformPoint(at), pole.transform.rotation * turn);
+        }
+
+        // Each physics step in place of the game's own (ItemRigidbody.FixedUpdate) for the braced pole's copy: laid down or raised,
+        // driven to the hold, then its push. False: not braced any more, the game's own step runs.
+        internal static bool Step(ItemRigidbody copy)
+        {
+            var pole = Braced; var body = copy ? copy.GetBody() : null;
+            if (!pole || !pole.held || pole.nailed || !body) { Release(); return false; }
+            if (!GameState.playing || GameState.sleeping || GameState.recovering) return false;   // paused: held as any item
+            var drift = floater(copy); if (drift && drift.enabled) drift.enabled = false;   // not floated by the water (a mod may switch it on: RadFixes)
+            Lay = Mathf.Clamp01(Lay + (Raising ? -1 : 1) * Time.fixedDeltaTime / LaySeconds);
+            if (Raising && Lay <= 0) { Release(); return false; }
+            var eye = TestEye?.Invoke() ?? pole.held.transform;
+            var box = boxCol(copy);
+            // With poles fixed straight on its far end, one longer pole: its reach, its body's length and its weight (PoleCarry).
+            float length = PoleCarry.Reach(pole); body.mass = PoleCarry.Mass(pole);
+            bool braced = Lay >= 1 && !Raising;
+            if (braced) { Aim(pole, eye, out var g, out var a, out _); Touch(g, a, length - Behind); } else { ContactCol = null; ContactBoat = null; planted = false; }
+            var (butt, turn, grip, axis) = Pose(pole, eye, Lay, braced);
+            LastButt = butt;
+            // Never solid (the user, 2026-10-13: no collision): a trigger along its whole reach, as the game makes a held item's box.
+            if (box)
+            {
+                box.enabled = true; box.isTrigger = true;
+                box.size = new Vector3(WoodPoles.Thickness, WoodPoles.Thickness, Mathf.Max(.05f, length)); box.center = new Vector3(0, 0, -length / 2);
+            }
+            var (p, r) = ToBody(pole, copy, butt, turn);
+            body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative; body.isKinematic = true;
+            Move(body, p, r, ToBody(pole, copy, grip, turn).Item1);
+            if (braced) Push(eye, grip, axis); else { LastForce = Vector3.zero; LastForceOn = null; LastFender = false; }
+            return true;
+        }
+        // The hold from the hand as it is now: the grip at the right side, the line along the view tilted by the wheel.
+        private static void Aim(ShipItem pole, Transform eye, out Vector3 grip, out Vector3 axis, out Vector3 up)
+        {
+            var aim = eye.rotation * Quaternion.Euler(Tilt(pole), 0, 0); axis = aim * Vector3.forward; up = aim * Vector3.up;
+            grip = eye.position + eye.right * GripRight - eye.up * GripDown + eye.forward * GripAhead;
+        }
+        // Where the pole lies from the hand as it is now (each physics step for its body, each frame for its look): laid down by lay
+        // (0 the staff in the hand, 1 braced; between them eased at both ends), braced its butt 0.4 m behind the hand, or its tip
+        // resting on the point it meets (the line from the hand to it).
+        private static (Vector3 butt, Quaternion turn, Vector3 grip, Vector3 axis) Pose(ShipItem pole, Transform eye, float lay, bool braced)
+        {
+            Aim(pole, eye, out var grip, out var axis, out var up);
+            var butt = grip - axis * Behind;
+            if (braced && ContactCol) { var at = ContactPoint; axis = (at - grip).normalized; butt = at - axis * (PoleCarry.Reach(pole) + TipGap); }
+            var turn = Quaternion.LookRotation(-axis, up);
+            if (!braced) { var (sp, sr) = Staff(pole); float s = (float)Rules.Eased(lay); butt = Vector3.Lerp(sp, butt, s); turn = Quaternion.Slerp(sr, turn, s); }
+            return (butt, turn, grip, axis);
+        }
+        // From where it lies to its body: with the player aboard her, from her frame to her walk copy (as the game's
+        // MoveRigidbodyToWalkCol); else the world, also when the held pole has boarded a ship the player stands beside (the game
+        // boards a held item near her: its body on her walk copy would hit her copy's hull, measured stuck 6 m off).
+        private static bool Aboard(ShipItem pole, ItemRigidbody copy) => pole.currentWalkCol && pole.currentActualBoat && onBoat(copy) && GameState.currentBoat == pole.currentActualBoat;
+        private static (Vector3, Quaternion) ToBody(ShipItem pole, ItemRigidbody copy, Vector3 p, Quaternion r) => !Aboard(pole, copy) ? (p, r) :
+            (pole.currentWalkCol.TransformPoint(pole.currentActualBoat.InverseTransformPoint(p)), pole.currentWalkCol.rotation * (Quaternion.Inverse(pole.currentActualBoat.rotation) * r));
+        // To the hold each physics step, exactly, as the game holds any item (kinematic; the user, 2026-10-13: no hands' force). A
+        // jump of the hand no hands could make (boarding or leaving her while braced: the hand moves between the world and her walk
+        // copy; a teleport) puts it there at once instead of sweeping it through the frames between; a world shift moves the body with
+        // the hand. The hand, not the hold: the hold slides back along the pole by up to its length when its tip meets something
+        // (pole-brace-45).
+        private static Vector3 lastBody, lastHand; private static bool hasLast;
+        internal static int Placed;   // times put at the hold after a jump (for tests)
+        internal static Vector3 DrawnAt; internal static bool DrawnPlanted;   // how the pole was last drawn: planted, resting there (for tests)
+        private static void Move(Rigidbody body, Vector3 at, Quaternion turn, Vector3 hand)
+        {
+            if (hasLast && (hand - lastHand).magnitude > Jump && (body.position - lastBody - (hand - lastHand)).magnitude > Jump)
+            { body.position = at; body.rotation = turn; Placed++; }
+            else { body.MovePosition(at); body.MoveRotation(turn); }
+            lastBody = at; lastHand = hand; hasLast = true;
+        }
+        // What the pole meets in the world, along it from the hand: the nearest, found afresh each step; while it pushes or fends
+        // (planted), the same point kept as long as it stays within its reach and 30 degrees of the view, moving with what it rests
+        // on (a ship pushed off, the sea bed punted from). Items, the player, one's own boat, triggers and the cities' invisible
+        // walls (layer 12) are not met.
+        private static bool planted;
+        private static void Touch(Vector3 grip, Vector3 axis, float reach)
+        {
+            if (ContactCol && !planted) { ContactCol = null; ContactBoat = null; }
+            if (ContactCol)
+            {
+                var to = ContactPoint - grip;
+                if (ContactCol.enabled && ContactCol.gameObject.activeInHierarchy && to.magnitude <= reach + .05f && Vector3.Angle(to, axis) <= LetGoAngle) return;
+                ContactCol = null; ContactBoat = null;
+            }
+            if (reach <= 0) return;
+            RaycastHit best = default; float near = float.MaxValue;
+            foreach (var h in Physics.SphereCastAll(grip, Radius, axis, reach, ~0, QueryTriggerInteraction.Ignore))
+                if (h.distance > 0 && h.distance < near && !Skip(h.collider)) { near = h.distance; best = h; }
+            if (!best.collider) return;
+            ContactCol = best.collider; contactLocal = best.collider.transform.InverseTransformPoint(best.point); ContactBoat = Boat(best.collider);
+        }
+        private static bool Skip(Collider c)
+        {
+            if (c.gameObject.layer == 12 || c.GetComponentInParent<ShipItem>() || c.GetComponentInParent<ItemRigidbody>()) return true;
+            if (Refs.charController && c.transform.IsChildOf(Refs.charController.transform)) return true;
+            var own = GameState.currentBoat ? GameState.currentBoat.parent : null;
+            return own && c.transform.IsChildOf(own);
+        }
+        internal static Rigidbody Boat(Collider c)
+        {
+            var rb = c ? c.attachedRigidbody : null;
+            return rb && (rb.GetComponent<PurchasableBoat>() || BoatPart(rb)) ? rb : null;
+        }
+        // Each boat's own push part, looked up once.
+        private static readonly Dictionary<Rigidbody, GPButtonBoatPushCol> parts = new Dictionary<Rigidbody, GPButtonBoatPushCol>();
+        internal static GPButtonBoatPushCol BoatPart(Rigidbody boat)
+        {
+            if (!boat) return null;
+            if (!parts.TryGetValue(boat, out var part) || !part) parts[boat] = part = boat.GetComponentInChildren<GPButtonBoatPushCol>(true);
+            return part;
+        }
+        // The push, with the pick-up input held: from land on the boat met, the game's GPButtonBoatPushCol push with her own values;
+        // from aboard on one's own boat, DockPushCol's, and the boat met (if any) the equal opposite push; each 1.25 times as hard,
+        // and over the pushed boat's speed (at least 1) as the game's. As a fender (the contact closing in on the hand faster than
+        // 5 cm/s, nothing held): from land the same push; from aboard (the user, 2026-10-13) the dock push 1.115 times (Rules.PoleFender:
+        // an 8 m pole stops 2.57 m/s) over the closing speed (at least 1), her mass off a dock or the sea bed, two boats' masses as one
+        // (the same stop for every ship, from either deck).
+        private static void Push(Transform eye, Vector3 grip, Vector3 axis)
+        {
+            LastForce = Vector3.zero; LastForceOn = null; LastFender = false; planted = false;
+            if (!ContactCol) return;
+            var at = ContactPoint;
+            var own = GameState.currentBoat ? GameState.currentBoat.parent.GetComponent<Rigidbody>() : null;
+            var closing = Vector3.Dot((own ? own.GetPointVelocity(grip) : Vector3.zero) - (ContactBoat ? ContactBoat.GetPointVelocity(at) : Vector3.zero), axis);
+            LastClosing = closing;
+            bool pushing = TestPush || !GameState.inCursorMenu && GameInput.GetKey(InputName.PickUp), fending = closing > FenderSpeed;
+            if (!pushing && !fending) return;
+            LastFender = fending && !pushing; planted = true;
+            if (own)
+            {
+                if (ContactBoat == own) return;
+                LastAxis = axis; LastSpeed = own.velocity.magnitude;
+                Vector3 f;
+                if (pushing) f = Rules.PolePush * DockPush * own.mass * axis / Mathf.Max(1, own.velocity.magnitude);
+                else
+                {
+                    float mass = ContactBoat ? own.mass * ContactBoat.mass / (own.mass + ContactBoat.mass) : own.mass;
+                    f = Rules.PoleFender * Rules.PolePush * DockPush * mass * axis / Mathf.Max(1, closing);
+                }
+                own.AddForceAtPosition(f, eye.position); LastForce = f; LastForceOn = own;
+                if (ContactBoat) ContactBoat.AddForceAtPosition(-f, at);
+            }
+            else if (ContactBoat)
+            {
+                if (PlayerSwimming.swimming || Refs.charController && !Refs.charController.isGrounded) return;
+                var col = BoatPart(ContactBoat);
+                float mult = col ? Fields.Get<float>(col, "pushForceMult") : 3, up = col ? Fields.Get<float>(col, "upForceMult") : 1;
+                float below = col ? Fields.Get<float>(col, "verticalOffset") : -2, mass = col ? Fields.Get<float>(col, "baseMass") : ContactBoat.mass;
+                LastAxis = axis; LastSpeed = ContactBoat.velocity.magnitude;
+                var f = Rules.PolePush * (mult * mass * axis + up * mass * Vector3.up) / Mathf.Max(1, ContactBoat.velocity.magnitude);
+                ContactBoat.AddForceAtPosition(f, new Vector3(at.x, eye.position.y + below, at.z)); LastForce = f; LastForceOn = ContactBoat;
+            }
+        }
+        // What its tip rests on is outlined as the game outlines a push part (GoPointerButton.UpdateColor; the user, 2026-10-13): a
+        // boat's push part (GPButtonBoatPushCol) or a dock's (DockPushCol), as looked at while the tip rests there and as pushed (the
+        // game's FlashOutline) while it pushes or fends. The sea bed and other ground: none.
+        private static readonly AccessTools.FieldRef<GoPointerButton, bool> outlined = AccessTools.FieldRefAccess<GoPointerButton, bool>("overrideEnableOutline");
+        internal static GoPointerButton Lit { get; private set; }
+        internal static void Highlight()
+        {
+            GoPointerButton part = null;
+            if (Braced && ContactCol) part = ContactBoat ? (GoPointerButton)BoatPart(ContactBoat) : ContactCol.GetComponentInParent<DockPushCol>();
+            if (Lit && Lit != part) outlined(Lit) = false;
+            Lit = part; if (!part) return;
+            if (planted) { outlined(part) = false; part.FlashOutline(.1f); } else outlined(part) = true;
+        }
+        private static void Unlight() { if (Lit) outlined(Lit) = false; Lit = null; }
+        // Drawn each frame, after everything else has moved, from the hand as it is then, as the game draws any held item (its
+        // GoPointer.LateUpdate sets a held item's transform every frame); not from its body, which moves only on physics steps and so
+        // was drawn a step behind the view, juddering as it turned (the user, 2026-10-13: glitchy, unlike a held item). Resting on,
+        // pushing or fending off a point, from the hands straight to it, whatever it is (a boat, a dock, the ground, the sea bed: from
+        // aboard it touches what it pushes). Laying down and raising run on smoothly between physics steps.
+        internal static void Draw()
+        {
+            var pole = Braced; if (!pole || !pole.held) return;
+            var look = pole.transform.Find(WoodPoles.HeldLookName); if (!look) return;
+            var eye = TestEye?.Invoke() ?? pole.held.transform;
+            bool braced = Lay >= 1 && !Raising;
+            float since = GameState.playing ? Mathf.Clamp(Time.time - Time.fixedTime, 0, Time.fixedDeltaTime) : 0;   // since the last physics step
+            float lay = braced ? 1 : Mathf.Clamp01(Lay + (Raising ? -1 : 1) * since / LaySeconds);
+            var (butt, turn, _, _) = Pose(pole, eye, lay, braced);
+            look.SetPositionAndRotation(butt, turn);
+            DrawnPlanted = planted && ContactCol; if (DrawnPlanted) DrawnAt = ContactPoint;
+        }
+        // GoPointer.LateUpdate: no throw charged by the left mouse (the game's auto-throw), and no drop by it (DropItem refused
+        // while the flag is up); the throw key still charges, drops and throws.
+        internal static bool InPointer;
+        internal static void BeforePointer(GoPointer pointer)
+        {
+            InPointer = true;
+            if (Braced && Braced.held == pointer && !GameInput.GetKey(InputName.Throw)) throwPower(pointer) = 0;
+        }
+        internal static bool AllowsDrop(GoPointer pointer) => !(InPointer && Braced && Braced.held == pointer && !GameInput.GetKeyUp(InputName.Throw));
+    }
+    [HarmonyPatch(typeof(ItemRigidbody), "FixedUpdate")] internal static class PoleBraceStepPatch
+    { static bool Prefix(ItemRigidbody __instance) => !(PoleBrace.Braced && PoleBrace.Braced.itemRigidbodyC == __instance && PoleBrace.Step(__instance)); }
+    [HarmonyPatch(typeof(GoPointer), "LateUpdate")] internal static class PoleBracePointerPatch
+    {
+        static void Prefix(GoPointer __instance) => PoleBrace.BeforePointer(__instance);
+        static void Postfix() => PoleBrace.InPointer = false;
+        static Exception Finalizer(Exception __exception) { PoleBrace.InPointer = false; return __exception; }
+    }
+    [HarmonyPatch(typeof(GoPointer), "DropItem")] internal static class PoleBraceDropPatch
+    { static bool Prefix(GoPointer __instance) => PoleBrace.AllowsDrop(__instance); }
+    // The game's own pushes add nothing while a pole is braced (the pole pushes instead).
+    [HarmonyPatch(typeof(GPButtonBoatPushCol), "ExtraFixedUpdate")] internal static class PoleBraceBoatPushPatch
+    { static bool Prefix(GPButtonBoatPushCol __instance) => !(PoleBrace.Braced && PoleBrace.isClicked(__instance)); }
+    [HarmonyPatch(typeof(DockPushCol), "ExtraFixedUpdate")] internal static class PoleBraceDockPushPatch
+    {
+        static bool Prefix(DockPushCol __instance) => !(PoleBrace.Braced && PoleBrace.isClicked(__instance));
+        static void Postfix(DockPushCol __instance) => PoleBrace.DockSeen(__instance);   // the value pushes from aboard follow
+    }
+    // After the game's pointer and its text holder: the length keys, the brace key, the outline of what a braced pole rests on, the
+    // length line.
     [HarmonyPatch(typeof(GoPointer), "LateUpdate")] internal static class PoleKeysPatch
-    { static void Postfix(GoPointer __instance) { if (WoodPoles.Registered) WoodPoles.Keys(__instance); } }
+    { static void Postfix(GoPointer __instance) { if (!WoodPoles.Registered) return; WoodPoles.Keys(__instance); PoleBrace.Highlight(); PoleText.Update(__instance); } }
     // Dropped onto a pole aboard a ship: put on her where it was aimed (WoodPoles.OnPoleDrop), after the game's own drop.
     [HarmonyPatch(typeof(ShipItem), "OnDrop")] internal static class PoleDropPatch
-    { static void Postfix(ShipItem __instance) { if (WoodPoles.Registered && WoodPoles.IsPole(__instance)) WoodPoles.OnPoleDrop(__instance); } }
-    // A held pole aimed at a nailed pole attaches to it (WoodPoles.AimAtPole), after the game's own wall test of the frame.
+    { static void Postfix(ShipItem __instance) { if (WoodPoles.Registered && __instance.wallAttachment) WoodPoles.OnPoleDrop(__instance); } }
+    // Any held wall item (a pole, a lantern hook, a hangable...; the user, 2026-10-13: not only poles) aimed at a nailed pole
+    // attaches to it (WoodPoles.AimAtPole), after the game's own wall test of the frame. A braced pole is no wall item.
     [HarmonyPatch(typeof(ShipItem), "Update")] internal static class PoleOnPolePatch
-    { static void Postfix(ShipItem __instance) { if (__instance.held && WoodPoles.Registered && __instance.sold && WoodPoles.IsPole(__instance)) WoodPoles.AimAtPole(__instance, new Ray(__instance.held.transform.position, __instance.held.transform.forward)); } }
+    { static void Postfix(ShipItem __instance) { if (__instance.held && __instance.wallAttachment && WoodPoles.Registered && __instance.sold) WoodPoles.AimAtPole(__instance, new Ray(__instance.held.transform.position, __instance.held.transform.forward)); } }
     // Looked at: "wood pole" and its length under it.
     [HarmonyPatch(typeof(ShipItem), "UpdateLookText")] internal static class PoleLookTextPatch
     { static void Postfix(ShipItem __instance) { if (WoodPoles.IsPole(__instance)) __instance.description = WoodPoles.Format(WoodPoles.Length(__instance)); } }
-    // Picked up: its length and the keys.
+    // Picked up: its length and the keys (or that things on it fix its length).
     [HarmonyPatch(typeof(ShipItem), "OnPickup")] internal static class PolePickupPatch
-    { static void Postfix(ShipItem __instance) { if (WoodPoles.IsPole(__instance) && __instance.sold) Loans.Notify("Wood pole " + WoodPoles.Format(WoodPoles.Length(__instance)) + " (Q/E: length)"); } }
+    {
+        static void Prefix(ShipItem __instance) { if (WoodPoles.Registered) PoleCarry.PickedUp(__instance); }   // before the game frees it
+        static void Postfix(ShipItem __instance) { if (WoodPoles.IsPole(__instance) && __instance.sold) Loans.Notify(WoodPoles.PickupNotice(__instance)); } }
     // Removed (the game's clean-up of items left off a ship 600 m away, or any other way): a tarp tied to it is untied, and one it
     // held up drops back to its shape without it.
     [HarmonyPatch(typeof(ShipItem), "DestroyItem")] internal static class PoleRemovePatch
-    { static void Prefix(ShipItem __instance) { if (WoodPoles.IsPole(__instance) && Tarps.Registered && __instance.nailed) { Tarps.UntieFrom(__instance); Tarps.PoleMoved(__instance, true); } } }
+    {
+        static void Prefix(ShipItem __instance)
+        {
+            if (PoleCarry.Active) PoleCarry.Removed(__instance);
+            if (WoodPoles.IsPole(__instance) && Tarps.Registered && __instance.nailed) { Tarps.UntieFrom(__instance); Tarps.PoleMoved(__instance, true); }
+        }
+    }
     // Nailed with the hammer (the game's ShipItemHammer.NailItem, which may refuse): a wood pole under a tarp holds it up.
     [HarmonyPatch(typeof(ShipItemHammer), "NailItem")] internal static class PoleNailPatch
     { static void Postfix(ShipItem item) { if (item && item.nailed && WoodPoles.IsPole(item)) Tarps.PoleMoved(item, false); } }
+
+    // ---- Things on a pole go with it (the user, 2026-10-13; as built in CANVAS.md) ----
+    // Picked up, a pole takes with it what is locked (nailed) on it: the wall items whose attachment point is on it (within 2 cm,
+    // facing into it) and the poles nailed on it with what is nailed on those, found by geometry at that moment (no save data); a
+    // lantern hung on a carried hook goes with its hook (the game hangs it on the hook's body by a joint and draws it under the hook).
+    // What is on it but not locked is let go and falls (the user, round 4). They keep their place on it as it is drawn (in the hand
+    // on its held look) while it is held, braced, thrown or lying loose, aboard on the pole's ship: their physics copies frozen (as any
+    // fixed wall item) and triggers, so they add no weight and knock nothing. Poles nailed straight on its far end make one longer pole
+    // with it (the user: its reach, its body along the whole length (solid only while loose) and 2 kg a metre, no limit). Attached to a wall again, they stay on it
+    // as plain wall items (found again at its next pick-up) and the nailed poles among them hold up a tarp they stand under (the user:
+    // the reverse case). One picked up leaves it; the pole removed or put away lets them go and they fall. At pick-up a tarp tied to
+    // one of them is untied (its pack dropped, as un-nailing gives it; the user: untie automatically) and one a carried pole held up
+    // drops back to its shape. Its length is fixed while things are on it.
+    internal static class PoleCarry
+    {
+        internal const float Near = .02f, Straight = .996f;   // on its surface within 2 cm; straight on within 5 degrees
+        internal const string LengthFixed = "Length fixed: things on the pole";
+        internal sealed class Thing { internal ShipItem item, hook; internal Vector3 at; internal Quaternion turn; internal bool hung; }   // at, turn: in the pole's frame; hook: the one it hangs on
+        internal sealed class Load
+        {
+            internal ShipItem pole; internal float reach, mass;
+            internal readonly List<Thing> things = new List<Thing>();
+        }
+        private static readonly Dictionary<ItemRigidbody, Load> loads = new Dictionary<ItemRigidbody, Load>();   // by the pole's physics copy
+        private static readonly Dictionary<ShipItem, Load> riding = new Dictionary<ShipItem, Load>();
+        private static readonly HashSet<ItemRigidbody> ridingCopies = new HashSet<ItemRigidbody>();
+        private static readonly MethodInfo exitBoat = AccessTools.Method(typeof(ShipItem), "ExitBoat"), enterBoat = AccessTools.Method(typeof(ShipItem), "EnterBoat");
+        private static readonly MethodInfo hangLate = AccessTools.Method(typeof(HangableItem), "LateUpdate");
+        private static readonly AccessTools.FieldRef<ShipItem, Collider> boatCollider = AccessTools.FieldRefAccess<ShipItem, Collider>("currentBoatCollider");
+        internal static bool Active => loads.Count > 0;
+        internal static bool Riding(ShipItem item) => item && riding.ContainsKey(item);
+        internal static Load Of(ShipItem pole) => pole && pole.itemRigidbodyC && loads.TryGetValue(pole.itemRigidbodyC, out var load) ? load : null;
+        internal static bool Carries(ShipItem pole) => (Of(pole)?.things.Count ?? 0) > 0;
+        internal static float Reach(ShipItem pole) => Of(pole)?.reach ?? WoodPoles.Length(pole);
+        internal static float Mass(ShipItem pole) => Of(pole)?.mass ?? pole.mass;
+        // Where the pole is drawn: in the hand its held look (braced, posed from its body), else itself.
+        private static Transform Frame(ShipItem pole)
+        {
+            var look = pole.held ? pole.transform.Find(WoodPoles.HeldLookName) : null;
+            return look ? look : pole.transform;
+        }
+        // Fixed where it is: nailed, or a wall item attached (as the game holds one on a wall, or any wall item after a load).
+        private static bool Fixed(ShipItem item) => item && item.sold && !item.held && item.itemRigidbodyC && (item.nailed || item.wallAttachment && item.itemRigidbodyC.attached)
+            && !item.itemRigidbodyC.GetCurrentInventorySlot() && !item.itemRigidbodyC.GetCurrentBox();
+        // On the pole: its attachment point (its root, where the game puts it) within 2 cm of the pole's box, facing into it: on an end
+        // along it, on a side toward its line.
+        internal static bool On(ShipItem pole, ShipItem item)
+        {
+            var t = pole.transform; float length = WoodPoles.Length(pole), half = WoodPoles.Thickness / 2 + Near;
+            var q = t.InverseTransformPoint(item.transform.position); var into = t.InverseTransformDirection(item.transform.forward);
+            if (Mathf.Abs(q.x) > half || Mathf.Abs(q.y) > half || q.z > Near || q.z < -length - Near) return false;
+            if (q.z <= -length + .01f && into.z > .9f || q.z >= -.01f && into.z < -.9f) return true;
+            var toLine = new Vector3(-q.x, -q.y, 0);
+            return toLine.magnitude > .01f && Vector3.Dot(into, toLine.normalized) > .7f;
+        }
+        // A lantern (any hangable) the game hangs on this hook: by a joint on the hook's body (ShipItemLampHook.CreateJoint).
+        private static ShipItem HungOn(ShipItem hook)
+        {
+            if (!hook || !hook.GetComponent<ShipItemLampHook>() || !hook.itemRigidbodyC) return null;
+            var joint = hook.itemRigidbodyC.GetComponent<ConfigurableJoint>(); var body = joint ? joint.connectedBody : null;
+            var copy = body ? body.GetComponent<ItemRigidbody>() : null; var item = copy ? copy.GetShipItem() : null;
+            var hangs = item ? item.GetComponent<HangableItem>() : null;
+            return hangs && hangs.IsHanging() ? item : null;
+        }
+        private static bool StillHung(Thing t)
+        {
+            var hangs = t.item ? t.item.GetComponent<HangableItem>() : null;
+            return hangs && hangs.IsHanging() && t.hook && !t.hook.held && HungOn(t.hook) == t.item;
+        }
+
+        // Picked up (ShipItem.OnPickup, before the game frees it): a thing riding a pole leaves it; a pole takes what is locked on it
+        // and lets go of what is not.
+        internal static void PickedUp(ShipItem item)
+        {
+            Leave(item);
+            if (!WoodPoles.IsPole(item) || !item.sold || !item.itemRigidbodyC) return;
+            var pole = item; Prune(); Forget(Of(pole));   // found afresh
+            var all = SaveLoadManager.instance ? SaveLoadManager.instance.GetCurrentPrefabs() : null; if (all == null) return;
+            var candidates = new List<ShipItem>();
+            foreach (var p in all) { var c = p ? p.GetComponent<ShipItem>() : null; if (c != pole && Fixed(c)) candidates.Add(c); }
+            var found = new List<ShipItem>(); var loose = new List<ShipItem>(); var open = new Queue<ShipItem>(); open.Enqueue(pole);
+            while (open.Count > 0)
+            {
+                var on = open.Dequeue();
+                foreach (var c in candidates)
+                {
+                    if (found.Contains(c) || loose.Contains(c) || !On(on, c)) continue;
+                    if (c.nailed) { found.Add(c); if (WoodPoles.IsPole(c)) open.Enqueue(c); }
+                    else loose.Add(c);
+                }
+            }
+            // Not locked: let go, they fall (the user, 2026-10-13: only locked things stay on a pole).
+            foreach (var c in loose) { Leave(c); c.itemRigidbodyC.attached = false; }
+            if (found.Count == 0)
+            {
+                if (loose.Count > 0) Plugin.Log?.LogInfo("Wood pole picked up: " + loose.Count + " thing(s) on it not locked, let go.");
+                return;
+            }
+            var load = new Load { pole = pole }; var frame = pole.transform;
+            foreach (var c in found)
+            {
+                Leave(c);   // from another pole it rode
+                load.things.Add(new Thing { item = c, at = frame.InverseTransformPoint(c.transform.position), turn = Quaternion.Inverse(frame.rotation) * c.transform.rotation });
+                riding[c] = load; ridingCopies.Add(c.itemRigidbodyC);
+            }
+            int hung = 0;
+            foreach (var c in found)
+            {
+                var lantern = HungOn(c); if (!lantern || riding.TryGetValue(lantern, out var with) && with == load) continue;
+                Leave(lantern); load.things.Add(new Thing { item = lantern, hook = c, hung = true }); riding[lantern] = load; hung++;
+            }
+            Chain(load); loads[pole.itemRigidbodyC] = load; Hook();
+            // Tarps: one tied to a carried thing is untied (its colliders still solid here), one a carried pole held up drops back.
+            int untied = 0;
+            if (Tarps.Registered) foreach (var c in found) { untied += Tarps.UntieFrom(c); if (WoodPoles.IsPole(c)) Tarps.PoleMoved(c, true); }
+            Plugin.Log?.LogInfo("Wood pole picked up with " + found.Count + " locked thing(s) on it" + (hung > 0 ? ", " + hung + " hung on its hooks" : "") + (loose.Count > 0 ? ", " + loose.Count + " not locked let go" : "") +
+                ", reach " + WoodPoles.Format(load.reach) + (untied > 0 ? "; " + untied + " canvas tarp(s) untied" : "") + ".");
+        }
+        // The straight run on its far end: a pole nailed on the far end of the one before, pointing on (within 5 degrees), and so on.
+        private static void Chain(Load load)
+        {
+            var pole = load.pole; float reach = pole ? WoodPoles.Length(pole) : 0, mass = pole ? pole.mass : 0;
+            var end = new Vector3(0, 0, -reach);
+            for (int n = 0; n < load.things.Count; n++)
+            {
+                bool more = false;
+                foreach (var t in load.things)
+                {
+                    if (t.hung || !t.item || !WoodPoles.IsPole(t.item) || (t.turn * Vector3.forward).z < Straight) continue;
+                    if (Mathf.Abs(t.at.z - end.z) > Near || new Vector2(t.at.x - end.x, t.at.y - end.y).magnitude > WoodPoles.Thickness / 2 + Near) continue;
+                    end = t.at + t.turn * (Vector3.back * WoodPoles.Length(t.item)); reach = -end.z; mass += t.item.mass; more = true; break;
+                }
+                if (!more) break;
+            }
+            load.reach = reach; load.mass = mass;
+        }
+
+        // After each physics step of an item's copy (ItemRigidbody.FixedUpdate, the game's or the brace's): a carried thing's copy
+        // made a trigger again; a pole's load set on it.
+        internal static void AfterStep(ItemRigidbody copy)
+        {
+            if (ridingCopies.Contains(copy)) { foreach (var c in copy.GetComponentsInChildren<Collider>(true)) if (c) c.isTrigger = true; return; }
+            if (loads.TryGetValue(copy, out var load)) Follow(load);
+        }
+        private static void Follow(Load load)
+        {
+            var pole = load.pole; var copy = pole ? pole.itemRigidbodyC : null;
+            if (!copy || copy.GetCurrentInventorySlot() || copy.GetCurrentBox()) { LetGo(load); return; }   // put away
+            if (load.things.RemoveAll(t => { bool gone = !t.item || !t.item.itemRigidbodyC || t.item.held || t.hung && !StillHung(t); if (gone) Unride(t.item); return gone; }) > 0) Chain(load);
+            if (load.things.Count == 0) { End(load); return; }
+            var frame = Frame(pole); var boat = pole.currentActualBoat;
+            foreach (var t in load.things)
+            {
+                if (!t.hung)
+                {
+                    var p = frame.TransformPoint(t.at); var r = frame.rotation * t.turn;
+                    t.item.transform.SetPositionAndRotation(p, r);
+                    if (t.item.currentActualBoat != boat) Board(t.item, pole);
+                    var c = t.item.itemRigidbodyC;
+                    if (PoleBrace.onBoat(c) && t.item.currentActualBoat && t.item.currentWalkCol)
+                        c.transform.SetPositionAndRotation(t.item.currentWalkCol.TransformPoint(t.item.currentActualBoat.InverseTransformPoint(p)), t.item.currentWalkCol.rotation * (Quaternion.Inverse(t.item.currentActualBoat.rotation) * r));
+                    else c.transform.SetPositionAndRotation(p, r);
+                }
+                else if (t.item.currentActualBoat != boat) Board(t.item, pole);   // hung on its hook as the game hangs it: it only changes ship with it
+            }
+            if (!pole.held && (pole.nailed || copy.attached)) { End(load); return; }   // fixed again: they stay on it as wall items
+            if (PoleBrace.Braced == pole) return;   // the brace sets its body
+            // Loose or held: its body runs the whole straight length, with its weight.
+            var box = PoleBrace.boxCol(copy); var body = copy.GetBody();
+            if (box && Mathf.Abs(box.size.z - load.reach) > 1e-3f) { box.size = new Vector3(box.size.x, box.size.y, load.reach); box.center = new Vector3(box.center.x, box.center.y, -load.reach / 2); }
+            if (body && Mathf.Abs(body.mass - load.mass) > 1e-3f) body.mass = load.mass;
+        }
+        // A carried thing on the pole's ship, or off any (the game boards an attached item but never takes it off a ship, and its own
+        // boarding is skipped while it rides: PoleCarryBoardPatch).
+        private static void Board(ShipItem item, ShipItem pole)
+        {
+            var copy = item.itemRigidbodyC; bool attached = copy.attached;   // leaving a ship frees it (ItemRigidbody.ExitBoat)
+            try
+            {
+                if (item.currentActualBoat) exitBoat.Invoke(item, null);
+                var embark = pole.currentActualBoat ? boatCollider(pole) : null;
+                if (embark) enterBoat.Invoke(item, new object[] { embark });
+            }
+            catch (Exception e) { Plugin.Log?.LogWarning("A thing on a wood pole could not change ship: " + (e.InnerException ?? e).Message); }
+            copy.attached = attached;
+        }
+        // Drawn each frame on the pole in the hand (posed after everything else, after the brace's own drawing); a hung lantern
+        // under its hook after that, by the game's own hanging (HangableItem.LateUpdate).
+        private static bool hooked;
+        internal static void Hook() { if (hooked) return; Application.onBeforeRender += Render; hooked = true; }
+        private static void Render()
+        {
+            PoleBrace.Draw();
+            foreach (var load in loads.Values)
+            {
+                if (!load.pole || !load.pole.held) continue;
+                var frame = Frame(load.pole);
+                foreach (var t in load.things) if (t.item && !t.hung) t.item.transform.SetPositionAndRotation(frame.TransformPoint(t.at), frame.rotation * t.turn);
+                foreach (var t in load.things)
+                {
+                    var hangs = t.hung && t.item ? t.item.GetComponent<HangableItem>() : null;
+                    if (hangs) try { hangLate.Invoke(hangs, null); } catch (Exception) { }
+                }
+            }
+        }
+
+        private static void Unride(ShipItem item)
+        {
+            if ((object)item == null) return;
+            riding.Remove(item);
+            if (item && item.itemRigidbodyC) ridingCopies.Remove(item.itemRigidbodyC); else ridingCopies.RemoveWhere(c => !c);
+        }
+        // Loads of poles gone without DestroyItem (a scene unloaded): dropped.
+        private static void Prune()
+        {
+            foreach (var dead in loads.Where(x => !x.Key || !x.Value.pole).Select(x => x.Value).ToList()) { Remove(dead); dead.things.Clear(); }
+            foreach (var dead in riding.Keys.Where(k => !k).ToList()) riding.Remove(dead);
+            ridingCopies.RemoveWhere(c => !c);
+        }
+        // One thing leaves its pole (picked up, removed).
+        private static void Leave(ShipItem item)
+        {
+            if (!item || !riding.TryGetValue(item, out var load)) return;
+            Unride(item); load.things.RemoveAll(t => t.item == item); Chain(load);
+            if (load.things.Count == 0) End(load);
+        }
+        private static void Remove(Load load)
+        {
+            if (load.pole && load.pole.itemRigidbodyC) loads.Remove(load.pole.itemRigidbodyC);
+            foreach (var key in loads.Where(x => x.Value == load).Select(x => x.Key).ToList()) loads.Remove(key);
+            foreach (var t in load.things) Unride(t.item);
+        }
+        // Found again (a pole picked up once more): no tarp rebuilt in between.
+        private static void Forget(Load load) { if (load == null) return; Remove(load); load.things.Clear(); }
+        // Fixed again: they stay on it as wall items; its own box and weight back; the nailed poles among them hold up a tarp.
+        private static void End(Load load)
+        {
+            var nailedPoles = load.things.Where(t => !t.hung && t.item && t.item.nailed && WoodPoles.IsPole(t.item)).Select(t => t.item).ToList();
+            Remove(load); load.things.Clear();
+            if (load.pole && PoleBrace.Braced != load.pole) WoodPoles.SetLength(load.pole, WoodPoles.Length(load.pole));
+            if (Tarps.Registered) foreach (var p in nailedPoles) Tarps.PoleMoved(p, false);
+        }
+        // The pole removed or put away: what is on it is let go and falls (un-nailed); a lantern stays on its hook.
+        private static void LetGo(Load load)
+        {
+            Remove(load); int n = 0;
+            foreach (var t in load.things) { if (t.hung || !t.item || !t.item.itemRigidbodyC) continue; t.item.nailed = false; t.item.itemRigidbodyC.attached = false; n++; }
+            load.things.Clear();
+            if (n > 0) Plugin.Log?.LogInfo("A wood pole was removed or put away: " + n + " thing(s) on it let go.");
+        }
+        // ShipItem.DestroyItem: a pole destroyed lets go of its load; a thing destroyed leaves its pole.
+        internal static void Removed(ShipItem item)
+        {
+            var load = Of(item); if (load != null) LetGo(load);
+            Leave(item);
+        }
+    }
+    [HarmonyPatch(typeof(ItemRigidbody), "FixedUpdate")] internal static class PoleCarryStepPatch
+    { static void Postfix(ItemRigidbody __instance) { if (PoleCarry.Active) PoleCarry.AfterStep(__instance); } }
+    // A carried thing changes ship with its pole only (PoleCarry.Board), not by the game's boarding triggers.
+    [HarmonyPatch(typeof(ShipItem), "ExtraFixedUpdate")] internal static class PoleCarryBoardPatch
+    { static bool Prefix(ShipItem __instance) => !(PoleCarry.Active && PoleCarry.Riding(__instance)); }
 
     // ---- Canvas tarp ----
     // The canvas pack (prefab 642): a tarp folded up, drawn with the mail parcel's model while it is an item. Tying its four
@@ -1363,7 +2004,7 @@ namespace EconomyOverhaul
             return torn;
         }
 
-        // ---- Wood poles holding tarps up (user, 2026-10-12; POLE_SUPPORT_DRAFT.md) ----
+        // ---- Wood poles holding tarps up (user, 2026-10-12; as built in CANVAS.md) ----
         internal const string TooTall = "Pole too tall for this tarp";
         // The nailed wood poles that could hold up a tarp, each from its base to its free end, in its frame (`root`): aboard her
         // (their item on this boarding frame; read from its physics copy on her walk copy, as UntieFrom does) or on land. A pole
@@ -1380,7 +2021,7 @@ namespace EconomyOverhaul
         private static (Vector3 a, Vector3 b)? PoleLine(ShipItem pole, Transform root, Transform frame, Transform walk, Vector3[] corners)
         {
             bool onShip = frame;
-            if (!pole || !pole.sold || !pole.nailed || !pole.itemRigidbodyC || (onShip ? pole.currentActualBoat != frame : pole.currentActualBoat)) return null;
+            if (!pole || !pole.sold || !pole.nailed || PoleCarry.Riding(pole) || !pole.itemRigidbodyC || (onShip ? pole.currentActualBoat != frame : pole.currentActualBoat)) return null;
             var body = pole.itemRigidbodyC.transform;
             if (corners != null)
             {
