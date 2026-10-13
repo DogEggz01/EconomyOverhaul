@@ -215,6 +215,7 @@
     - At 8m long (longest length for a single pole), you can stop a ship running at 5 knots toward the solid things.
   - To punt, aim your pole at sea bed and press F like you push the ship.
 - Under bracing mode, pressing F won't drop the pole, pressing T (throw button) still drop it.
+- If you nailed a pole on another pole, the extra length can be used for push/fend/punt also.
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
 - FX(foreign currency exchange) rate is increase to 5% at rep 0, down 0.5 % per reputation level. Rep 10 will be 0.1% fee.
