@@ -183,6 +183,7 @@
 - If you remove the plank, it's hammering progress will be reset
 - If the lumber is wet, you will get less plank, depends on how wet it is.
 ### Canvas pack for rain shelter
+<img width="1536" height="864" alt="image" src="https://github.com/user-attachments/assets/544e796a-4dce-4e3e-b087-f69c2185ec88" />
 - Canvas pack now sold at every vendor that also sell oakum
 - When holding the pack, you can aim at ship's fixed surface and line(shroud/stay), or any item you hammered on board, press R to set the corner of the tarp, you need to set 4 corner.
   - If you misclick, drop the pack will reset the set corner.
@@ -196,6 +197,7 @@
 - Tarp you left on other ship will still progress their lifespan, remember to take it down if you want to go sail other ship!
 - You can repair tarp by using another canvas pack. Hold the canvas pack, aim at 1 of the corner and press R.
 ### Wood pole
+<img width="1536" height="864" alt="image" src="https://github.com/user-attachments/assets/3c698a67-177f-4590-989a-52264f2d8e31" />
 - Sold beside canvas pack, as a 4 poles bundle
 - Press Q/E to increase/decrease pole length. It can be attached like lantern hook onto surface.
 - After nailed, it can be use to attach tarp (don't have to be attaching, just nailed will do)
