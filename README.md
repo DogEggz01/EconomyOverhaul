@@ -233,7 +233,7 @@
 - Press H while holding a wood pole to switch to bracing mode, under this mod you can push the ship, fending and punting.
   - To push, just treat the tip of the pole as extension of your hand, still press F to push.
   - To fend, aim the pole at any surface, when it touch something it will automatically fend for you.
-    - At 8m long (longest length for a single pole), you can stop a ship running at 5 knots toward the solid things.
+    - At 8m long (longest length for a single pole), you can stop a ship running at 6 knots toward the solid things.
   - To punt, aim your pole at sea bed and press F like you push the ship.
 - Under bracing mode, pressing F won't drop the pole, pressing T (throw button) still drop it.
 - If you nailed a pole on another pole, the extra length can be used for push/fend/punt also.
