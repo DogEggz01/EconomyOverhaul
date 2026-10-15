@@ -1,15 +1,18 @@
 *Disclaimer: This mod is made with ChatGPT 6.0 Astra and Opus 5.5*
-### NEED TO START ON NEW SAVE
 ### Good time mod will cause market to overproduce under this mod!
 ## Recommend mod
 - Mooring Line Fix: For seized ship to properly moored at the port
   - https://github.com/DogEggz01/MooringLineFix/releases/latest
-- Postal Expansion: For rep grind (since this mod default to let cargo mission gain 75% of rep)
+- Postal Expansion: For rep grind 
   - https://github.com/DogEggz01/PostalExpansion/releases/latest
 ## Mod goal
 - Make Sailwind's economy bigger and more robost, and add risk when trading by adding cargo water damage, price intransparency, NPC trader competition and loans.
 - Early game will likely be harder with less price info, more NPC trader to compete, and lack of rain cover on small boat. but do provide you leverage option so you can take the risk to progress.
 - This mod didn't solve the late game economy problem that is money too easy to come by, in fact it might be more severe since Larger economy = more goods to sell.
+## Install and uninstall
+- This mod can be add mid-save, it will run initialization when it detect it's your first time installing this mod. Your market stituation will be changed.
+- In configurator, there is a button for uninstall the mod, it will wipe the modded market, remove all item and mechanic added by this mod and stop progressing market.
+- After clicking the uninstall button in Configurator, you can save and quit game. Next time you load into save it will be vanilla market.(price report date need time to recover)
 ## Port Capacity and Port production
 - All ports is separate into 4 tiers. Each tier have differenct port capacity, which affect their cargo hold capacity, production speed and demands.
 - Bigger the Port Capacity, more trade goods will be available, production/consumption will be faster.
@@ -22,7 +25,26 @@
 - Background trader would contribute to port capacity, thus every port will grow in capacity overtime.
   - The maximum port capacity they can grow is double the default amount
 - All port got their production/demand value redo. Production/consumption is overall much MUCH faster than vanilla. There will be more available goods around, and port consume trade good faster.
-## Background Trader, price infomation,mission and tavern rumor change
+## Cargo Mission Change
+- Cargo mission now separate into 4 category Staples, Consumer Goods, Industrial, Luxury
+  - Staples got very high cargo quantity, more rep but not many gold reward.
+  - Consumer goods high cargo quantity, little bit more rep, still not many gold.
+  - Industrial got normal cargo quantity and rep reward, but more gold than vanilla.
+  - Luxury got less cargo quantity, much higher gold reward but little less rep reward.
+- All Cargo mission now reward Port Capacity, amount depends on cargo category. It will be shown in mission UI.
+- Industrial mission good now unlock at rep 1, luxury mission good unlock at rep 2. They will have shorter delivery time.
+- After rep 3, each category unlock their special modifier.
+  - Staple: Bulk mission. Cargo quantity double. Gold, Rep reward double, and port capacity reward increased.
+  - Consumer goods: Pristine mission. If cargo is undamage by water(require 0 water damage), Gold and Rep reward double. See below for water damage mechanics.
+  - Industrial: Rush mission. Shorter delivery time. Double gold and port capacity reward increased.
+  - Luxury: Pristine and rush mission. Can be stack if you're lucky. Same reward as above.
+- At Rep 3, there will be 50% chance to apply mission modifier to mission. At rep 4 it's guarantee to have 1 mission in each category to have mission modifier.
+  - Each category will only have 1 modified mission present.
+  - Since luxury category have 2 modifier, they will get at 2 mission with modifier, or if it stack, 1 stack mission.
+- Fragile cargo mission (see below for fragile cargo) will receive another x2 reward bonus. Tools have 50% chance to spawn as fragile mission cargo.
+  - Tools from trade good is never fragile.
+- Cargo mission can now be assign to every port, if the route is profitable enough.
+## Background Trader, price infomation and tavern rumor change
 - Background trader amount is increase to accommodate for increase production/demand.
   - Current NPC trade fleet
     - Small local trader: Each region 7, FFL 2. Move at 4.5 knots. Stop at port for 2.5h.
@@ -39,27 +61,20 @@
 - To help with this, Tavern sailor now will prioritize to tell you latest depart ship with more precise time and ship infos. 
 - Price infomation you can receive now tied to reputation
   - Rep 0: no price info
-  - Rep 1: Only get info from 4 of the small local traders
-  - Rep 2: Get infos from rest of the small trader, medium/heavy trader, Happy bay trader and FFL-EA trader.
-  - Rep 3: Get infos from Regional long range trader.
+  - Rep 1: Only get info from 2 of the small local traders
+  - Rep 2: Get infos from 4 small local trader, medium/heavy trader and FFL-EA trader.
+  - Rep 3: Get infos from all small local trader, Regional long range trader, Happy bay trader.
   - Rep 4: Get infos from independant trader. When you reach rank 4 at 1 region, it gives you 3 boat's infos. So you need to reach rep 4 at 3 regions to get all 9.
   - Rep 5: Get infos from Chronos trader.
 - Every port now will collect all the price it recieve during the day, and update it one time at midnight
   - It means both you and trader will get a slightly delayed price, aside from the reputation limit.
-- Cargo Mission now pays more than vanilla, but receive only 75% of rep(can be turn back to 100% in configurator). Mail is not affected.
-  - I advise using my other mod "postal expansion" for rep grind.
-- Cargo mission will now always take the good that have most stock in the port.
-- Cargo Mission will now increase the port capacity. Also the cargo from mission will now fulfill the port's demand at half the rate(so 2 units of cargo fulfill 1 units of demand), thus it will move the price.
-  - Local mission increase departure port by 2, arrival port by 1.
-  - World mission increase departure port by 6, arrival port by 3.
-- Cargo mission can now be assign to every port, if the route is profitably enough
 ## Trade good category, distribution and price change
 - All trade good's produce number is redistribute. This mod try to stay as close to vanilla as possible, keep the regional/port special trade good identity.
-- Trade goods are sepearated into different category, which decide their consumption numbers for each tier of port.
+- Trade goods category mentioned in cargo mission UI will decide their consumption numbers for each tier of port.
   - For example: Grains and Rice are Staples. It have very big demands everywhere. On the other hand Silk belongs to luxury goods, the demands will be biggest in T1 and T2 city. T3 and T4 city will care less.
 - Add production chain logic to increase certain demand for port that produce certain goods.
   - For example: Tools need iron, copper, lumber and rubber. Thus Tool producing port will have increased need for these things. Sculpture need marble, wine need sulfur, sausage need meats, meats need salt...etc.
-- There is now 4 price curve that decide goods price: Essential, Basic supply, Industrial goods, Luxury
+- Each trade goods category also affect their price curve.
   - Staples: Lower price range, more stable price, you can sell/buy alot of goods and price don't move too much, unless there are severe deficiet or overstock, profit is limited.
     - Grain, Rice, Meat, Common fishes, fruit, water belongs to this
   - Consumer goods: Smaller stable price range, price will incease/drop faster than Essential price curve, got a higher profit margin than Essential.
@@ -167,6 +182,12 @@
 - The speed that cargo get damage is tied to rain intensity. Inside the storm and at the outskirt of storm will have diffent water damage rate.
 - Water damage from rain and soaked water will stack.
 - Water damage will only count when ship is near you, so you don't need to worry far away cargo on your other ship become wet
+## Fragile Cargo
+- Gem, Marble and Sculpture is consider fragile cargo.
+- Fragile cargo will receive damage whenever ship receive impact damage. Normal wearing damage won't affect it.
+- Each percent of damage reduce it's value (and rep if it's mission cargo) accordingly. So a 50% damaged cargo is at 50% value and rep reward.
+- Damage cargo cannot be repair, and cargo that reach 0 health will lose all it's value, unlike water damaged cargo.
+- Tools have chance to be spawn as fragile cargo in cargo mission.
 ### Wood plank for repairing
 - Wood plank item is added so you have another way to counter the water damage.
 - You can aquire wood plank in 2 way
