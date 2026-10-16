@@ -44,6 +44,13 @@
 - Fragile cargo mission (see below for fragile cargo) will receive another x2 reward bonus. Tools have 50% chance to spawn as fragile mission cargo.
   - Tools from trade good is never fragile.
 - Cargo mission can now be assign to every port, if the route is profitable enough.
+## Dynamic demand event
+- There will always be 5 dynamic demand event in game. Each with a pair of demanding port and producing port
+- Demanding port and producing port is picked randomly, only island that won't get pick is chronos and safforn
+- Demanding port will have large deficit of certain good, it's corresponding producing port will have a surplus of this good.
+- Demanding port and producing port won't nessassry be in same region. It could be in differnt region.
+- Tavern sailor will now tell you about these event, if you treat him things.
+- Background Trader will prioritize to complete these event when they know about it and when they can reach both destination.
 ## Background Trader, price infomation and tavern rumor change
 - Background trader amount is increase to accommodate for increase production/demand.
   - Current NPC trade fleet
