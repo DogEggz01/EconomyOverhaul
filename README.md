@@ -284,4 +284,7 @@
 - Water damage: toggle on/off. Default on
 - Water damage hint: show when pointing at cargo. Default on
 - Cargo Cover ratio: show when pointing at cargo. Default off
+- Fragile cargo damage: Toggle on/off. Default on.
+- Fragile cargo hint: default on.
 - Tarp Wearing: make tarp wear across 10 days. Default on.
+- Uninstall preparation: Click this before you remove this mod mid-save.
