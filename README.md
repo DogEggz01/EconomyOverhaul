@@ -91,6 +91,8 @@
   - Luxury: Similar to vanilla price curve, overall most profitable, but price will drop sharply when the demand is not strong. Biggest price range.
     - Non essential food and item, gold, gems, silver
 ## Trade book change
+<img width="3840" height="2160" alt="202610~4" src="https://github.com/user-attachments/assets/e87dc733-4e40-4c01-9aaf-59a5adb54cff" />
+
 - You can access to trade book start at rep 0 now.
 - Add Bulk trade QoL option. The price will be calcualated as you buy it 1 by 1
   - Press Alt and hover over buy/sell/loan will do 5 cargo at a time
@@ -126,6 +128,8 @@
   - You open the sealed cargo
   - You sacrifice the cargo to the cat
 ## Bottomry Loan (Ship Loan)
+<img width="3840" height="2160" alt="202610~3" src="https://github.com/user-attachments/assets/34b2d279-dc58-4e80-b6e3-6f6c38cde257" />
+
 - Unlock after rep 1 and you owned more than 1 ship
 - You can pledge your ship moored in the port for double amount of your ship's value in the currency you want. Interest rate and repayment due day is affect by local reputation.
 - Access burrowing in Currency Exchange box, at top right corner will add a "Bottomry" button to enter new UI.
@@ -158,6 +162,8 @@
 - If you default bottomry loan on rent ship till they want to seized your ship, the debt will be on you and you won't have ship to pay them, so you pay all from yourself. Also you need to pay for rent.
 - If you sink your rental ship while it was pledged. Bottomry loan won't be canceled since they will find out you're a scam, and they won't let you rent that ship anymore.
 ## Cargo water damage (CAN BE TOGGLE OFF IN CONFIGURATOR)
+<img width="3840" height="2160" alt="207573~1" src="https://github.com/user-attachments/assets/90010956-ad69-4ded-a76f-fd009b3750a5" />
+
 - Most of the cargo will now receive water damage when they are soaked in water, under rain, or drop into sea.
   - Trade goods that is not affect by water damage: 
     - coconuts, gems, iron, gold, copper, tools, sculptures, logs, nails, marble, silver, sulfur, rubber.
@@ -190,6 +196,8 @@
 - Water damage from rain and soaked water will stack.
 - Water damage will only count when ship is near you, so you don't need to worry far away cargo on your other ship become wet
 ## Fragile Cargo
+<img width="3840" height="2160" alt="20F85B~1" src="https://github.com/user-attachments/assets/880d8be9-2653-4931-a22b-ea287a41f58a" />
+
 - Gem, Marble and Sculpture is consider fragile cargo.
 - Fragile cargo will receive damage whenever ship receive impact damage. Normal wearing damage won't affect it.
 - Each percent of damage reduce it's value (and rep if it's mission cargo) accordingly. So a 50% damaged cargo is at 50% value and rep reward.
