@@ -107,6 +107,8 @@
   - Cart Transportation fee will be 10x if using this function
 - Same toggle option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
 ## Taking Loan
+<img width="3840" height="2160" alt="208E48~1" src="https://github.com/user-attachments/assets/9866c668-7421-4560-92a7-5f5f60a0a645" />
+
 - 2 Loan added, Respondentia Loan (Cargo loan) and Bottomry Loan (Ship Loan)
 - This system is used to replace the Reputation discount in vanilla. Since it don't work on trade book purchase anyway.
   - There is still retail discount (buying things from vendors), raise with your reputation.
@@ -117,6 +119,8 @@
 - Add Loan tab in Log menu. It record your current loan amount in each region, and each region's credit limit and interest rate.
   - Under loan tab there is also a bankruptcy button that will bankrupt you in all region. I'm not sure when you will need it but i will leave it here.
 ## Respondentia Loan (Cargo loan)
+<img width="3840" height="2160" alt="2075C5~1" src="https://github.com/user-attachments/assets/63a67915-b383-4826-a224-0398a3cbc1c8" />
+
 - Unlock at local rep level 1.
 - Loan button added in trade book UI, you can buy trade goods without spending your money, instead you spend your credit to get the cargo.
 - Interest will be paid, along with the principal, when you sell the loaned cargo. There is no time limit when you need to sell the cargo.
@@ -150,6 +154,8 @@
 - If your ship sink, the loan will be canceled. You can keep your ship. But your lending region reputation will reduce by 2. And there will be a 7 day cooldown that you cannot take loan again. You cannot pledge sinked ship to get loan anymore.
 - Since house count as ship, house can be used for bottomry loan, too. (House loan in sailwind, yeah)
 ## Renting Ship
+<img width="3840" height="2160" alt="20EE41~1" src="https://github.com/user-attachments/assets/bd6d79d4-e3a0-4274-8ba6-514d63e4be93" />
+
 - Unlock after Rep 3.
 - You can rent any ship that you haven't bought yet. The rent button will be on top of buying ship UI.
 - 20% of ship value for deposit. Daily rent will be 5% of ship value. Deposit will be return after you return the ship.
