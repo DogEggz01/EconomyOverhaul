@@ -38,7 +38,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "0.9.5";
+        public const string Version = "0.10.1";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -100,7 +100,14 @@ namespace EconomyOverhaul
         }
         public static T Get<T>(object obj, string name) => (T)Find(obj.GetType(), name).GetValue(obj);
         public static void Set(object obj, string name, object value) => Find(obj.GetType(), name).SetValue(obj, value);
-        public static object Call(object obj, string name, params object[] args) => AccessTools.Method(obj.GetType(), name).Invoke(obj, args);
+        // The method looked up once per type and name, as Find caches fields (the same AccessTools result each call).
+        private static readonly Dictionary<string, MethodInfo> methods = new Dictionary<string, MethodInfo>();
+        public static object Call(object obj, string name, params object[] args)
+        {
+            string key = obj.GetType().FullName + "." + name;
+            if (!methods.TryGetValue(key, out MethodInfo m)) methods[key] = m = AccessTools.Method(obj.GetType(), name);
+            return m.Invoke(obj, args);
+        }
     }
     internal static class Embedded
     {
@@ -137,7 +144,7 @@ namespace EconomyOverhaul
             Ready = false; Loading = false; SaveBlocked = false; SaveOffAdvice = ReloadAdvice; State = new SaveState();
             Fleet.BeginRegistrationGrace();
             Markets.Clear(); Cargo.Clear(); Removed.Clear(); Missions.Reset(); Missions.DeliveredItems.Clear();
-            Tarps.Clear();
+            Tarps.Clear(); Uninstall.Reset();
         }
         internal static void NewGame()
         {
@@ -159,12 +166,15 @@ namespace EconomyOverhaul
         }
         internal static void Save()
         {
+            // After the uninstall button the save carries no data of the mod (MIDSAVE_DRAFT.md).
+            if (Uninstall.Prepared) { GameState.modData.Remove(Plugin.Guid); return; }
             if (Startup.BlocksGameplay) throw new InvalidOperationException("Economy preparation is not complete; save deferred");
             if (!Ready || SaveBlocked) return;
             foreach (var c in CargoCondition.Active) c.PrepareSave();
             CargoRecords.Prune();
             TradeBook.Collect();
             State.tarps = Tarps.Records();
+            State.savedHour = CalendarHour;
             StateCodec.Validate(State);
             GameState.modData[Plugin.Guid] = StateCodec.Write(State);
         }
@@ -222,6 +232,14 @@ namespace EconomyOverhaul
                     SaveBlocked = true; SaveOffAdvice = NewGameAdvice; Ready = false; Plugin.Log.LogError("Economic save could not be restored; saving is blocked to protect the original data. " + e);
                     Loans.Notify(SaveOffNotice); return;
                 }
+                // The game saved after this data without the mod (removed, played, put back): the data is from before, so the
+                // save starts as a first install (MIDSAVE_DRAFT.md).
+                if (Rules.StaleSave(State.savedHour, CalendarHour))
+                {
+                    Plugin.Log.LogWarning("EconomyOverhaul data from hour " + State.savedHour.ToString("0.00") + " in a save of hour " + CalendarHour.ToString("0.00") +
+                        ": the game saved without the mod since; starting as a first installation.");
+                    State = new SaveState(); firstInstall = true;
+                }
             }
             if (ReputationNotifUI.instance) ReputationNotifUI.instance.HardCopyReps();
             Markets.Clear(); Cargo.Clear(); Removed.Clear();
@@ -233,7 +251,20 @@ namespace EconomyOverhaul
                 var m = Market(row.Port);
                 if (m) { Supply.Apply(m); Economy.EnsureKnownPrices(m); if (firstInstall) MarketData(row.Port); }
             }
-            Ready = true; Loading = false; Fx.Ensure(); Fx.Sync(); Fleet.BeginRegistrationGrace(); Economy.Configure(); TradeBook.Loaded(); Bottomry.Loaded(); Rentals.Loaded(); Tarps.Loaded();
+            // State version 5 (the warehouse rework): a version-4 save (0.8.5-0.9.5) has the game's warehouses, bought in this
+            // mod's economy; each is migrated once (the game loaded them before this mod's data). A first install skips it: its
+            // stock and warehouses are cleared by the preparation below (MIDSAVE_DRAFT.md).
+            if (!firstInstall && State.version < 5)
+            {
+                foreach (var row in Supply.ManagedRows())
+                {
+                    var m = Market(row.Port); var office = m ? m.GetComponent<IslandMissionOffice>() : null;
+                    if (office) Missions.Migrate(m, office, MarketData(row.Port));
+                }
+                Plugin.Log.LogInfo("Mission warehouses migrated to state version 5 (port capacity + 100, 80% filled).");
+                State.version = 5;
+            }
+            Ready = true; Loading = false; Fx.Ensure(); Fx.Sync(); Fleet.BeginRegistrationGrace(); Economy.Configure(); TradeBook.Loaded(); Bottomry.Loaded(); Rentals.Loaded(); Tarps.Loaded(); Missions.Loaded();
             // Refresh each market's own current quotes after a curve upgrade. Foreign
             // reports and fleet-carried stock observations remain stale as before.
             foreach (var row in Supply.ManagedRows()) { var market = Market(row.Port); if (market) Economy.Refresh(market); }
@@ -241,8 +272,10 @@ namespace EconomyOverhaul
             Loans.PurgeRemoved();
             if (firstInstall)
             {
-                Startup.Begin(zeroStock: false);
-                Plugin.Log.LogInfo("First installation: queued 10 preheat + 50 combined cycles using loaded stocks.");
+                // Installed into a vanilla save (the user, 2026-10-15): market stock and warehouses cleared, then the new game's
+                // preparation (MIDSAVE_DRAFT.md).
+                Startup.Begin(zeroStock: true);
+                Plugin.Log.LogInfo("First installation: market stock and warehouses cleared; the new game's preparation queued.");
                 return;
             }
             Fleet.ReconcileNetworks(BottleneckCompatibility.Active);
@@ -264,27 +297,33 @@ namespace EconomyOverhaul
     // ---- Settings ----
     internal static class Settings
     {
-        internal static ConfigEntry<bool> WaterDamage, WaterDamageHint, CoverHint, TarpWear;
+        internal static ConfigEntry<bool> WaterDamage, WaterDamageHint, CoverHint, TarpWear, CargoDamageHint, FragileCargo;
+        internal static bool FragileEnabled => FragileCargo?.Value ?? true;
         internal static bool CoverHintEnabled => CoverHint?.Value ?? false;
-        internal static ConfigEntry<string> MissionReputation;
+        internal static bool CargoDamageHintEnabled => CargoDamageHint?.Value ?? true;
         internal static ConfigEntry<KeyboardShortcut> BraceKey;   // a shortcut: the configurator sets it by a key press (the user, 2026-10-13)
         internal static bool WaterEnabled => WaterDamage?.Value ?? true;
         internal static bool TarpWearing => TarpWear?.Value ?? true;
         private static bool tarpWearWas = true;   // the option's value before its last change
         internal static bool WaterHintEnabled => WaterDamageHint?.Value ?? true;
-        internal static float MissionRepFactor => MissionReputation?.Value == "Vanilla (100%)" ? 1 : .75f;
         internal static void Bind(ConfigFile config)
         {
             WaterDamage = config.Bind("Cargo", "Enable water damage", true,
                 "Enable cargo water damage, drying, wet appearance and condition-based value/reward reductions. When off, saved condition pauses and cargo has full condition value. Re-enabling resumes the saved condition.");
             WaterDamageHint = config.Bind("Cargo", "Show water damage percentage", true,
                 "Show remaining water condition (100% to 0%) below vulnerable cargo hints. Hidden when water damage is disabled. This setting only changes the hint, not damage or cargo value.");
-            MissionReputation = config.Bind("Missions", "Mission reputation reward", "75%",
-                new ConfigDescription("Ordinary cargo-mission reputation before water condition. Vanilla mail and Postal Expansion are excluded. Applies immediately to deliveries.",
-                    new AcceptableValueList<string>("75%", "Vanilla (100%)")));
+            // "Mission reputation reward" (Missions) is gone (2026-10-14): the mission category sets the factor. Its line stays
+            // in older config files, unused.
             CoverHint = config.Bind("Cargo", "Show cover percentage", false,
                 "Show how much of vulnerable cargo's top is under cover (a deck, a roof or a canvas tarp), 0% to 100%, below its water damage line. Hidden when water damage is disabled. This setting only changes the hint.");
             CoverHint.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshHint(); };
+            CargoDamageHint = config.Bind("Cargo", "Show cargo damage percentage", true,
+                "Show the damage of fragile cargo (gems, sculptures, marble, a fragile mission's tools), 0% intact to 100% ruined, below its other hint lines. This setting only changes the hint.");
+            CargoDamageHint.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshHint(); };
+            // The user, 2026-10-15: on by default; off stops fragile damage and the Fragile mission modifier.
+            FragileCargo = config.Bind("Cargo", "Enable fragile cargo", true,
+                "Fragile cargo (gems, sculptures, marble, a fragile mission's tools) is damaged by hull impacts, and fragile missions pay x2 when delivered intact. When off, no mission is fragile: missions already taken lose their fragile x2 for good; saved damage pauses and cargo has full value. Re-enabling resumes the saved damage.");
+            FragileCargo.SettingChanged += (s,e) => { Missions.DropFragile(); foreach(var c in CargoCondition.Active) { c.RefreshHint(); c.RefreshAppearance(); } };
             BraceKey = config.Bind("Wood pole", "Brace key", new KeyboardShortcut(KeyCode.H),
                 "While holding a wood pole, this key braces it (held at your side, pointing forward: with the pick-up key held (the left mouse by default) it pushes boats, docks or the sea bed) or holds it loosely again.");
             // "Braced pole hand force" and "Braced pole collision" were removed (the user, 2026-10-13: a braced pole has no collision);
@@ -296,6 +335,10 @@ namespace EconomyOverhaul
             // Each tarp's health so far, worn as the option was, becomes its start from now (user, 2026-10-09).
             TarpWear.SettingChanged += (s,e) => { tarpWearWas = Tarps.Rebase(tarpWearWas); };
             tarpWearWas = TarpWear.Value;
+            // A button, not a setting (MIDSAVE_DRAFT.md): its stored value is never used.
+            config.Bind("Uninstall", "Prepare to uninstall", "", new ConfigDescription(
+                "Before removing the mod from a running game: ends a ship rental and charges open loans, removes every item of the mod (wood planks and their bundles, canvas packs and tarps, wood poles and their bundles) and stops the mod. Then save, quit and remove the mod. Click twice to confirm.",
+                null, new ConfigurationManagerAttributes { CustomDrawer = Uninstall.Draw, HideDefaultButton = true }));
         }
     }
 
@@ -355,13 +398,18 @@ namespace EconomyOverhaul
     {
         public static double Clamp(double x, double lo, double hi) => Math.Max(lo, Math.Min(hi, x));
         public static int Round(double x) => checked((int)Math.Round(x, MidpointRounding.ToEven));
+        // The mod's data is stale when the game saved after it without the mod (MIDSAVE_DRAFT.md): the hour stored with the
+        // data differs from the save's own. 0: a save from before the hour was stored, never stale.
+        public static bool StaleSave(double savedHour, double gameHour) => savedHour > 0 && Math.Abs(savedHour - gameHour) > .01;
+        // The mod's own items (wood plank bundle and plank, canvas pack, wood pole and pole bundle), removed by the uninstall.
+        public static bool ModItem(int prefabIndex) => prefabIndex >= 640 && prefabIndex <= 644;
     }
 
     // ---- Save state ----
     // Every field is required: a save without one (an older version) is refused.
     [Serializable] public sealed class SaveState
     {
-        public int version = 4;
+        public int version = 5;   // 5 since the warehouse rework (2026-10-14); a version-4 save is read and migrated
         public int chronosReputation;
         public FxState fx;
         public double trafficTime;
@@ -395,6 +443,10 @@ namespace EconomyOverhaul
         public int reportDay;
         // Canvas tarps (after 0.8.5): optional, so a 0.8.5 save without it loads (read back as none).
         [System.Runtime.Serialization.OptionalField] public List<TarpState> tarps = new List<TarpState>();
+        // The calendar hour the save was written at (MIDSAVE_DRAFT.md): optional, 0 in older saves (no stale check).
+        [System.Runtime.Serialization.OptionalField] public double savedHour;
+        // Dynamic demand events (2026-10-16): optional, none in older saves (5 made at the first midnight).
+        [System.Runtime.Serialization.OptionalField] public DemandState demand;
     }
 
     internal static class StateCodec
@@ -413,6 +465,8 @@ namespace EconomyOverhaul
             {
                 var result = (SaveState)Serializer().ReadObject(stream);
                 if (result != null && result.tarps == null) result.tarps = new List<TarpState>();   // a 0.8.5 save
+                // Demand data from a build before the tavern (stage 3) has no heard list: an empty one, not a refused save.
+                if (result?.demand != null && result.demand.heard == null) result.demand.heard = new List<int>();
                 Validate(result); return result;
             }
         }
@@ -427,9 +481,9 @@ namespace EconomyOverhaul
             (d.group == null || FleetDefinitions.KnownGroup(d.group));
         internal static void Validate(SaveState s)
         {
-            bool valid = s != null && s.version == 4 && s.chronosReputation >= 0 && s.chronosReputation <= Reputations.Cap && s.markets != null && s.fleet != null && s.cargo != null && s.missions != null &&
+            bool valid = s != null && (s.version == 4 || s.version == 5) &&s.chronosReputation >= 0 && s.chronosReputation <= Reputations.Cap && s.markets != null && s.fleet != null && s.cargo != null && s.missions != null &&
                 s.fractionalPenalty?.Length == 4 && s.removedCargo != null &&
-                Finite(s.trafficTime) && s.fractionalPenalty.All(x => Finite(x) && x >= 0 && x < 1) &&
+                Finite(s.trafficTime) && s.fractionalPenalty.All(x => Finite(x) && x >= 0 && x < 1) && Finite(s.savedHour) && s.savedHour >= 0 &&
                 Finite(s.loanPauseUntil) && s.bottomry != null && s.seized != null && s.bottomryNextId >= 0 &&
                 s.bottomry.All(Bottomry.Valid) && s.bottomry.Select(b => b.id).Distinct().Count() == s.bottomry.Count &&
                 s.seized.All(p => p != null && p.pledge > 0) && s.seized.Select(p => p.pledge).Distinct().Count() == s.seized.Count &&
@@ -445,7 +499,7 @@ namespace EconomyOverhaul
                 { Plugin.Log?.LogWarning("Discarded invalid historical departure report at port " + market.port); market.lastDeparture = null; }
             valid = s.markets.All(m => m != null && PortId(m.port) && Finite(m.bonus) && m.bonus >= 0 && Finite(m.timer) && Finite(m.warehouseTimer) &&
                 m.reports != null && m.reports.All(Report)) && s.markets.Select(m => m.port).Distinct().Count() == s.markets.Count;
-            valid &= s.cargo.All(c => c != null && c.id > 0 && c.good >= 1 && c.good <= 64 && c.good != 45 && Finite(c.health) && c.health >= 0 && c.health <= 100 &&
+            valid &= s.cargo.All(c => c != null && c.id > 0 && c.good >= 1 && c.good <= 64 && c.good != 45 && Finite(c.health) && c.health >= 0 && c.health <= 100 && Finite(c.impact) && c.impact >= 0 && c.impact <= 100 &&
                 Finite(c.fxPressure) && c.fxPressure >= 0 && (c.fxPressure == 0 || c.fxCurrency >= 0 && c.fxCurrency < 3) &&
                 (c.stainHistory == null || c.stainHistory.Length == CargoStainHistory.Bytes) &&
                 (!c.loan || c.region >= 0 && c.region < 4 && c.principal > 0 && c.interest >= 0 &&
@@ -455,9 +509,10 @@ namespace EconomyOverhaul
                 b.network != null && b.network.Length > 0 && b.network.All(PortId) && b.goods != null && b.goods.Length <= b.units &&
                 b.goods.All(g => g > 0 && g < 65 && g != 45 && g != 51) && b.reports != null && b.reports.All(Report) &&
                 FleetDefinitions.KnownGroup(b.group)) && s.fleet.Select(b => b.id).Distinct().Count() == s.fleet.Count;
-            valid &= s.missions.All(m => m != null && PortId(m.origin) && PortId(m.destination) && m.creditedDeliveries >= 0);
+            valid &= s.missions.All(m => m != null && PortId(m.origin) && PortId(m.destination) && m.creditedDeliveries >= 0 &&
+                m.category >= (int)MissionCategory.None && m.category <= (int)MissionCategory.Luxury && m.modifiers >= 0 && m.modifiers <= 15);
             // 0.7.0 daily reports and trade book.
-            bool Entry(BookEntry e) => e != null && PortId(e.port) && Finite(e.seen) && (FleetDefinitions.KnownGroup(e.group) || e.group == "small2");
+            bool Entry(BookEntry e) => e != null && PortId(e.port) && Finite(e.seen) && (FleetDefinitions.KnownGroup(e.group) || e.group == "small2" || e.group == "small3" || e.group == "heavy2");
             valid &= s.markets.All(m => (m.incoming == null || m.incoming.All(Report)) &&
                 (m.book == null || m.book.All(Entry)) && (m.bookIncoming == null || m.bookIncoming.All(Entry)) &&
                 (m.released == null || m.released.Count <= 128));
@@ -465,6 +520,8 @@ namespace EconomyOverhaul
                 s.bookSnapshots.Select(x => x.id).Distinct().Count() == s.bookSnapshots.Count && s.bookSnapshots.All(x => x.id > 0 && x.id <= s.bookNextId);
             valid &= s.fleet.All(b => b.book == null || b.book.Count <= 128) && (s.playerBook == null || s.playerBook.Count <= 128);
             valid &= s.tarps != null && s.tarps.All(Tarps.ValidRecord);
+            valid &= s.demand == null || s.demand.events != null && s.demand.pickedGoods != null && s.demand.pickedPorts != null && s.demand.heard != null &&
+                s.demand.events.All(e => e != null && PortId(e.demand) && PortId(e.producer) && Rules.DemandGood(e.good) && Finite(e.amount) && Finite(e.added));
             if (!valid) throw new InvalidDataException("Economic save records failed integrity checks");
         }
     }
@@ -618,7 +675,7 @@ namespace EconomyOverhaul
                     m.currentSupply = new float[m.production.Length];
                     Economy.EnsureKnownPrices(m, clear: true);
                     var office = m.GetComponent<IslandMissionOffice>();
-                    if (office) office.LoadData(new int[office.GetData().Length]);
+                    if (office) Missions.Prefill(m, office, World.MarketData(row.Port));
                 }
                 var s = World.MarketData(row.Port);
                 s.reports.Clear();
@@ -703,8 +760,9 @@ namespace EconomyOverhaul
             // The final production event can refill a previously blocked warehouse.
             // Its single pending allocation has run; no historical event queue survives.
             Fx.ResetInitial();
-            // Daily report updates start from the game's current day.
+            // Daily report updates start from the game's current day; the new game's 5 demand events.
             World.State.reportDay = GameState.day;
+            Demand.Midnight(GameState.day);
         }
 
         private static void Finish()
@@ -817,6 +875,101 @@ namespace EconomyOverhaul
     }
 
     // ---- Compatibility ----
+    // ---- Uninstall (MIDSAVE_DRAFT.md, the user 2026-10-15) ----
+    // The configurator's "Prepare to uninstall": the rental and loans settled, the mod's items and tarps removed, the mod
+    // stopped. The next save then holds no data of the mod and no market stock, known prices or warehouses, which the game's
+    // load skips: loaded without the mod, the game keeps the markets it preheated at the start menu and empty warehouses.
+    internal static class Uninstall
+    {
+        internal static bool Prepared { get; private set; }
+        private static float armedUntil;
+        internal static void Reset() { Prepared = false; armedUntil = 0; }
+        internal static string Refusal() =>
+            !GameState.playing || GameState.currentlyLoading || !World.Ready && !World.SaveBlocked ? "Load a game first" :
+            Startup.BlocksGameplay ? "Wait until the economy preparation is done" :
+            ForcedMove.Busy ? "Wait until the ship move is done" : null;
+        // The configurator's button: two clicks within 5 seconds.
+        internal static void Draw(ConfigEntryBase entry)
+        {
+            if (Prepared) { GUILayout.Label("Done: save, quit, then remove the mod."); return; }
+            var refusal = Refusal();
+            if (refusal != null) { GUILayout.Label(refusal); return; }
+            bool armed = Time.realtimeSinceStartup < armedUntil;
+            if (!GUILayout.Button(armed ? "Click again to confirm" : "Prepare to uninstall", GUILayout.ExpandWidth(true))) return;
+            if (!armed) { armedUntil = Time.realtimeSinceStartup + 5; return; }
+            armedUntil = 0; Run();
+        }
+        internal static int Run()
+        {
+            if (Prepared || Refusal() != null) return -1;
+            // Settled automatically (the user): the rental ends as a forced end does; each loan is charged in full.
+            Rentals.EndForUninstall();
+            foreach (var c in World.State.cargo.Where(c => c.loan).ToList()) Loans.Collect(c);
+            foreach (var l in World.State.bottomry.ToList()) { World.State.bottomry.Remove(l); Bottomry.Charge(l, Bottomry.Owed(l)); }
+            Tarps.Clear();
+            int removed = RemoveItems();
+            // Shop stalls stop offering them (each slot is the mod's own object).
+            foreach (var s in Resources.FindObjectsOfTypeAll<ShopItemSpawner>())
+            {
+                var p = s && s.gameObject.scene.IsValid() && s.itemPrefab ? s.itemPrefab.GetComponent<SaveablePrefab>() : null;
+                if (p && Rules.ModItem(p.prefabIndex)) UnityEngine.Object.Destroy(s.gameObject);
+            }
+            Missions.Reset();
+            Prepared = true; World.Ready = false; World.SaveBlocked = false;
+            Plugin.Log.LogInfo("Prepared to uninstall: " + removed + " items of the mod removed; the next save holds no data of the mod.");
+            Loans.Notify("EconomyOverhaul removed from this game (" + removed + " items). Save, quit, then remove the mod.");
+            return removed;
+        }
+        // Every item 640-644: the live ones (held, in the inventory, in crates, aboard, ashore, shop stock) and the save records
+        // a far ship keeps instead of live items. The game's load would fail on any of them without the mod.
+        internal static int RemoveItems()
+        {
+            var manager = SaveLoadManager.instance; int removed = 0;
+            var prefabs = manager.GetCurrentPrefabs().Where(p => p).ToList();
+            foreach (var p in prefabs)
+            {
+                if (!Rules.ModItem(p.prefabIndex)) continue;
+                var item = p.GetComponent<ShipItem>(); if (!item) continue;
+                if (p.currentCrateId != 0)
+                    foreach (var crate in prefabs.Where(c => c.instanceId == p.currentCrateId).Select(c => c.GetComponent<CrateInventory>()).Where(c => c))
+                        crate.containedItems.Remove(item);
+                item.DestroyItem(); removed++;
+            }
+            foreach (var o in manager.GetCurrentObjects() ?? new SaveableObject[0])
+            {
+                var cached = o && o.localItems ? o.localItems.GetCachedItems() : null;
+                if (cached != null) removed += cached.RemoveAll(d => d != null && Rules.ModItem(d.prefabIndex));
+            }
+            return removed;
+        }
+        // What the save writes for each port (UninstallSavePatch): null once prepared, which the game's load skips.
+        internal static float[] SavedSupply(IslandMarket m) => Prepared ? null : m.currentSupply;
+        internal static PriceReport[] SavedPrices(IslandMarket m) => Prepared ? null : m.knownPrices;
+        internal static int[] SavedWarehouse(IslandMissionOffice o) => Prepared ? null : o.GetData();
+    }
+    // The configurator (BepInEx Configuration Manager) reads an entry's options from a tag of this name.
+    internal sealed class ConfigurationManagerAttributes { public Action<ConfigEntryBase> CustomDrawer; public bool? HideDefaultButton; }
+    // The game's save reads each port's market stock, known prices and warehouse through Uninstall (the coroutine builds and
+    // writes the save in one frame, so nothing needs restoring).
+    [HarmonyPatch] internal static class UninstallSavePatch
+    {
+        static MethodBase TargetMethod() => AccessTools.EnumeratorMoveNext(AccessTools.Method(typeof(SaveLoadManager), "DoSaveGame"));
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var supply = AccessTools.Field(typeof(IslandMarket), "currentSupply"); var prices = AccessTools.Field(typeof(IslandMarket), "knownPrices");
+            var warehouse = AccessTools.Method(typeof(IslandMissionOffice), "GetData");
+            int s = 0, p = 0, w = 0;
+            foreach (var c in instructions)
+            {
+                if (c.LoadsField(supply)) { c.opcode = OpCodes.Call; c.operand = AccessTools.Method(typeof(Uninstall), nameof(Uninstall.SavedSupply)); s++; }
+                else if (c.LoadsField(prices)) { c.opcode = OpCodes.Call; c.operand = AccessTools.Method(typeof(Uninstall), nameof(Uninstall.SavedPrices)); p++; }
+                else if (c.Calls(warehouse)) { c.opcode = OpCodes.Call; c.operand = AccessTools.Method(typeof(Uninstall), nameof(Uninstall.SavedWarehouse)); w++; }
+                yield return c;
+            }
+            if (s != 1 || p != 1 || w != 1) throw new InvalidOperationException("The game's save of markets changed (" + s + "/" + p + "/" + w + ")");
+        }
+    }
+
     internal static class BottleneckCompatibility
     {
         internal const int PortId = 67;

@@ -11,15 +11,18 @@ namespace EconomyOverhaul
     // ---- Rules ----
     public static partial class Rules
     {
-        // Trade book (0.7.0). A delivered report unlocks with the player's rep in the delivering boat's home
-        // region: four of each region's seven small locals at 1 (since 0.8.0 the other three, "small2", at 2, like
-        // medium and heavy locals and the FFL-Emerald shuttle); regional traders at 3; the region's Chronos trader at 5. The Happy Bay trader unlocks at rep 2 in any region; each region
-        // at rep 4 unlocks one group of three independents (home = the independent's group, 0-2).
-        public static int BookTier(string group) => group == "small" ? 1 : group == "small2" || group == "medium" || group == "heavy" || group == "shuttle" || group == "happy" ? 2 :
-            group == "regional" ? 3 : group == "independent" ? 4 : group == "chronos" ? 5 : int.MaxValue;
+        // Trade book. A delivered report unlocks with the player's rep in the delivering boat's home region (the user,
+        // 2026-10-14; small locals 3/2/2 in Al'Ankh, 2/2/3 in Emerald and Aestrin, since 2026-10-15; TradeBook.BookGroup):
+        // rep 1, three (two in Emerald and Aestrin) of each region's seven small locals ("small") and
+        // Emerald's two FFL small locals; rep 2, two more small locals ("small2"), the medium, the first Aestrin heavy
+        // ("heavy"), the FFL-Emerald shuttle; rep 3, the last two small locals ("small3"), the second heavy ("heavy2"), the regionals and the Happy Bay trader (rep 3 in any
+        // region); rep 4, one group of three independents per region (home = the independent's group, 0-2); rep 5, the
+        // region's Chronos trader.
+        public static int BookTier(string group) => group == "small" ? 1 : group == "small2" || group == "medium" || group == "heavy" || group == "shuttle" ? 2 :
+            group == "small3" || group == "heavy2" || group == "regional" || group == "happy" ? 3 : group == "independent" ? 4 : group == "chronos" ? 5 : int.MaxValue;
         public static bool BookUnlocked(string group, int home, int[] reps)
         {
-            if (group == "happy") { foreach (int r in reps) if (r >= 2) return true; return false; }
+            if (group == "happy") { foreach (int r in reps) if (r >= BookTier(group)) return true; return false; }
             if (group == "independent") { int count = 0; foreach (int r in reps) if (r >= 4) count++; return home >= 0 && count > home; }
             return home >= 0 && home < reps.Length && reps[home] >= BookTier(group);
         }
@@ -29,7 +32,7 @@ namespace EconomyOverhaul
         // Whether a report delivered by boat kind f is unlocked whenever one delivered by kind e is (so a newer f replaces an older e).
         public static bool BookCovers(string fg, int fh, string eg, int eh)
         {
-            if (fg == "happy") return eg != "small";
+            if (fg == "happy") return BookTier(eg) >= BookTier(fg);   // any region at the Happy Bay tier or more unlocks it
             if (fg == "independent") return eg == "independent" && eh >= fh || fh == 0 && eg == "chronos";
             if (eg == "happy" || eg == "independent") return false;
             return fh == eh && BookTier(fg) <= BookTier(eg);
@@ -37,6 +40,8 @@ namespace EconomyOverhaul
         // Tavern rumours by drink (the game's liquid number): rum, wine and coconut wine (2-4) buy the boat type and
         // the load size; mead, honey beer, rice beer and cider (5-8) the boat type; coffee and teas (10-13) basic news.
         // Water (1) and sea water (9) are refused.
+        // Port capacity a trader adds at each end of a trip (the user, 2026-10-14; was 0.1).
+        public const float TraderCapacity = .25f;
         public static bool RumorAccepted(int drink) => drink >= 2 && drink <= 13 && drink != 9;
         public static bool RumorBoatType(int drink) => drink >= 2 && drink <= 8;
         public static bool RumorLoadSize(int drink) => drink >= 2 && drink <= 4;
@@ -129,6 +134,8 @@ namespace EconomyOverhaul
         public List<ReportState> reports = new List<ReportState>();
         // Trade-book snapshots carried for the ports on this boat's route, newest per port.
         public List<int> book = new List<int>();
+        // Dynamic demand events this trader knows of (learnt at their ports; 2026-10-16): optional, none in older saves.
+        [System.Runtime.Serialization.OptionalField] public List<int> knownEvents;
     }
 
     // The map's stretch (a map mod such as Scrambled Seas spreads the islands): the vanilla ports' live distances, all pairs
@@ -328,10 +335,9 @@ namespace EconomyOverhaul
             try { foreach (int g in b.goods) { double coins = Fx.NpcQuote(m, g, false); m.SellGood(g); Fx.Record(Fx.Currency(m), coins, false, TradeSource.Npc); } }
             finally { Economy.BatchDepth--; }
             b.goods = new int[0];
-            if (!Startup.BlocksGameplay) {
-                if (Available(b.origin) && b.origin != b.destination) Economy.Award(b.origin, .1f);
-                Economy.Award(b.destination, .1f);
-            }
+            // Also during the new game's preparation (the user, 2026-10-17: capacity should already grow there; was play only).
+            if (Available(b.origin) && b.origin != b.destination) Economy.Award(b.origin, Rules.TraderCapacity);
+            Economy.Award(b.destination, Rules.TraderCapacity);
             m.debugTraderVisits++;
             var data = World.MarketData(b.destination);
             foreach (var r in b.reports)
@@ -343,6 +349,7 @@ namespace EconomyOverhaul
                 else PutReport(data.incoming ?? (data.incoming = new List<ReportState>()), r);
             }
             TradeBook.Arrive(b, b.destination);
+            Demand.Learn(b, b.destination);
             Economy.Refresh(m); b.origin = b.destination; b.destination = -1; b.remaining = b.wait;
         }
         // A report joins the port's own report (traders plan with it and pass it on) and its native price list (missions).
@@ -392,7 +399,9 @@ namespace EconomyOverhaul
             }
             return factors;
         }
-        private static Candidate PlanWithCurrency(BoatState b, int dest, double[,] buys, double[] factors)
+        // knowsLast: the 40% roll on the last departure from this port; forcedGood/forcedCount: a dynamic demand event's good,
+        // loaded first whatever its profit, up to the count (the rest of the hold by profit, so more of it may follow).
+        private static Candidate PlanWithCurrency(BoatState b, int dest, double[,] buys, double[] factors, bool knowsLast = true, int forcedGood = 0, int forcedCount = 0)
         {
             var result = new Candidate { destination = dest };
             var m = World.Market(b.origin); var destinationMarket = World.Market(dest);
@@ -406,7 +415,7 @@ namespace EconomyOverhaul
             int[] preceding = new int[65], available = new int[65];
             var departure = World.MarketData(b.origin).lastDeparture;
             double arrival = EventTime + 100 * Distance(b.origin, dest) / b.speed;
-            if (StateCodec.ValidDeparture(departure) && departure.boat != b.id && departure.destination == dest &&
+            if (knowsLast && StateCodec.ValidDeparture(departure) && departure.boat != b.id && departure.destination == dest &&
                 departure.arrival > EventTime && departure.arrival < arrival)
                 foreach (int g in departure.goods) preceding[g]++;
             for (int g = 1; g < 65; g++) if (g != 45 && g != 51 && m.HasGood(g)) available[g] = Math.Max(0, (int)Math.Ceiling(m.currentSupply[g] - 1e-9) - 1);
@@ -426,7 +435,15 @@ namespace EconomyOverhaul
                     g == 64 ? 100 : report.cap, report.surplus, report.deficit, false, g) * saleFactor;
                 if (buy > 0 && sell > buy) heap.Push(new Unit { good = g, index = index, cost = buy, profit = sell - buy, ratio = (sell - buy) / buy, weight = item.mass });
             };
-            for (int g = 1; g < 65; g++) enqueue(g, 0);
+            int forced = 0; var forcedItem = forcedGood > 0 ? PrefabsDirectory.instance.GetGood(forcedGood) : null;
+            for (; forcedItem && forced < forcedCount && forced < available[forcedGood] && forced < b.units && weight + forcedItem.mass <= b.weight; forced++)
+            {
+                double buy = buys[forcedGood, forced];
+                if (buy == 0) { int raw = m.GetGoodPriceAtSupply(forcedGood, m.currentSupply[forcedGood] - forced); buys[forcedGood, forced] = buy = Rules.Round(raw * (1 + Rules.Spread(raw))); }
+                double sell = Rules.Quote(report.values[forcedGood], report.supply[forcedGood] + preceding[forcedGood] + forced + 1, report.cap, report.surplus, report.deficit, false, forcedGood) * saleFactor;
+                result.goods.Add(forcedGood); weight += forcedItem.mass; result.cost += buy; result.profit += sell - buy;
+            }
+            for (int g = 1; g < 65; g++) enqueue(g, g == forcedGood ? forced : 0);
             while (result.goods.Count < b.units)
             {
                 var unit = heap.Pop(); if (unit == null) break;
@@ -450,6 +467,16 @@ namespace EconomyOverhaul
             Candidate best = null; int closest = -1; double closestDistance = double.MaxValue;
             var buys = new double[65, b.units];
             var factors = PlanningCurrency();
+            bool knowsLast = Rules.KnowsLastDeparture(UnityEngine.Random.value);
+            Demand.Learn(b, b.origin); Demand.LearnFromReports(b);
+            // A trip this trader may sail: the destination in its network, its route rule from that origin.
+            bool CanSail(int from, int to) => from != to && LivePort(from) && LivePort(to) && World.Market(to) && Supply.Contains(to) && b.network.Contains(to) &&
+                Rules.ValidRoute(b.group, from, to, b.home, (int)LivePort(from).region, (int)LivePort(to).region, Distance(from, to));
+            var serve = Demand.Serve(b, m, p => CanSail(b.origin, p), out int need);
+            // Not able to serve from here: an event it knows whose two ports it can both reach sends it to the producer (the user,
+            // 2026-10-16), carrying whatever profits on the way.
+            var fetch = serve == null ? Demand.Fetch(b, CanSail) : null;
+            Candidate served = null, fetched = null;
             foreach (int p in b.network)
             {
                 var destination = LivePort(p); var destinationMarket = World.Market(p);
@@ -457,10 +484,16 @@ namespace EconomyOverhaul
                 double distance = Distance(b.origin, p);
                 if (!Rules.ValidRoute(b.group, b.origin, p, b.home, (int)m.GetPort().region, (int)destination.region, distance)) continue;
                 if (distance < closestDistance) { closest = p; closestDistance = distance; }
-                var candidate = PlanWithCurrency(b, p, buys, factors);
+                bool serving = serve != null && p == serve.demand;
+                var candidate = PlanWithCurrency(b, p, buys, factors, knowsLast, serving ? serve.good : 0, serving ? need : 0);
+                if (serving && candidate.goods.Contains(serve.good)) served = candidate;
+                if (fetch != null && p == fetch.producer) fetched = candidate;
                 if (candidate.cost > 0 && candidate.profit > 0 && (best == null || candidate.profit / candidate.cost > best.profit / best.cost)) best = candidate;
                 yield return null;
             }
+            if (served != null) best = served;   // an informed trader serves the dynamic demand event first
+            else if (fetched != null) best = fetched;   // or sails to its producer to fetch the good
+            int purpose = served != null ? 1 : fetched != null ? 2 : 0;
             if (best == null && closest >= 0) best = new Candidate { destination = closest };
             if (best == null) { b.remaining = b.wait; yield break; }
             Economy.BatchDepth++;
@@ -468,6 +501,7 @@ namespace EconomyOverhaul
             finally { Economy.BatchDepth--; }
             b.goods = best.goods.ToArray(); b.destination = best.destination;
             b.trip = b.remaining = 100 * Distance(b.origin, b.destination) / b.speed;
+            Demand.OnDepart?.Invoke(b, purpose);
             Economy.Refresh(m); var own = Report(World.MarketData(b.origin).reports, b.origin); PutReport(b.reports, own);
             TradeBook.Depart(b, own, EventHour);
             World.MarketData(b.origin).lastDeparture = new DepartureState { boat = b.id, group = b.group, origin = b.origin, destination = b.destination,
@@ -537,13 +571,7 @@ namespace EconomyOverhaul
             text += otherPort.GetPortName() + ", " + dayText + " " + (hour >= 6 && hour < 12 ? "in the morning" : hour >= 12 && hour < 18 ? "in the afternoon" : "at night") + ". ";
             var main = goods.GroupBy(g => g).OrderByDescending(g => g.Count()).FirstOrDefault();
             text += RumorCargo(main == null ? null : PrefabsDirectory.instance.GetGood(main.Key).name, main?.Count() ?? 0, loadSize);
-            return Wrap(text, 33);
-        }
-        private static string Wrap(string text, int width)
-        {
-            var result = new System.Text.StringBuilder(); int line = 0;
-            foreach (string word in text.Split(' ')) { if (line > 0 && line + word.Length + 1 > width) { result.Append('\n'); line = 0; } else if (line > 0) { result.Append(' '); line++; } result.Append(word); line += word.Length; }
-            return result.ToString();
+            return Rules.Wrap(text, 33);
         }
     }
     // Native components/save-array slots stay intact. Only their autonomous updates are replaced.
@@ -683,15 +711,31 @@ namespace EconomyOverhaul
             return b.home;
         }
 
-        // The class a delivering boat files under: the last three of each region's seven small locals (by boat number) are
-        // "small2", released at rep 2; the Lagoon's two small locals stay "small".
+        // The class a delivering boat files under, by boat number within its kind: of each region's seven small locals the
+        // first three "small" (rep 1), the next two "small2" (rep 2), the last two "small3" (rep 3; the user, 2026-10-15,
+        // was two, two, three); in Emerald (home 1) and Aestrin (home 2) two, two, three (the user, 2026-10-15); the Lagoon's two small
+        // locals stay "small"; of the two Aestrin heavies the first "heavy" (rep 2), the second "heavy2" (rep 3).
         internal static string BookGroup(BoatState b)
         {
-            if (b.group != "small") return b.group;
+            if (b.group != "small" && b.group != "heavy") return b.group;
             var definition = FleetDefinitions.Current.FirstOrDefault(d => d.Matches(b));
             if (definition == null || definition.Ffl) return b.group;
             int i = World.State.fleet.Where(definition.Matches).OrderBy(x => x.id).ToList().FindIndex(x => x.id == b.id);
-            return i >= 4 ? "small2" : "small";
+            if (b.group == "heavy") return i >= 1 ? "heavy2" : "heavy";
+            int rep1 = b.home == 1 || b.home == 2 ? 2 : 3, rep2 = b.home == 1 || b.home == 2 ? 4 : 5;
+            return i >= rep2 ? "small3" : i >= rep1 ? "small2" : "small";
+        }
+        // Entries saved before the 2026-10-14 tiers carry their boat's old class: once per loaded game, each entry whose boat
+        // is still in the fleet takes the class it files under now.
+        private static SaveState reclassed;
+        internal static void Reclass()
+        {
+            var state = World.State; if (ReferenceEquals(reclassed, state) || state?.markets == null) return;
+            reclassed = state;
+            var boats = state.fleet.Where(x => x != null).GroupBy(x => x.id).ToDictionary(g => g.Key, g => g.First());
+            foreach (var data in state.markets)
+                foreach (var list in new[] { data.book, data.bookIncoming })
+                    if (list != null) foreach (var e in list) if (boats.TryGetValue(e.boat, out var b)) e.group = BookGroup(b);
         }
         // A departing boat carries, like the traders' report, only what its port has published: for each port on its
         // route, the port's newest published entry, and a frozen copy of the port's own prices.
@@ -751,10 +795,12 @@ namespace EconomyOverhaul
             if (day < state.reportDay) { state.reportDay = day; return; }
             if (day == state.reportDay) return;
             state.reportDay = day;
+            Reclass();
             PublishPending();
             PublishBook();
             Release();
             Collect();
+            Demand.Midnight(day);
         }
         internal static void PublishPending()
         {

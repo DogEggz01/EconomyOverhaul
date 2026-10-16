@@ -32,8 +32,10 @@ namespace EconomyOverhaul
             double[] limits = { 0, 10000, 20000, 40000, 60000, 80000, 100000, 200000, 400000 };
             return level >= 9 ? double.PositiveInfinity : limits[Math.Max(0, level)];
         }
-        // Respondentia interest by the lending region's level: 90% at level 1, 10 points less per level to 10% at level 9, 5% at 10.
-        public static double Interest(int level) => level >= 10 ? .05 : (10 - Clamp(level, 1, 9)) / 10;
+        // Respondentia interest by the lending region's level (the user, 2026-10-14): 70% at level 1 (and below), 60, 50, 40, 30,
+        // 25, 20, 15, 10, 5% at level 10. A loan keeps the rate it was taken at.
+        private static readonly double[] InterestByLevel = { .70, .70, .60, .50, .40, .30, .25, .20, .15, .10, .05 };
+        public static double Interest(int level) => InterestByLevel[Math.Max(0, Math.Min(10, level))];
         public static Settlement Settle(double debt, int proceeds, double lenderRate, double saleRate)
         {
             if (!(lenderRate > 0) || !(saleRate > 0)) throw new ArgumentOutOfRangeException(nameof(lenderRate));
@@ -48,8 +50,9 @@ namespace EconomyOverhaul
         public static double NewlyUnpaid(int before, int after, double rate) => Math.Max(0, Math.Max(0, -(double)after) - Math.Max(0, -(double)before)) / rate;
         // Levels a lending region loses when a ship carrying its loans sinks.
         public const int SinkingLevels = 2;
-        // Bottomry terms by the lending region's reputation level: flat interest for the loan, and days to repay.
-        public static double BottomryRate(int level) => new[] { 0, .40, .40, .40, .35, .30, .25, .20, .15, .10, .05 }[Math.Max(0, Math.Min(10, level))];
+        // Bottomry terms by the lending region's reputation level: flat interest for the loan (the user, 2026-10-14: 35% at levels
+        // 1-2, then 30, 25, 20, 17, 14, 10, 5, 3% at level 10; a loan keeps its saved rate), and days to repay.
+        public static double BottomryRate(int level) => new[] { 0, .35, .35, .30, .25, .20, .17, .14, .10, .05, .03 }[Math.Max(0, Math.Min(10, level))];
         public static int BottomryTerm(int level) => level < 1 ? 0 : level <= 3 ? 20 : level <= 6 ? 25 : 30;
         // Each day past the due day raises the rate by 10% of itself, up to double on day 10.
         public static double BottomryLateRate(double baseRate, int daysLate) => baseRate * (1 + .1 * Math.Max(0, Math.Min(10, daysLate)));
@@ -2301,11 +2304,22 @@ namespace EconomyOverhaul
         internal static int DaysDue => Rules.RentalDays(Current.startDay, GameState.day, Current.charges);
         // Rent for the days given, double the repair if the hull isn't at 100%, double the cleaning if it is less than
         // 95% clean, the deposit credited.
-        internal static Bill BillFor(PurchasableBoat b, int days)
+        // panel: the return panel's bill (refreshed every 0.5 s) reads her dirt from PanelClean; the bill charged reads it afresh.
+        internal static Bill BillFor(PurchasableBoat b, int days, bool panel = false)
         {
             var r = Current;
             return new Bill { days = days, rent = checked(days * r.daily), repair = Repaired(b) ? 0 : 2 * RepairFee(b, r.currency),
-                clean = Clean(b) ? 0 : 2 * CleaningFee(b, r.currency), deposit = r.deposit };
+                clean = (panel ? PanelClean(b) : Clean(b)) ? 0 : 2 * CleaningFee(b, r.currency), deposit = r.deposit };
+        }
+        // Each dirt reading copies her dirt texture back from the GPU (a stall): the panel measures when it opens and at most every
+        // 5 s after (the user, 2026-10-17). Display only: Return charges on a fresh reading.
+        private const float PanelDirtSeconds = 5;
+        private static PurchasableBoat panelBoat; private static float panelDirtAt; private static bool panelClean;
+        internal static void ForgetPanelDirt() => panelBoat = null;
+        internal static bool PanelClean(PurchasableBoat b)
+        {
+            if (b != panelBoat || Time.unscaledTime - panelDirtAt >= PanelDirtSeconds) { panelBoat = b; panelDirtAt = Time.unscaledTime; panelClean = Clean(b); }
+            return panelClean;
         }
 
         // ---- Money ----
@@ -2363,6 +2377,12 @@ namespace EconomyOverhaul
         // ---- Forced ends ----
         // The rental ends without the player: the bill is charged, she is handed back and goes home to her berth, repaired
         // and cleaned; the player is moved only if aboard her (ForcedMove).
+        // The uninstall button (MIDSAVE_DRAFT.md): the rental ends as a forced end does.
+        internal static void EndForUninstall()
+        {
+            var r = Current; if (r == null) return;
+            ForcedEnd(Ship(), Ending.Unpaid, DaysDue, null, "Rental ended: the " + Name(r.ship) + " was handed back");
+        }
         private static void ForcedEnd(PurchasableBoat b, Ending ending, int days, List<ShipItem> ghosts, string notice)
         {
             var r = Current; string after = "";
@@ -2678,7 +2698,7 @@ namespace EconomyOverhaul
 
         private void Show(PurchasableBoat b)
         {
-            boat = b;
+            boat = b; Rentals.ForgetPanelDirt();   // a fresh dirt reading each time it opens
             if (!root.activeSelf) { MouseLook.ToggleMouseLookAndCursor(false); root.SetActive(true); Refs.SetPlayerControl(false); }
             timer = 0; Refresh();
         }
@@ -2729,7 +2749,7 @@ namespace EconomyOverhaul
                 confirmText.text = "Confirm rent"; confirm.lookText = "Confirm rent"; Enable(refusal == null);
                 return;
             }
-            var r = Rentals.Current; var bill = Rentals.BillFor(boat, Rentals.DaysDue);
+            var r = Rentals.Current; var bill = Rentals.BillFor(boat, Rentals.DaysDue, panel: true);
             title.text = "Return the " + name;
             billLabels[0].text = "Rent, " + LoanGate.Days(bill.days) + " x " + r.daily.ToString("N0"); billAmounts[0].text = bill.rent.ToString("N0");
             billLabels[1].text = bill.repair > 0 ? "Repair not done, 2 x " + (bill.repair / 2).ToString("N0") : Rentals.Repaired(boat) ? "Repaired" : "Repair (almost nothing to do)";

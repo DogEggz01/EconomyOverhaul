@@ -56,8 +56,6 @@ namespace EconomyOverhaul
             double raw = Price(value, supply, cap, surplus, deficit, good);
             return Round(raw * (1 + (buy ? 1 : -1) * Spread(raw)));
         }
-        // Cargo mission pay before whole-crate rounding: local 0.2 x profit + 2 x distance, world 0.35 x profit + 1.75 x distance.
-        public static float MissionReward(float profit, float distance, bool world) => world ? .35f * profit + 1.75f * distance : .2f * profit + 2f * distance;
     }
 
     // ---- Port supply and market cycles ----
@@ -186,8 +184,10 @@ namespace EconomyOverhaul
         internal static void Configure()
         {
             var d = DebugMarketTracker.instance; if (!d) return;
-            d.finalMarketSpeed = .0003f; d.missionProfitShareLocal = .05f; d.missionProfitShareWorld = .1f;
-            d.missionDistanceFee = .5f; d.missionFinalMult = 2.5f;
+            // The mission tuning is the game's own (level24); Missions.Build pays by Rules.MissionGold with the same numbers.
+            d.finalMarketSpeed = .0003f; d.missionProfitShareLocal = Rules.LocalProfitShare; d.missionProfitShareWorld = Rules.WorldProfitShare;
+            d.missionDistanceFee = Rules.DistanceFee; d.missionFinalMult = Rules.RewardMult;
+            Missions.ApplyRepGates();
             DebugMarketTracker.marketSpeedMult = SimulationClock.NormalSpeed;
             DebugMarketTracker.marketProductionMult = 1.05f;
             DebugMarketTracker.goodsAmountSoftCap = 100;
@@ -225,6 +225,7 @@ namespace EconomyOverhaul
                     (float)Rules.FlowFactor(m.currentSupply[i], m.production[i], cap, i == 64, deficitLimit) * (m.production[i] > 0 ? 1.05f : 1);
             }
             Refresh(m);
+            Demand.CheckAll();
             var s = World.MarketData(port);
             if (s.blocked) { s.blocked = false; Missions.DrainWarehouse(m, s); }
             if (EconomyUI.instance) EconomyUI.instance.RefreshPage();
@@ -332,69 +333,8 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- Port capacity ----
-    public sealed class PortCapacityUI : MonoBehaviour
-    {
-        private TextMesh label;
-        private int port = -1, displayed = -1;
-
-        internal static void Show(MissionListUI ui, PortDude dude)
-        {
-            if (Startup.BlocksGameplay) return;
-            var display = ui.GetComponent<PortCapacityUI>() ?? ui.gameObject.AddComponent<PortCapacityUI>();
-            display.port = dude && dude.GetPort() ? dude.GetPort().portIndex : -1;
-            var title = Fields.Get<TextMesh>(ui, "portNameText");
-            if (!title) return;
-            if (!display.label)
-            {
-                display.label = Instantiate(title, title.transform.parent);
-                display.label.name = "EconomyOverhaul Port Capacity";
-                display.label.characterSize = title.characterSize * .52f;
-                display.displayed = -1;
-            }
-            // Match the approved welcome-sign layout in its own coordinates, independent
-            // of camera angle or PC/VR anchoring. Parent visibility follows the native sign.
-            display.label.transform.localPosition = title.transform.localPosition + title.transform.localRotation * (Vector3.down * .127f);
-            display.Refresh();
-        }
-
-        internal static void RefreshVisible(int port)
-        {
-            if (Startup.BlocksGameplay) return;
-            var ui = MissionListUI.instance;
-            var display = ui ? ui.GetComponent<PortCapacityUI>() : null;
-            if (display && display.port == port && display.label && display.label.gameObject.activeInHierarchy)
-                display.Refresh();
-        }
-
-        private void Refresh()
-        {
-            if (!label) return;
-            var market = port >= 0 ? World.Market(port) : null;
-            bool visible = World.Ready && market;
-            label.gameObject.SetActive(visible);
-            if (!visible) return;
-            // Managed ports include earned increases. Other mod ports retain their own
-            // market override; this is never the separate saffron-good pricing cap.
-            float cap = Supply.Contains(port) ? Economy.Cap(port) :
-                market.goodsSoftCapOverride != 0 ? market.goodsSoftCapOverride : DebugMarketTracker.goodsAmountSoftCap;
-            int rounded = Mathf.RoundToInt(cap);
-            if (rounded == displayed) return;
-            displayed = rounded;
-            label.text = "Port Capacity: " + rounded.ToString(CultureInfo.InvariantCulture);
-        }
-
-        private void OnDestroy() { if (label) Destroy(label.gameObject); }
-    }
-
-    [HarmonyPatch(typeof(MissionListUI), "EnablePortMissionUI")]
-    internal static class PortCapacityOpenPatch
-    {
-        static void Postfix(MissionListUI __instance, PortDude dude) => PortCapacityUI.Show(__instance, dude);
-    }
-
     // ---- Price curves ----
-    public enum PriceProfile { Essential, BasicSupply, Industrial, Precious, Luxury }
+    public enum PriceProfile { Staple, ConsumerGoods, Industrial, Precious, Luxury }
 
     // One shape provider for native market quotes and the fleet's stale-report forecasts.
     public static class PriceCurves
@@ -405,14 +345,14 @@ namespace EconomyOverhaul
             null, null
         };
         private static readonly double[][] slopes = MakeSlopes();
-        // Basic Supply shortages: a gentle 1.30x -> 1.50x band, then up to 2.00x.
-        private static readonly double[] basicDeficitKnots = { 0, .15, .50, 1 };
-        private static readonly double[] basicDeficitValues = { 0, .30, .50, 1 };
-        private static readonly double[] basicDeficitSlopes = MakeSlopes(basicDeficitKnots, basicDeficitValues);
-        // Essential shortages: 1.15x at 20% short and 1.25x at 70% short, then up to 1.80x (x DeficitMultiplier 0.8).
-        private static readonly double[] essentialDeficitKnots = { 0, .2, .7, 1 };
-        private static readonly double[] essentialDeficitValues = { 0, .15 / .8, .25 / .8, 1 };
-        private static readonly double[] essentialDeficitSlopes = MakeSlopes(essentialDeficitKnots, essentialDeficitValues);
+        // Consumer goods shortages: a gentle 1.30x -> 1.50x band, then up to 2.00x.
+        private static readonly double[] consumerDeficitKnots = { 0, .15, .50, 1 };
+        private static readonly double[] consumerDeficitValues = { 0, .30, .50, 1 };
+        private static readonly double[] consumerDeficitSlopes = MakeSlopes(consumerDeficitKnots, consumerDeficitValues);
+        // Staple shortages: 1.15x at 20% short and 1.25x at 70% short, then up to 1.80x (x DeficitMultiplier 0.8).
+        private static readonly double[] stapleDeficitKnots = { 0, .2, .7, 1 };
+        private static readonly double[] stapleDeficitValues = { 0, .15 / .8, .25 / .8, 1 };
+        private static readonly double[] stapleDeficitSlopes = MakeSlopes(stapleDeficitKnots, stapleDeficitValues);
         public static bool TryProfile(int good, out PriceProfile profile)
         {
             profile = PriceProfile.Luxury;
@@ -421,10 +361,10 @@ namespace EconomyOverhaul
             {
                 case 1: case 2: case 3: case 4: case 9: case 10:
                 case 16: case 17: case 18: case 25:
-                case 42: case 46: case 54: profile = PriceProfile.Essential; break;
-                case 6: case 7: case 8: case 11: case 12: case 13: case 14: case 15:
+                case 42: case 54: profile = PriceProfile.Staple; break;
+                case 6: case 7: case 8: case 11: case 12: case 13: case 14: case 15: case 46:
                 case 19: case 26: case 27: case 29: case 36: case 43: case 48: case 49:
-                case 52: case 58: case 59: case 63: profile = PriceProfile.BasicSupply; break;
+                case 52: case 58: case 59: case 63: profile = PriceProfile.ConsumerGoods; break;
                 case 21: case 23: case 33: case 35: case 47: case 57: case 61:
                     profile = PriceProfile.Industrial; break;
                 case 20: case 22: case 56: profile = PriceProfile.Precious; break;
@@ -494,15 +434,15 @@ namespace EconomyOverhaul
                 double u = (y - crossing) / (1 - crossing);
                 return (premium + (1.4 - premium) * (2 * u - u * u)) / 1.4;
             }
-            if (supply < 0 && profile == PriceProfile.BasicSupply) return Interpolate(y, basicDeficitKnots, basicDeficitValues, basicDeficitSlopes);
-            if (supply < 0 && profile == PriceProfile.Essential) return Interpolate(y, essentialDeficitKnots, essentialDeficitValues, essentialDeficitSlopes);
+            if (supply < 0 && profile == PriceProfile.ConsumerGoods) return Interpolate(y, consumerDeficitKnots, consumerDeficitValues, consumerDeficitSlopes);
+            if (supply < 0 && profile == PriceProfile.Staple) return Interpolate(y, stapleDeficitKnots, stapleDeficitValues, stapleDeficitSlopes);
             return Shape(y, profile);
         }
         private static double Hermite(double t, double a, double b, double ma, double mb, double h) =>
             (2*t*t*t-3*t*t+1)*a+(t*t*t-2*t*t+t)*h*ma+(-2*t*t*t+3*t*t)*b+(t*t*t-t*t)*h*mb;
         internal static float SurplusMultiplier(float vanilla, int good) {
             if (!TryProfile(good, out var p)) return vanilla;
-            return p == PriceProfile.Essential ? .2f : p == PriceProfile.BasicSupply ? .25f : p == PriceProfile.Industrial ? .3f : .4f;
+            return p == PriceProfile.Staple ? .2f : p == PriceProfile.ConsumerGoods ? .25f : p == PriceProfile.Industrial ? .3f : .4f;
         }
         // Category shortage ceilings; the forecast uses the same margin.
         // The native transpiler removes 0.39's extra factors before this is called.
@@ -511,8 +451,8 @@ namespace EconomyOverhaul
             if (!TryProfile(good, out var profile)) return vanilla;
             switch (profile)
             {
-                case PriceProfile.Essential: return .8f;
-                case PriceProfile.BasicSupply: return 1f;
+                case PriceProfile.Staple: return .8f;
+                case PriceProfile.ConsumerGoods: return 1f;
                 case PriceProfile.Industrial: return 1.2f;
                 default: return 1.4f; // Luxury and Precious: 2.4x at the shortage cap.
             }
@@ -2070,214 +2010,6 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- Missions ----
-    [Serializable] public sealed class MissionState
-    {
-        public int slot, origin, destination, prefab, dueDay, totalPrice;
-        public bool world, awarded;
-        public int creditedDeliveries;
-    }
-    internal static class Missions
-    {
-        private static readonly Dictionary<int, List<Mission>> offers = new Dictionary<int, List<Mission>>();
-        private static readonly Dictionary<Mission, bool> sources = new Dictionary<Mission, bool>();
-        internal static readonly HashSet<int> DeliveredItems = new HashSet<int>();
-        [ThreadStatic] internal static Good Delivering;
-        internal static void Reset() { offers.Clear(); sources.Clear(); Delivering = null; }
-        internal static bool Postal(Mission m)
-        {
-            if (m?.goodPrefab == null) return false;
-            var p = m.goodPrefab.GetComponent<SaveablePrefab>();
-            return p && (p.prefabIndex == 221 || p.prefabIndex == 238 || p.prefabIndex == 239);
-        }
-        internal static MissionState Record(Mission m)
-        {
-            if (m == null || m.missionIndex < 0) return null;
-            int prefab = m.goodPrefab.GetComponent<SaveablePrefab>().prefabIndex;
-            return World.State.missions.Find(s => s.slot == m.missionIndex && s.origin == m.originPort.portIndex &&
-                s.destination == m.destinationPort.portIndex && s.prefab == prefab && s.dueDay == m.dueDay && s.totalPrice == m.totalPrice);
-        }
-        internal static void Accepted(Mission m)
-        {
-            if (m.missionIndex < 0 || PlayerMissions.missions[m.missionIndex] != m) return;
-            if (!Postal(m))
-            {
-                World.State.missions.RemoveAll(s => s.slot == m.missionIndex);
-                World.State.missions.Add(new MissionState { slot = m.missionIndex, origin = m.originPort.portIndex,
-                    destination = m.destinationPort.portIndex, prefab = m.goodPrefab.GetComponent<SaveablePrefab>().prefabIndex,
-                    dueDay = m.dueDay, totalPrice = m.totalPrice, world = sources.TryGetValue(m, out bool world) ? world : m.distance >= 140,
-                    creditedDeliveries = m.GetDeliveredCount() });
-            }
-            foreach (var list in offers.Values) for (int i = 0; i < list.Count; i++)
-                if (list[i] != null && list[i].originPort == m.originPort && list[i].destinationPort == m.destinationPort && list[i].goodPrefab == m.goodPrefab) list[i] = null;
-        }
-        internal static void Delivered(Mission m)
-        {
-            if (!World.Ready || Postal(m)) return;
-            var r = Record(m);
-            if (r == null)
-            {
-                // Existing accepted vanilla missions migrate without retroactive rewards.
-                r = new MissionState { slot = m.missionIndex, origin = m.originPort.portIndex, destination = m.destinationPort.portIndex,
-                    prefab = m.goodPrefab.GetComponent<SaveablePrefab>().prefabIndex, dueDay = m.dueDay, totalPrice = m.totalPrice,
-                    world = m.distance >= 140, creditedDeliveries = Math.Max(0, m.GetDeliveredCount() - 1) };
-                World.State.missions.Add(r);
-            }
-            int delivered = m.GetDeliveredCount(), delta = delivered - r.creditedDeliveries;
-            if (delta > 0)
-            {
-                int g = PrefabsDirectory.ItemToGoodIndex(r.prefab); var market = World.Market(r.destination);
-                if (market && g > 0 && g < market.currentSupply.Length) { market.currentSupply[g] += .5f * delta; Economy.Refresh(market); }
-                r.creditedDeliveries = delivered;
-            }
-            if (delivered >= m.goodCount && !r.awarded)
-            {
-                r.awarded = true; Economy.Award(r.origin, r.world ? 6 : 2); Economy.Award(r.destination, r.world ? 3 : 1);
-            }
-        }
-        internal static void Warehouse(IslandMissionOffice office)
-        {
-            if (!World.Running) return;
-            AdvanceWarehouse(office, Time.deltaTime * Sun.sun.timescale * 125);
-        }
-        internal static void AdvanceWarehouse(IslandMissionOffice office, double elapsed)
-        {
-            var m = office.GetComponent<IslandMarket>(); if (!m || !Supply.Contains(m.GetPortIndex())) return;
-            var s = World.MarketData(m.GetPortIndex());
-            if (s.blocked) return;
-            if (office.debugRunCycle) { office.debugRunCycle = false; s.warehouseTimer = Math.Min(0, s.warehouseTimer); }
-            SimulationClock.Advance(ref s.warehouseTimer, elapsed,
-                .1 / SimulationClock.NormalSpeed, SimulationClock.CycleBudget,
-                () => { s.pending = 3; DrainWarehouse(m, s); }, () => s.blocked);
-        }
-        internal static void DrainWarehouse(IslandMarket m, MarketState s)
-        {
-            var office = m.GetComponent<IslandMissionOffice>(); if (!office || !office.enabled) return;
-            int[] goods = office.GetData(); if (goods == null || goods.Length == 0) return;
-            s.slot %= goods.Length;
-            while (s.pending > 0)
-            {
-                int selected = 0, ties = 0; float highest = 0;
-                for (int g = 1; g < m.currentSupply.Length; g++)
-                {
-                    if (g == 45 || g == 51 || m.currentSupply[g] <= 0 || !m.HasGood(g)) continue;
-                    var item = PrefabsDirectory.instance.GetGood(g); if (!item) continue;
-                    var good = item.GetComponent<Good>();
-                    if (s.slot < goods.Length / 2f && (!good || good.requiredRepLevel != 0)) continue;
-                    if (m.currentSupply[g] > highest) { selected = g; highest = m.currentSupply[g]; ties = 1; }
-                    else if (m.currentSupply[g] == highest && UnityEngine.Random.Range(0, ++ties) == 0) selected = g;
-                }
-                if (selected == 0) { s.blocked = true; return; }
-                if (goods[s.slot] != 0) m.SellGood(goods[s.slot]);
-                goods[s.slot] = selected; m.PurchaseGood(selected);
-                s.slot = (s.slot + 1) % goods.Length; s.pending--;
-            }
-        }
-        internal static Mission[] Generate(IslandMissionOffice office, int page, bool world)
-        {
-            var m = office.GetComponent<IslandMarket>();
-            if (!m || !Supply.Contains(m.GetPortIndex())) return new Mission[5];
-            Economy.EnsureKnownPrices(m); int key = m.GetPortIndex() * 2 + (world ? 1 : 0);
-            if (!offers.TryGetValue(key, out var list))
-            {
-                list = Build(office, world); offers.Add(key, list);
-                foreach (var mission in list) sources[mission] = world;
-            }
-            m.GetPort().SetMissonCount(list.Count);
-            var result = new Mission[5];
-            for (int i = 0; i < 5; i++) if (page * 5 + i >= 0 && page * 5 + i < list.Count) result[i] = list[page * 5 + i];
-            return result;
-        }
-        private static bool Already(Port origin, Port dest, GameObject prefab) => PlayerMissions.missions != null && PlayerMissions.missions.Any(m => m != null && m.originPort == origin && m.destinationPort == dest && m.goodPrefab == prefab);
-        private static List<Mission> Build(IslandMissionOffice office, bool world)
-        {
-            var m = office.GetComponent<IslandMarket>(); if (!m) return new List<Mission>();
-            Economy.EnsureKnownPrices(m); var origin = m.GetPort();
-            var list = new List<Mission>(); int[] warehouse = office.GetData();
-            foreach (var dest in Port.ports)
-            {
-                if (!dest || dest == origin || dest.portIndex == 7 || dest.portIndex == 33) continue;
-                var report = m.knownPrices[dest.portIndex];
-                if (report == null || !report.approved) continue;
-                float distance = Mission.GetDistance(origin, dest);
-                if ((distance >= 140) != world || distance > Reputations.MaxDistance(Reputations.Account(origin))) continue;
-                bool ocean = Mission.UseOceanMapFor(origin, dest);
-                int max = Mathf.Min(Reputations.MaxGoods(Reputations.Account(origin)), Fields.Get<int>(office, "maxGoodsPerMission") * (ocean ? 2 : 1));
-                int other = 0;
-                for (int g = 1; g < m.currentSupply.Length; g++)
-                {
-                    if (g == 45 || g == 51) continue;
-                    int count = Math.Min(max, warehouse.Count(x => x == g)); if (count <= 0) continue;
-                    var item = PrefabsDirectory.instance.GetGood(g); if (!item) continue;
-                    var good = item.GetComponent<Good>();
-                    if (!good || good.requiredRepLevel > Reputations.PortLevel(origin) || Already(origin, dest, item.gameObject)) continue;
-                    float profit = (report.sellPrices[g] - m.GetGoodPrice(g)) * count, distanceFee = distance * .5f;
-                    if (distanceFee > profit) continue;
-                    // Pay: local 0.2 x profit + 2 x distance, world 0.35 x profit + 1.75 x distance (Rules.MissionReward).
-                    int total = Mathf.RoundToInt(Rules.MissionReward(profit, distance, ocean)) / count * count;
-                    list.Add(new Mission(origin, dest, item.gameObject, count, total, 1, 0, origin.GetDueDay(dest, good))); other++;
-                }
-                var mail = PrefabsDirectory.instance.GetGood(51);
-                if (mail && !Already(origin, dest, mail.gameObject))
-                {
-                    // Retain Postal Expansion's normal-mail quantity/reward patch point.
-                    list.Add((Mission)Fields.Call(office, "GenerateMailMission", mail.GetComponent<Good>(), dest, distance, other));
-                }
-            }
-            list.Sort((a, b) => b.pricePerKm.CompareTo(a.pricePerKm));
-            list = (List<Mission>)Fields.Call(office, "PruneNoSupplyMissions", list);
-            if (list.Count > 25) list.RemoveRange(25, list.Count - 25);
-            foreach (var mission in list)
-            {
-                mission.totalPrice = CurrencyMarket.instance.GetSellPriceInCurrency((Currency)mission.destinationPort.region, mission.totalPrice, false);
-                mission.pricePerKm = mission.totalPrice / mission.distance;
-            }
-            return list;
-        }
-    }
-    [HarmonyPatch(typeof(PortDude), "ActivateMissionListUI")] internal static class OfficeOpenPatch { static void Prefix(bool openEconomyUI) { if (!openEconomyUI) Missions.Reset(); } }
-    [HarmonyPatch(typeof(IslandMissionOffice), "Update")] internal static class WarehousePatch { static bool Prefix(IslandMissionOffice __instance) { Missions.Warehouse(__instance); return false; } }
-    [HarmonyPatch(typeof(IslandMissionOffice), "GenerateMissions")] internal static class GenerateMissionPatch
-    { static bool Prefix(IslandMissionOffice __instance, int page, bool world, ref Mission[] __result) { __result = Missions.Generate(__instance, page, world); return false; } }
-    [HarmonyPatch(typeof(PlayerMissions), "AcceptMission")] internal static class AcceptMissionPatch
-    {
-        static bool Prefix(Mission mission)
-        {
-            // At the limit the game's mission screen already greys Accept out; this only stops other callers.
-            if(mission==null||mission.missionIndex>=0)return false;
-            return PlayerMissions.missions==null||PlayerMissions.GetMissionCount()<Reputations.MaxMissions(mission.originPort);
-        }
-        static void Postfix(Mission mission) { if (mission != null) Missions.Accepted(mission); }
-    }
-    [HarmonyPatch(typeof(Good), "Deliver")] internal static class DeliveryContextPatch
-    {
-        static bool Prefix(Good __instance, out Good __state)
-        {
-            __state = Missions.Delivering;
-            if (__instance.GetAssignedMission() == null) return false;
-            if (!Missions.DeliveredItems.Add(__instance.GetComponent<SaveablePrefab>().instanceId)) return false;
-            Missions.Delivering = __instance; return true;
-        }
-        static Exception Finalizer(Exception __exception, Good __state) { Missions.Delivering = __state; return __exception; }
-    }
-    [HarmonyPatch(typeof(Mission), "GetDeliveryPrice")] internal static class MissionGoldPatch
-    {
-        static void Postfix(Mission __instance, ref int __result)
-        { if (__result > 0 && Missions.Delivering && Missions.Delivering.GetAssignedMission() == __instance) __result = Mathf.RoundToInt(__result * CargoCondition.Factor(Missions.Delivering.GetComponent<ShipItem>())); }
-    }
-    [HarmonyPatch(typeof(Mission), "GetDeliveryRep")] internal static class MissionRepPatch
-    {
-        [HarmonyPriority(Priority.Last)] [HarmonyAfter("com.DogEggz.postalexpansion")]
-        static void Postfix(Mission __instance, ref int __result)
-        {
-            if (__result <= 0) return;
-            float factor = Missions.Postal(__instance) ? 1 : Settings.MissionRepFactor;
-            if (Missions.Delivering && Missions.Delivering.GetAssignedMission() == __instance) factor *= CargoCondition.Factor(Missions.Delivering.GetComponent<ShipItem>());
-            __result = Mathf.RoundToInt(__result * factor);
-        }
-    }
-    [HarmonyPatch(typeof(Mission), "DeliverGood")] internal static class MissionDeliveredPatch { static void Postfix(Mission __instance) => Missions.Delivered(__instance); }
-
     // ---- Reputation ----
     // Account IDs are deliberately separate from PortRegion. Native slot 3 still means none.
     internal static class Reputations
@@ -2298,8 +2030,8 @@ namespace EconomyOverhaul
             foreach (var pair in levels) Change(Required(pair.Key, Math.Max(0, pair.Value - Rules.SinkingLevels)) - Points(pair.Key), pair.Key);
         }
         internal static int PortLevel(Port port) => Level(Account(port));
-        internal static int MaxMissions(Port port) => Math.Min(5, Level(Account(port)) + 2);
-        internal static int MaxGoods(int account) { int level = Level(account); return level < 6 ? level + 3 : 999999; }
+        internal static int MaxMissions(Port port) => Rules.MaxMissions(Level(Account(port)));
+        internal static int MaxGoods(int account) => Rules.CargoTable(Level(account));
         internal static float MaxDistance(int account)
         {
             if (account != Chronos) return PlayerReputation.GetMaxDistance((PortRegion)account);
@@ -2333,7 +2065,11 @@ namespace EconomyOverhaul
         { var market = FxShops.Market(shop); int account = market ? Account(market) : Location(shop, (int)Fields.Get<Region>(shop,"parentRegion").portRegion); return .02f * Level(account); }
         internal static float TavernDiscount(Tavern tavern) => .02f * Level(Location(tavern, (int)tavern.region));
         internal static void DeliveryReward(int amount, PortRegion ignored, Mission mission)
-        { int origin = Account(mission.originPort), destination = Account(mission.destinationPort); Change(amount, origin); if (destination != origin) Change(amount, destination); }
+        {
+            // A penalty (a ruined Pristine crate, Rules.PristineRuinedRep) falls on both regions too (the user, 2026-10-14).
+            int origin = Account(mission.originPort), destination = Account(mission.destinationPort);
+            Change(amount, origin); if (destination != origin) Change(amount, destination);
+        }
         internal static void SkipDuplicateReward(int amount, PortRegion ignored) { }
         internal static void MissionPenalty(int amount, PortRegion ignored, Mission mission) => Change(amount, Account(mission.originPort));
 
@@ -2360,45 +2096,6 @@ namespace EconomyOverhaul
         static IEnumerable<MethodBase> TargetMethods() { yield return AccessTools.Method(typeof(PortDude),"ActivateMissionListUI"); }
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase __originalMethod) =>
             Reputations.PortQueries(instructions, __originalMethod.Name == "ActivateMissionListUI");
-    }
-    [HarmonyPatch(typeof(Mission),"DeliverGood")] internal static class MissionAccountRewardPatch
-    {
-        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-        {
-            int count = 0;
-            foreach (var c in instructions) {
-                if (c.Calls(AccessTools.Method(typeof(PlayerReputation),"ChangeReputation"))) {
-                    if (count++ == 0) { var load = new CodeInstruction(OpCodes.Ldarg_0); load.MoveLabelsFrom(c); yield return load; c.operand = AccessTools.Method(typeof(Reputations),nameof(Reputations.DeliveryReward)); }
-                    else c.operand = AccessTools.Method(typeof(Reputations),nameof(Reputations.SkipDuplicateReward));
-                }
-                yield return c;
-            }
-            if (count != 2) throw new InvalidOperationException("Mission reputation reward hook changed");
-        }
-    }
-    [HarmonyPatch(typeof(Mission),"EndMission")] internal static class MissionAccountPenaltyPatch
-    {
-        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-        {
-            int count = 0;
-            foreach (var c in instructions) {
-                if (c.Calls(AccessTools.Method(typeof(PlayerReputation),"ChangeReputation"))) { var load = new CodeInstruction(OpCodes.Ldarg_0); load.MoveLabelsFrom(c); yield return load; c.operand = AccessTools.Method(typeof(Reputations),nameof(Reputations.MissionPenalty)); count++; }
-                yield return c;
-            }
-            if (count != 1) throw new InvalidOperationException("Mission reputation penalty hook changed");
-        }
-    }
-    [HarmonyPatch(typeof(MissionDetailsUI),"UpdateTexts")] internal static class MissionAccountLimitPatch
-    {
-        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-        {
-            var code = instructions.ToList(); int count = 0;
-            for (int i = 0; i + 5 < code.Count; i++) if (code[i].LoadsField(AccessTools.Field(typeof(PlayerReputation),"maxMissions")) && code[i+4].LoadsField(AccessTools.Field(typeof(Port),"region")) && code[i+5].opcode == OpCodes.Ldelem_I4) {
-                code[i].opcode=OpCodes.Nop;code[i].operand=null;code[i+4].opcode=OpCodes.Nop;code[i+4].operand=null;
-                code[i+5].opcode=OpCodes.Call;code[i+5].operand=AccessTools.Method(typeof(Reputations),nameof(Reputations.MaxMissions));count++;
-            }
-            if(count!=1)throw new InvalidOperationException("Mission acceptance limit hook changed"); return code;
-        }
     }
     [HarmonyPatch] internal static class LocalRetailReputationPatch
     {

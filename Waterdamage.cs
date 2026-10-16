@@ -14,6 +14,22 @@ namespace EconomyOverhaul
     // ---- Rules ----
     public static partial class Rules
     {
+        // Fragile cargo's cracks (crack mockup 10, the user 2026-10-16): the game's hull damage texture shows a texel where its
+        // alpha passes the cut. The game's own cut (0.033 x the damage) marks 17% of the surface at full damage, two thirds of
+        // it by 30%; this cut marks a share growing evenly from 1% at damage 1 to the same 17% at 100: the texture alpha's
+        // quantiles at damage 0.01, 0.1, 0.2 ... 1 ("damage tex 4" read from the game's files). 2 (nothing) at 0.
+        private static readonly float[] CrackCuts = { .8471f, .5725f, .4824f, .3804f, .2941f, .2275f, .1647f, .1098f, .0745f, .0471f, .0353f };
+        public static float CrackCut(int damagePercent)
+        {
+            if (damagePercent <= 0) return 2;
+            float d = Math.Min(100, damagePercent) / 100f;
+            if (d <= .1f) return CrackCuts[0] + (CrackCuts[1] - CrackCuts[0]) * (d - .01f) / .09f;
+            float i = d * 10; int k = Math.Min(9, (int)i);
+            return CrackCuts[k] + (CrackCuts[k + 1] - CrackCuts[k]) * (i - k);
+        }
+        // The faces of the cargo box (+X -X +Y -Y +Z -Z) whose planks run along v, as bits, per fragile crate mesh (from
+        // -FragileLook's square-on face pictures); -1 for a mesh that gets no cracks.
+        public static int CrackGrain(string mesh) => mesh == "crate" ? 0 : mesh == "huge_crate" || mesh == "very_big_crate" ? 51 : -1;
         public static double ConditionFactor(double health, bool alcohol, bool exempt = false)
         {
             health = Clamp(health, 0, 100);
@@ -72,11 +88,13 @@ namespace EconomyOverhaul
         // needs 10/3 more, rounded up.
         // cover: the share of the cargo's top under cover in whole percent, or -1 for no line (user, 2026-10-10: an option, off
         // by default). With a one-line look text a third line lifts the block too: one more blank line per line beyond two.
-        public static string HintSuffix(string description, string lookText, int percent, bool loan, int cover = -1)
+        public static string HintSuffix(string description, string lookText, int percent, bool loan, int cover = -1, int damage = -1)
         {
             var lines = new List<string>(3);
             if (percent >= 0) lines.Add("Water Damage: " + percent.ToString(CultureInfo.InvariantCulture) + "%");
             if (cover >= 0) lines.Add("Cover: " + cover.ToString(CultureInfo.InvariantCulture) + "%");
+            // Fragile cargo (option "Show cargo damage percentage", on by default): its damage, 0% intact up to 100% ruined.
+            if (damage >= 0) lines.Add("Cargo Damage: " + damage.ToString(CultureInfo.InvariantCulture) + "%");
             if (loan) lines.Add("Respondentia");
             if (lines.Count == 0) return "";
             int look = TextLines(lookText), own = TextLines(description);
@@ -108,6 +126,10 @@ namespace EconomyOverhaul
         // unit in the same currency queues exactly this back. Zero when there is none to unwind.
         public int fxCurrency;
         public double fxPressure;
+        // Fragile cargo (stage 3 of MISSIONS_DRAFT.md): impact damage 0-100 (0 intact; a save from before reads 0), and whether
+        // this crate is fragile though its good is not (tools spawned by a fragile mission).
+        [System.Runtime.Serialization.OptionalField] public float impact;
+        [System.Runtime.Serialization.OptionalField] public bool fragile;
     }
     public sealed class CargoCondition : MonoBehaviour
     {
@@ -161,7 +183,7 @@ namespace EconomyOverhaul
         private string suffix;
         private string hintDescription;
         private string hintLookText;
-        private int hintPercent = -2, hintCover = -2;
+        private int hintPercent = -2, hintCover = -2, hintDamage = -2;
         private bool hintLoan;
         private sealed class AppearanceBinding
         {
@@ -237,13 +259,49 @@ namespace EconomyOverhaul
             return found ? local : new Bounds(Vector3.zero, Vector3.one);
         }
         private void EnsureHistory() { if (history == null) history = new CargoStainHistory(state, LocalMeshBounds()); }
+        // Goods water can't damage (no Pristine missions for them).
+        internal static bool WaterProof(int good) => Immune.Contains(good);
+        // A crate's water condition, 100 if it has none or water damage is off.
+        internal static float Health(ShipItem item)
+        {
+            if (!Settings.WaterEnabled || !item) return 100;
+            var save = item.GetComponent<SaveablePrefab>();
+            return save && World.Cargo.TryGetValue(save.instanceId, out var c) ? c.health : 100;
+        }
+        // The cargo's value factor: its water condition (when water damage is on) x, for fragile cargo, how intact it is.
         internal static float Factor(ShipItem item)
         {
-            if (!Settings.WaterEnabled) return 1;
             if (!item) return 1;
             var save = item.GetComponent<SaveablePrefab>();
             if (!save || !World.Cargo.TryGetValue(save.instanceId, out var c)) return 1;
-            return (float)Rules.ConditionFactor(c.health, LiquidCargo.Contains(c.good), Immune.Contains(c.good));
+            float water = Settings.WaterEnabled ? (float)Rules.ConditionFactor(c.health, LiquidCargo.Contains(c.good), Immune.Contains(c.good)) : 1;
+            return water * (Fragile(item, c) ? Rules.IntactFactor(c.impact) : 1);
+        }
+        // Fragile: gems, sculptures, marble, or a crate of a fragile mission (remembered on the crate, so it stays fragile).
+        // With the option "Enable fragile cargo" off nothing is: no hull damage, no damage line or cracks, full value.
+        internal static bool Fragile(ShipItem item, CargoState c)
+        {
+            if (c == null || !Settings.FragileEnabled) return false;
+            if (Rules.FragileGood(c.good) || c.fragile) return true;
+            var mission = item ? item.GetComponent<Good>()?.GetAssignedMission() : null;
+            if (mission == null) return false;
+            Missions.Info(mission, out _, out var mods);
+            return c.fragile = (mods & MissionModifier.Fragile) != 0;
+        }
+        internal static float Impact(ShipItem item)
+        {
+            var save = item ? item.GetComponent<SaveablePrefab>() : null;
+            return save && World.Cargo.TryGetValue(save.instanceId, out var c) && Fragile(item, c) ? c.impact : 0;
+        }
+        // A counted hull hit (BoatDamage.Impact added `added` to the hull's damage): every fragile crate aboard that ship.
+        internal static void HullHit(BoatDamage hull, float added)
+        {
+            foreach (var c in Active)
+            {
+                if (!c || !c.item || c.state == null || !c.item.currentActualBoat || c.item.currentActualBoat.GetComponentInParent<BoatDamage>() != hull) continue;
+                if (!Fragile(c.item, c.state)) continue;
+                c.state.impact = Rules.FragileDamage(c.state.impact, added); c.RefreshHint(); c.RefreshAppearance();
+            }
         }
         private bool Placed => item && save && item.sold && !item.held && save.currentCrateId == 0 &&
             item.GetCurrentInventorySlot() < 0 && item.itemRigidbodyC && save.GetParentObject() != -2 && save.GetParentObject() != -3;
@@ -481,33 +539,39 @@ namespace EconomyOverhaul
             if (!item || state == null) return;
             // Water damage, 0% undamaged to 100%; ruined (health below 19.5) shows 81% or more.
             int percent = Settings.WaterEnabled && Settings.WaterHintEnabled && !Immune.Contains(state.good)
-                ? Mathf.RoundToInt(100 - Mathf.Clamp(state.health, 0, 100)) : -1;
+                ? Rules.WaterHintPercent(state.health) : -1;
             // Cover, 0% open sky to 100% fully covered, once its cover is scanned (option "Show cover percentage", off by default).
             int cover = Settings.WaterEnabled && Settings.CoverHintEnabled && !Immune.Contains(state.good) && state.exposure != 0
                 ? Mathf.RoundToInt(100 * Mathf.Clamp01(coveredFraction)) : -1;
-            if (hintPercent == percent && hintCover == cover && hintLoan == state.loan && item.description == hintDescription && hintLookText == item.lookText) return;
+            // Fragile cargo's damage line (-1 for none) counts too: a hull hit changes only it (fragile goods are water-proof).
+            int damage = Settings.CargoDamageHintEnabled && Fragile(item, state) ? Rules.DamagePercent(state.impact) : -1;
+            if (hintPercent == percent && hintCover == cover && hintDamage == damage && hintLoan == state.loan && item.description == hintDescription && hintLookText == item.lookText) return;
             // Never replace vanilla mission/name/fullness information.
             if (!string.IsNullOrEmpty(suffix) && item.description != null && item.description.EndsWith(suffix, StringComparison.Ordinal))
                 item.description = item.description.Substring(0, item.description.Length - suffix.Length);
-            suffix = Rules.HintSuffix(item.description, item.lookText, percent, state.loan, cover);
+            suffix = Rules.HintSuffix(item.description, item.lookText, percent, state.loan, cover, damage);
             hintDescription = item.description = (item.description ?? "") + suffix;
             hintLookText = item.lookText;
-            hintPercent = percent; hintCover = cover; hintLoan = state.loan;
+            hintPercent = percent; hintCover = cover; hintDamage = damage; hintLoan = state.loan;
         }
-        private void RefreshAppearance()
+        internal void RefreshAppearance()
         {
-            if (state == null || Immune.Contains(state.good)) return;
+            if (state == null) return;
             appearanceTimer = 0;
-            float health = Settings.WaterEnabled ? state.health : 100;
+            // Water: goods water can damage. Cracks: fragile cargo with impact damage, on the crates that have crack marks.
+            float health = Settings.WaterEnabled && !Immune.Contains(state.good) ? state.health : 100;
             var sources = SourceRenderers();
+            int grain = state.impact > 0 && Fragile(item, state) ? CargoStainMaterial.CrackGrain(sources) : -1;
+            var cracks = grain >= 0 ? CargoStainMaterial.CrackTexture() : null;
+            bool looked = health < 100 || cracks;
             bool stale = !BindingsMatch(sources);
             if (stale)
             {
                 ReleaseBindings(); geometry = sources;
-                if (health < 100) BindSources(sources);
+                if (looked) BindSources(sources);
             }
             else geometry = sources;
-            if (health >= 100)
+            if (!looked)
             {
                 ReleaseBindings(); geometry = sources;
                 visualHealth = 100; visualWaterEnabled = Settings.WaterEnabled; appearanceTimer = 0; return;
@@ -528,6 +592,11 @@ namespace EconomyOverhaul
                     material.SetVector(CargoStainMaterial.MinId,history.LocalBounds.min);
                     material.SetVector(CargoStainMaterial.SizeId,new Vector4(1/Mathf.Max(.001f,size.x),1/Mathf.Max(.001f,size.y),1/Mathf.Max(.001f,size.z),0));
                     material.SetFloat(CargoStainMaterial.VisibleId,health <= 90 ? 1 : 0);
+                    material.SetTexture(CargoStainMaterial.CrackId,cracks ? cracks : Texture2D.blackTexture);
+                    material.SetFloat(CargoStainMaterial.CrackCutId,cracks ? Rules.CrackCut(Rules.DamagePercent(state.impact)) : 2);
+                    material.SetFloat(CargoStainMaterial.CrackGrainId,Mathf.Max(0,grain));
+                    material.SetFloat(CargoStainMaterial.CrackSeedId,Mathf.Repeat(state.id * .618034f,1));
+                    material.SetColor(CargoStainMaterial.CrackColorId,CargoStainMaterial.CrackColor());
                 }
             }
             visualHealth = health; visualWaterEnabled = Settings.WaterEnabled; appearanceTimer = 0;
@@ -1006,6 +1075,39 @@ namespace EconomyOverhaul
         internal static readonly int MinId = UnityEngine.Shader.PropertyToID("_CargoMin");
         internal static readonly int SizeId = UnityEngine.Shader.PropertyToID("_CargoInvSize");
         internal static readonly int VisibleId = UnityEngine.Shader.PropertyToID("_StainVisible");
+        internal static readonly int CrackId = UnityEngine.Shader.PropertyToID("_CrackMask");
+        internal static readonly int CrackCutId = UnityEngine.Shader.PropertyToID("_CrackCut");
+        internal static readonly int CrackGrainId = UnityEngine.Shader.PropertyToID("_CrackGrain");
+        internal static readonly int CrackSeedId = UnityEngine.Shader.PropertyToID("_CrackSeed");
+        internal static readonly int CrackColorId = UnityEngine.Shader.PropertyToID("_CrackColor");
+        // Fragile cargo's cracks: the grain bits of the first source renderer whose mesh is a fragile crate (Rules.CrackGrain), or -1.
+        internal static int CrackGrain(MeshRenderer[] sources)
+        {
+            foreach (var r in sources)
+            {
+                var mesh = r ? r.GetComponent<MeshFilter>()?.sharedMesh : null;
+                int grain = mesh ? Rules.CrackGrain(mesh.name) : -1;
+                if (grain >= 0) return grain;
+            }
+            return -1;
+        }
+        // The game's hull damage texture, from its own ships' damage overlays (HullDamageTexture); null until a scene with ships
+        // is loaded, looked for again at most every 5 s.
+        private static Texture crackTexture; private static float crackSearched = -10;
+        internal static Texture CrackTexture()
+        {
+            if (crackTexture || Time.unscaledTime - crackSearched < 5) return crackTexture;
+            crackSearched = Time.unscaledTime;
+            foreach (var overlay in Resources.FindObjectsOfTypeAll<HullDamageTexture>())
+            {
+                var renderer = overlay ? overlay.GetComponent<Renderer>() : null;
+                var texture = renderer && renderer.sharedMaterial ? renderer.sharedMaterial.mainTexture : null;
+                if (texture) return crackTexture = texture;
+            }
+            return null;
+        }
+        // The game's damage colour (RefsDirectory.damageColor, 0.18, 0.20, 0.21 in the scene).
+        internal static Color CrackColor() => RefsDirectory.instance ? RefsDirectory.instance.damageColor : new Color(.177f, .204f, .208f);
         internal static void Load()
         {
             if (Shader) return;
@@ -1055,5 +1157,16 @@ namespace EconomyOverhaul
             Plugin.Log.LogWarning("Unrecognized unreadable boat-water mesh: " + mesh.name + ". This surface cannot be sampled.");
             return Tuple.Create(new Vector3[0],new int[0]);
         }
+    }
+}
+
+namespace EconomyOverhaul
+{
+    // Fragile cargo: the hull damage a counted impact added (the game's own skips apply: cooldown, the sea bed, items, low
+    // speed, sleeping moored) reaches every fragile crate aboard.
+    [HarmonyLib.HarmonyPatch(typeof(BoatDamage), "Impact")] internal static class FragileImpactPatch
+    {
+        static void Prefix(BoatDamage __instance, out float __state) => __state = __instance.hullDamage;
+        static void Postfix(BoatDamage __instance, float __state) { float added = __instance.hullDamage - __state; if (added > 0) CargoCondition.HullHit(__instance, added); }
     }
 }
