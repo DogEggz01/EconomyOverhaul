@@ -26,6 +26,8 @@
   - The maximum port capacity they can grow is double the default amount
 - All port got their production/demand value redo. Production/consumption is overall much MUCH faster than vanilla. There will be more available goods around, and port consume trade good faster.
 ## Cargo Mission Change
+<img width="3840" height="2160" alt="20D829~1" src="https://github.com/user-attachments/assets/5b1b9d7f-e553-4e9e-9baa-c023f3ea9ff2" />
+
 - Cargo mission now separate into 4 category Staples, Consumer Goods, Industrial, Luxury
   - Staples got very high cargo quantity, more rep but not many gold reward.
   - Consumer goods high cargo quantity, little bit more rep, still not many gold.
@@ -45,6 +47,9 @@
   - Tools from trade good is never fragile.
 - Cargo mission can now be assign to every port, if the route is profitable enough.
 ## Dynamic demand event
+<img width="3840" height="2160" alt="2055B7~1" src="https://github.com/user-attachments/assets/d6cd7eb1-4666-4b58-aa23-87264cf41192" />
+<img width="3840" height="2160" alt="207EA9~1" src="https://github.com/user-attachments/assets/fde7aba9-68da-496c-b578-20155284f5c3" />
+
 - There will always be 5 dynamic demand event in game. Each with a pair of demanding port and producing port
 - Demanding port and producing port is picked randomly, only island that won't get pick is chronos and safforn
 - Demanding port will have large deficit of certain good, it's corresponding producing port will have a surplus of this good.
@@ -195,7 +200,7 @@
 - The speed that cargo get damage is tied to rain intensity. Inside the storm and at the outskirt of storm will have diffent water damage rate.
 - Water damage from rain and soaked water will stack.
 - Water damage will only count when ship is near you, so you don't need to worry far away cargo on your other ship become wet
-## Fragile Cargo
+## Fragile Cargo (CAN BE TOGGLE OFF IN CONFIGURATOR)
 <img width="3840" height="2160" alt="20F85B~1" src="https://github.com/user-attachments/assets/880d8be9-2653-4931-a22b-ea287a41f58a" />
 
 - Gem, Marble and Sculpture is consider fragile cargo.
@@ -204,6 +209,8 @@
 - Damage cargo cannot be repair, and cargo that reach 0 health will lose all it's value, unlike water damaged cargo.
 - Tools have chance to be spawn as fragile cargo in cargo mission.
 ### Wood plank for repairing
+<img width="3840" height="2160" alt="205DBB~1" src="https://github.com/user-attachments/assets/8e809c51-4741-406b-9f1d-6606e0cc2859" />
+
 - Wood plank item is added so you have another way to counter the water damage.
 - You can aquire wood plank in 2 way
   - Unbundle Lumber trade good, which gives you 128 plank.
