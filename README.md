@@ -58,7 +58,7 @@
 - You won't get repeat info from tavern sailor, unless you already know all 5 of it and there isn't new one popping up yet.
 - Background Trader will prioritize to complete these event when they know about it and when they can reach both destination.
 - Event will be consider complete when the deficit is less than -20% of port capacity. A new event will spawn on the next day.
-- If a opening event is deemed expired after 30 days, and a new event will be created next day. The demand/surplus it create will stay, but trader will no longer prioritize it, it will only be moved by profit again.
+- An opening event is deemed expired after 30 days, and a new event will be created next day. The demand/surplus it create will stay, but trader will no longer prioritize it, it will only be moved by profit again.
 - Event will try to cycle all availble port and goods atleast once before choosing port they already get the event.
 ## Background Trader, price infomation and tavern rumor change
 - Background trader amount is increase to accommodate for increase production/demand.
