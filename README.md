@@ -255,6 +255,8 @@
 
 - Sold beside canvas pack, as a 4 poles bundle
 - Press Q/E to increase/decrease pole length. It can be attached like lantern hook onto surface.
+- Pole will be attached at where you aim, scrolling mouse wheel will rotate at the attached point.
+  - Holding Q while scrolling will rotate left/right instead.
 - After nailed, it can be use to attach tarp (don't have to be attaching, just nailed will do)
 - Wood pole can support tarp after nailed, so you can make tent/bimini like structure
 - If unnailed the pole, the tarp will be drop or become unsupported.
