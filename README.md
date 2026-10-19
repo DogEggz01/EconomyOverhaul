@@ -90,6 +90,8 @@
   - For example: Grains and Rice are Staples. It have very big demands everywhere. On the other hand Silk belongs to luxury goods, the demands will be biggest in T1 and T2 city. T3 and T4 city will care less.
 - Add production chain logic to increase certain demand for port that produce certain goods.
   - For example: Tools need iron, copper, lumber and rubber. Thus Tool producing port will have increased need for these things. Sculpture need marble, wine need sulfur, sausage need meats, meats need salt...etc.
+- Add local/foreign goods category. Low tier town prefer to consume local food, while bigger port will demand more foreign food.
+- Add Mining port demand alcohol. Miners need alcohol to numb their feelings to work in mine/quarry.
 - Each trade goods category also affect their price curve.
   - Staples: Lower price range, more stable price, you can sell/buy alot of goods and price don't move too much, unless there are severe deficiet or overstock, profit is limited.
     - Grain, Rice, Meat, Common fishes, fruit, water belongs to this
