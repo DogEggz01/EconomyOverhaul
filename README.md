@@ -95,7 +95,7 @@
 - Each trade goods category also affect their price curve.
   - Staples: Lower price range, more stable price, you can sell/buy alot of goods and price don't move too much, unless there are severe deficiet or overstock, profit is limited.
     - Grain, Rice, Meat, Common fishes, fruit, water belongs to this
-  - Consumer goods: Smaller stable price range, price will incease/drop faster than Essential price curve, got a higher profit margin than Essential.
+  - Consumer goods: Smaller stable price range, price will incease/drop faster than Staple price curve, got a higher profit margin than Essential.
     - Alcohol, Cheese, Orange, Special fish(Tuna, eels, northfish), Goods, Medicine, Nails, Salt, textile material belongs to here
   - Industrial goods: Liner price curve, predictable price change
     - Metals, tools, logs, lumber, sulfur, rubber belongs here
