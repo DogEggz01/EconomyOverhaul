@@ -60,17 +60,34 @@
 - Event will be consider complete when the deficit is less than -20% of port capacity. A new event will spawn on the next day.
 - An opening event is deemed expired after 30 days, and a new event will be created next day. The demand/surplus it create will stay, but trader will no longer prioritize it, it will only be moved by profit again.
 - Event will try to cycle all availble port and goods atleast once before choosing port that already get the event once.
-## Background Trader, price infomation and tavern rumor change
-- Background trader amount is increase to accommodate for increase production/demand.
+## Trader, price infomation and tavern rumor change
+- Background trader amount is increase to accommodate for increase production/demand, and it's no longer back ground, you can see it sail in the world.
   - Current NPC trade fleet
     - Small local trader: Each region 7, FFL 2. Move at 5 knots. Stop at port for 2.5h.
-    - Medium Local trader: Each region 1. Move at 5 knots. Stop at port for 4h.
-    - Heavy local trader: Aestrin only, 2 boat. Used for transporting heavy cargo. Move at 4.5 knots. Stop at port for 24h.
-    - FFL-EA trader: it trade between FFL and EA, only 1. Move at 6 knots. Stop at port for 6.5h.
-    - Happy Bay trader: It trade between Happy bay and Aestrin/EA region. Move at 6 knots. Stop at port for 6.5h.
+      - Regional small boat, 5 Default rigging and 2 special rigging.
+      - Dhow: Topsail gaff sloop.
+      - Cog: Caravel.
+      - Kakam: One square longship.
+    - Medium Local trader: Each region 1. Move at 5.5 knots. Stop at port for 5h.
+      - Regional medium ship, got it's own rigging.
+      - Sanbuq: Single big lateen
+      - Brig: Carrack without jibs and stays
+      - Junk: Junk gaff schooner.
+    - Heavy local trader: Aestrin only, 2 boat. Used for transporting heavy cargo. Move at 4.5 knots. Stop at port for 24h. 
+      - Brig, 3 masts Schooner with dirty sail.
+    - FFL-EA trader: it trade between FFL and EA, only 1. Move at 6 knots. Stop at port for 6.5h. 
+      - Junk, All junk square, blue lantern.
+    - Happy Bay trader: It trade between Happy bay and Aestrin/EA region/Oasis/Mirage Mountain. Move at 6.5 knots. Stop at port for 7h. 
+      - Brig with junk sail. Carry EA lantern.
     - Regional long range trader: Each region 3, always trade to/back to home region. Move at 7 knots. Stop at port for 8h.
+      - All use regional medium default rigging.
     - Independent long range trader: total 9. Trade as they like. Move at 8 knots. Stop at port for 12h.
+      - All 9 ship have it's own rigging.
+      - Sanbuq: Topsail cutter, Double Fin sail, high gaff schooner.
+      - Brig: Brigantine, Snow, Polacre
+      - Junk: Ketch cutter, Xebec, Junk carrack.
     - Chronos Trader: Trade between 3 main city and Chronos. Move at 8.5 knots. Stop at port for 24h.
+      - Regional big ship. Aestrin Chronos trader use brig with fully rigged sail plan.
     - Total 51 boat, compare to vanilla's 36 boat
 - All trader speed is faster, but wait in port longer.
 - Above 2 changes means you have higher chance to have NPC trader arrive sooner than you, cause your profit to be not as much as you thought.
