@@ -61,7 +61,7 @@
 - An opening event is deemed expired after 30 days, and a new event will be created next day. The demand/surplus it create will stay, but trader will no longer prioritize it, it will only be moved by profit again.
 - Event will try to cycle all availble port and goods atleast once before choosing port that already get the event once.
 ## Trader, price infomation and tavern rumor change
-- Background trader amount is increase to accommodate for increase production/demand, and it's no longer back ground, you can see it sail in the world.
+- Background trader amount is increase to accommodate for increase production/demand, and it's no longer background, you can see it sailing in the world.
   - Current NPC trade fleet
     - Small local trader: Each region 7, FFL 2. Move at 5 knots. Stop at port for 2.5h.
       - Regional small boat, 5 Default rigging and 2 special rigging.
