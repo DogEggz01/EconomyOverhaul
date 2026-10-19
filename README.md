@@ -89,8 +89,11 @@
       - Regional big ship. Aestrin Chronos trader use brig with fully rigged sail plan.
     - Total 51 boat, compare to vanilla's 36 boat
 - All trader speed is faster, but wait in port longer.
-- Above 2 changes means you have higher chance to have NPC trader arrive sooner than you, cause your profit to be not as much as you thought.
-- To help with this, Tavern sailor now will prioritize to tell you latest depart ship with more precise time and ship infos. 
+- On trader's deck they will show the one cargo they carry the most, so you can take a guess what they are shipping.
+- Between traders there is no collision, but they will collide with player ship.
+- They use simplified physic, so they will still sail in iron with their square blow back and move differently on water than normal ship
+- Their speed will be affect by wind strength and directions.
+- Tavern sailor now will prioritize to tell you latest depart ship with more precise time and ship infos. 
 - Price infomation you can receive now tied to reputation
   - Rep 0: no price info
   - Rep 1: Only get info from 2 of the small local traders
