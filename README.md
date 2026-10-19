@@ -69,7 +69,6 @@
       - Cog: Caravel.
       - Kakam: Single square longship.
     - Medium Local trader: Each region 1. Move at 5.5 knots. Stop at port for 5h.
-      - Regional medium ship, got it's own rigging.
       - Sanbuq: Single big lateen
       - Brig: Carrack without jibs and stays
       - Junk: Junk gaff schooner.
