@@ -63,9 +63,9 @@
 ## Background Trader, price infomation and tavern rumor change
 - Background trader amount is increase to accommodate for increase production/demand.
   - Current NPC trade fleet
-    - Small local trader: Each region 7, FFL 2. Move at 4.5 knots. Stop at port for 2.5h.
+    - Small local trader: Each region 7, FFL 2. Move at 5 knots. Stop at port for 2.5h.
     - Medium Local trader: Each region 1. Move at 5 knots. Stop at port for 4h.
-    - Heavy local trader: Aestrin only, 2 boat. Used for transporting heavy cargo. Move at 4 knots. Stop at port for 24h.
+    - Heavy local trader: Aestrin only, 2 boat. Used for transporting heavy cargo. Move at 4.5 knots. Stop at port for 24h.
     - FFL-EA trader: it trade between FFL and EA, only 1. Move at 6 knots. Stop at port for 6.5h.
     - Happy Bay trader: It trade between Happy bay and Aestrin/EA region. Move at 6 knots. Stop at port for 6.5h.
     - Regional long range trader: Each region 3, always trade to/back to home region. Move at 7 knots. Stop at port for 8h.
