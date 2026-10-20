@@ -3,6 +3,8 @@
 ## Recommend mod
 - Mooring Line Fix: For seized ship to properly moored at the port
   - https://github.com/DogEggz01/MooringLineFix/releases/latest
+- Keevi Fixes: Alternative for fixing mooring line, also comes with other QoL changes
+  - https://github.com/KeeviDev/SailwindKeeviFixes/releases/latest
 - Postal Expansion: For rep grind 
   - https://github.com/DogEggz01/PostalExpansion/releases/latest
 ## Mod goal
