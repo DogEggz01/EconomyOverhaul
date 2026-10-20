@@ -66,6 +66,7 @@
 <img width="3840" height="2160" alt="20433E~1" src="https://github.com/user-attachments/assets/86366537-a829-4401-9052-5fb41cb671e8" />
 
 - Background trader amount is increase to accommodate for increase production/demand, and it's no longer background, you can see it sailing in the world.
+- Visible trader can be toggle off in configurator, it's cost more performance.
   - Current NPC trade fleet
     - Small local trader: Each region 7, FFL 2. Move at 5 knots. Stop at port for 2.5h.
       - Regional small boat, 5 Default rigging and 2 special rigging.
