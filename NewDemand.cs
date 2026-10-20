@@ -39,6 +39,10 @@ namespace EconomyOverhaul
         // News travels with the price reports (the user, 2026-10-16): a report of the demanding port, dated on or after the event's
         // start, that shows the good still short (at -20% of the capacity the report gives, or below).
         public static bool DemandReported(int reportDay, float reportSupply, int startDay, float reportCap) => reportDay >= startDay && !DemandComplete(reportSupply, reportCap);
+        // A report of the producing port teaches the event too (the user, 2026-10-20): dated on or after the event's start, and showing
+        // the good in stock, by the market's own buy limit at the capacity the report gives (Economy.ApplyPurchaseLimit, HasGood).
+        public static bool ProducerReported(int reportDay, float reportSupply, int startDay, float reportCap, int tier) =>
+            reportDay >= startDay && reportSupply >= 1 - PurchaseDeficit(reportCap, tier);
     }
 
     [Serializable] public sealed class DemandEvent
@@ -131,12 +135,18 @@ namespace EconomyOverhaul
             }
             return false;
         }
-        // A trader learns the events of the reports it carries (a demanding port's report that shows the shortage).
+        // A trader learns the events of the reports it carries: a demanding port's report that shows the shortage, or a producing
+        // port's that shows the good in stock.
         internal static void LearnFromReports(BoatState b)
         {
             foreach (var e in Active)
-                if (b.reports.Any(r => r.port == e.demand && r.supply != null && e.good < r.supply.Length && Rules.DemandReported(r.day, r.supply[e.good], e.startDay, r.cap)) &&
+            {
+                int tier = Supply.TryGet(e.producer, out var row) ? row.Tier : 0;
+                if (b.reports.Any(r => r.supply != null && e.good < r.supply.Length &&
+                        (r.port == e.demand && Rules.DemandReported(r.day, r.supply[e.good], e.startDay, r.cap) ||
+                         r.port == e.producer && Rules.ProducerReported(r.day, r.supply[e.good], e.startDay, r.cap, tier))) &&
                     !(b.knownEvents ?? (b.knownEvents = new List<int>())).Contains(e.id)) b.knownEvents.Add(e.id);
+            }
         }
         // A trader learns the events of a port it arrives at or leaves (their demanding or producing port).
         internal static void Learn(BoatState b, int port)

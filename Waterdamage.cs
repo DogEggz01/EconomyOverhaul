@@ -130,6 +130,9 @@ namespace EconomyOverhaul
         // this crate is fragile though its good is not (tools spawned by a fragile mission).
         [System.Runtime.Serialization.OptionalField] public float impact;
         [System.Runtime.Serialization.OptionalField] public bool fragile;
+        // Respondentia: the port the crate was financed at, + 1 (0: unknown, as for a crate financed before this field); its
+        // sale's reputation counts the distance from there (Loans.Reward, LOAN_REP_DRAFT.md).
+        [System.Runtime.Serialization.OptionalField] public int financedPort;
     }
     public sealed class CargoCondition : MonoBehaviour
     {

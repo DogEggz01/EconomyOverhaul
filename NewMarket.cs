@@ -13,6 +13,14 @@ namespace EconomyOverhaul
     // ---- Rules ----
     public static partial class Rules
     {
+        // The game's IslandMarket.Awake gives every market its own report, and its UpdateSelfPriceReport (every sale, purchase
+        // and cycle) reads it unchecked. A save can hold null there (Old Ankh Town, port 31, in a player's 0.10.1 save: the load
+        // hung in the warehouse migration's first sale); an empty report is put back, as Awake does. True when one was made.
+        public static bool EnsureOwnReport(PriceReport[] known, int self)
+        {
+            if (known == null || self < 0 || self >= known.Length || known[self] != null) return false;
+            known[self] = new PriceReport(); return true;
+        }
         public static int PurchaseDeficit(double cap, int tier)
         {
             if (tier < 1 || tier > 4) return 0;
@@ -155,6 +163,10 @@ namespace EconomyOverhaul
         public List<BookEntry> book = new List<BookEntry>();
         public List<int> released = new List<int>();
         public List<BookEntry> bookIncoming = new List<BookEntry>();
+        // State version 6 (SaveState.reportTable): reports and incoming written as numbers into the save's report table; null in
+        // memory, and in a version-4 or -5 save.
+        [System.Runtime.Serialization.OptionalField] public int[] reportIds, incomingIds;
+        internal MarketState Copy() => (MarketState)MemberwiseClone();
     }
     internal static partial class Economy
     {
@@ -195,7 +207,6 @@ namespace EconomyOverhaul
         internal static void Refresh(IslandMarket m)
         {
             EnsureKnownPrices(m);
-            if (m.knownPrices[m.GetPortIndex()] == null) m.knownPrices[m.GetPortIndex()] = new PriceReport();
             m.UpdateSelfPriceReportForPlayer();
         }
         internal static void EnsureKnownPrices(IslandMarket market, int minimumLength = 0, bool clear = false)
@@ -210,6 +221,8 @@ namespace EconomyOverhaul
                 market.knownPrices = expanded; current = expanded;
             }
             if (clear) Array.Clear(current, 0, current.Length);
+            if (Rules.EnsureOwnReport(current, market.GetPortIndex()) && !clear)
+                Plugin.Log.LogWarning("The market of port " + market.GetPortIndex() + " (" + market.GetPortName() + ") had no price report of its own; an empty one made, as the game's market does at its start.");
         }
         internal static void Cycle(IslandMarket m)
         {
@@ -241,7 +254,7 @@ namespace EconomyOverhaul
             if (!Supply.Contains(m.GetPortIndex())) return;
             var s = World.MarketData(m.GetPortIndex());
             SimulationClock.Advance(ref s.timer, elapsed,
-                m.econCycleDuration / (double)SimulationClock.NormalSpeed, SimulationClock.CycleBudget, () => Cycle(m));
+                m.econCycleDuration / (double)SimulationClock.NormalSpeed, SimulationClock.CycleBudget, m, static x => Cycle(x));
         }
     }
     [HarmonyPatch(typeof(IslandMarket), "Awake")] internal static class MarketAwakePatch
@@ -1147,7 +1160,7 @@ namespace EconomyOverhaul
                 if(c!=null){var settlement=Rules.Settle((double)c.principal+c.interest,price,Loans.Rate(Loans.Currency(c)),Loans.Rate(currency));net=settlement.Payout;
                     if((long)PlayerGold.currency[Loans.Currency(c)]-settlement.Shortfall<int.MinValue){Loans.Notify("Wallet limit exceeded");return;}}
                 if((long)PlayerGold.currency[currency]+net>int.MaxValue){Loans.Notify("Wallet limit exceeded");return;}
-                price=Loans.SettleSale(item,price,currency);
+                price=Loans.SettleSale(item,price,currency,m);
             }
             var good=item.GetComponent<Good>();int g=good?PrefabsDirectory.ItemToGoodIndex(item.GetComponent<SaveablePrefab>().prefabIndex):-1;
             int purchaseCurrency=-1;double purchasePressure=0;
@@ -1363,7 +1376,7 @@ namespace EconomyOverhaul
                     if(action==TradeAction.Sell){
                         item=u.Cargo.GetComponent<ShipItem>();
                         bool remembered=Fx.PurchasePressure(item,out int purchaseCurrency,out double purchasePressure);
-                        int net=Loans.SettleSale(item,u.Quote.Total,currency);
+                        int net=Loans.SettleSale(item,u.Quote.Total,currency,m);
                         if(Fields.Get<List<Good>>(m.GetWarehouseArea(),"goodsInArea").Remove(u.Cargo))
                             m.currentPlayerGoods[g]=Math.Max(0,m.currentPlayerGoods[g]-1);
                         if(batch.Carrier)CartDelivery.Detach(item);
@@ -1371,7 +1384,7 @@ namespace EconomyOverhaul
                         Fx.RecordSale(currency,u.Quote.Gross,TradeSource.Cargo,remembered,purchaseCurrency,purchasePressure);
                     }else{
                         item=staged[i].GetComponent<ShipItem>();
-                        if(action==TradeAction.Loan){var loan=CargoCondition.Track(item);loan.loan=true;loan.region=batch.Region;loan.goldLoan=currency==3;loan.principal=u.Principal;loan.interest=u.Interest;loan.rate=Rules.Interest(Reputations.Level(batch.Region));loan.reservation=u.Principal/Loans.Rate(currency);}
+                        if(action==TradeAction.Loan){var loan=CargoCondition.Track(item);loan.loan=true;loan.region=batch.Region;loan.goldLoan=currency==3;loan.principal=u.Principal;loan.interest=u.Interest;loan.rate=Rules.Interest(Reputations.Level(batch.Region));loan.reservation=u.Principal/Loans.Rate(currency);loan.financedPort=m.GetPortIndex()+1;}
                         PlayerGold.currency[currency]-=u.Quote.Total-u.Principal;m.PurchaseGood(g);
                         Fx.RememberPurchase(item,currency,Fx.Record(currency,u.Quote.Gross,true,TradeSource.Cargo));
                     }
@@ -1560,8 +1573,10 @@ namespace EconomyOverhaul
             native.SetButtonMaterial(Fields.Get<Material[]>(ui,"buttonMaterials")[q.Valid?0:1]);
         }
     }
+    // Not inside a batch: each unit's SellGood or PurchaseGood calls RefreshPage, whose postfixes run although BatchedPagePatch
+    // skips it; the batch refreshes the page once when it is done (BulkTrade.Execute).
     [HarmonyPatch(typeof(EconomyUI),"RefreshPage")] internal static class BulkRefreshPatch
-    {static void Postfix(EconomyUI __instance){var v=__instance.GetComponent<BulkTradeUI>();if(v)v.Refresh();}}
+    {static void Postfix(EconomyUI __instance){if(Economy.BatchDepth!=0)return;var v=__instance.GetComponent<BulkTradeUI>();if(v)v.Refresh();}}
     [HarmonyPatch(typeof(EconomyUI),"OpenUI")] internal static class CartSessionPatch
     {static void Prefix(EconomyUI __instance){var v=__instance.GetComponent<BulkTradeUI>();if(v)v.ResetCart();}}
 

@@ -36,6 +36,25 @@ namespace EconomyOverhaul
         // 25, 20, 15, 10, 5% at level 10. A loan keeps the rate it was taken at.
         private static readonly double[] InterestByLevel = { .70, .70, .60, .50, .40, .30, .25, .20, .15, .10, .05 };
         public static double Interest(int level) => InterestByLevel[Math.Max(0, Math.Min(10, level))];
+        // Reputation for repaid loans (the user, 2026-10-18; LOAN_REP_DRAFT.md). A financed crate repaid at its sale earns the
+        // smaller of a share of the lending region's current level (0.5% of the points it needs) and a share of the distance it
+        // was carried, as missions pay (0.1 x the game's mission distance from where it was financed to where it is sold, counted
+        // up to the region's mission range); once the credit limit is removed (level 9) 0.2% and 0.04 x.
+        public static double LoanCrateRep(int level, int required, double distance, double range)
+        {
+            if (level < 1 || required <= 0 || !(distance > 0)) return 0;
+            bool unlimited = double.IsPositiveInfinity(CreditLimit(level));
+            return Math.Min((unlimited ? .002 : .005) * required, (unlimited ? .04 : .1) * Math.Min(distance, Math.Max(0, range)));
+        }
+        // A Bottomry loan repaid in full by its due day, from the day after it was taken (the user, 2026-10-18: no half-term limit,
+        // only not on the same day), earns 10% of the points the lending region's current level needs times its payout (in value
+        // units) over the region's credit limit, at most 1; once the credit limit is removed (level 9) 5%, with level 8's limit.
+        public static int BottomryRep(int level, int required, double payoutUnits, int startDay, int dueDay, int day)
+        {
+            if (level < 1 || required <= 0 || !(payoutUnits > 0) || day > dueDay || day <= startDay) return 0;
+            double limit = CreditLimit(level); bool unlimited = double.IsPositiveInfinity(limit);
+            return Round((unlimited ? .05 : .10) * required * Math.Min(1, payoutUnits / (unlimited ? CreditLimit(8) : limit)));
+        }
         public static Settlement Settle(double debt, int proceeds, double lenderRate, double saleRate)
         {
             if (!(lenderRate > 0) || !(saleRate > 0)) throw new ArgumentOutOfRangeException(nameof(lenderRate));
@@ -137,11 +156,29 @@ namespace EconomyOverhaul
                 if (final > 0) Reputations.Change(-final, c.region);
             }
         }
-        internal static int SettleSale(ShipItem item, int gross, int currency)
+        // A sale at market (its port; null earns no reputation) pays the crate's loan; paid back (the sale covered the debt, or the
+        // shortfall left the lender's coins at 0 or more), the crate earns reputation in the lending region.
+        internal static int SettleSale(ShipItem item, int gross, int currency, IslandMarket market = null)
         {
             var loan = Find(item); if (loan == null) return gross;
             var result = Rules.Settle((double)loan.principal + loan.interest, gross, Rate(Currency(loan)), Rate(currency));
-            Debit(loan.region, result.Shortfall, Currency(loan)); Close(loan); return result.Payout;
+            Debit(loan.region, result.Shortfall, Currency(loan));
+            if (result.Shortfall == 0 || PlayerGold.currency[Currency(loan)] >= 0) Reward(loan, market);
+            Close(loan); return result.Payout;
+        }
+        // A crate earns fractions of a point: they are carried per region while the game runs (a load starts again at 0).
+        private static double[] repCarry = new double[4];
+        private static SaveState repCarryState;
+        internal static void Reward(CargoState loan, IslandMarket market)
+        {
+            if (!market || loan.financedPort <= 0 || Port.ports == null || loan.financedPort > Port.ports.Length) return;
+            Port from = Port.ports[loan.financedPort - 1], to = market.GetPort(); if (!from || !to) return;
+            // The game's own mission distance (the user, 2026-10-18: "use the one that closet to vanilla").
+            int region = loan.region, level = Reputations.Level(region);
+            double rep = Rules.LoanCrateRep(level, Reputations.Required(region, level), Mission.GetDistance(from, to), Reputations.MaxDistance(region));
+            if (repCarryState != World.State) { repCarry = new double[4]; repCarryState = World.State; }
+            repCarry[region] += rep; int whole = (int)Math.Floor(repCarry[region] + 1e-8);
+            if (whole > 0) { repCarry[region] -= whole; Reputations.Change(whole, region); }
         }
         internal static bool Use(ShipItem item)
         {
@@ -203,7 +240,7 @@ namespace EconomyOverhaul
         {
             if (!World.Ready || World.SaveBlocked) return;
             var refusal = BankruptcyRefusal(region); if (refusal != null) { Notify(refusal); return; }
-            Rentals.Bankruptcy(region);
+            bool rentalEnded = Rentals.Bankruptcy(region);
             Bottomry.Bankruptcy(region);
             for (int r = 0; r < 4; r++) if (region < 0 || r == region) World.State.fractionalPenalty[r] = 0;
             foreach (var c in World.State.cargo.Where(c => c.loan && (region < 0 || c.region == region)).ToArray()) MarkRemoved(c);
@@ -215,7 +252,9 @@ namespace EconomyOverhaul
             }
             // Each lender owns exactly one wallet, including Chronos / Gold.
             PurgeRemoved();
-            Notify(region < 0 ? "Declared bankruptcy in all regions." : "Declared bankruptcy in " + BookUI.RegionName(region) + ".");
+            // An ended rental's notice names the bankruptcy and the ship taken back; the game's notices have no queue, so this one
+            // would replace it in the same frame (the review of 2026-10-18, Claude's fix).
+            if (!rentalEnded) Notify(region < 0 ? "Declared bankruptcy in all regions." : "Declared bankruptcy in " + BookUI.RegionName(region) + ".");
             if (EconomyUI.instance) EconomyUI.instance.RefreshPage();
         }
         internal static void Sinking(BoatLocalItems boat)
@@ -720,9 +759,16 @@ namespace EconomyOverhaul
             if (l == null || !World.Ready || World.SaveBlocked || !World.State.bottomry.Contains(l)) return false;
             int cost = RemoteCost(l); string currency = PlayerGold.GetCurrencyName(l.currency);
             if (PlayerGold.currency[l.currency] < cost) { Loans.Notify("Not enough " + currency + " to repay the " + Name(l.pledge)); return false; }
-            Pay(l.currency, cost); World.State.bottomry.Remove(l);
+            Pay(l.currency, cost); World.State.bottomry.Remove(l); Reward(l);
             if (UISoundPlayer.instance) UISoundPlayer.instance.PlayGoldSound();
             return true;
+        }
+        // Repaid in full: reputation in the lending region by Rules.BottomryRep (on time, not on the day taken).
+        private static void Reward(BottomryLoan l)
+        {
+            int level = Reputations.Level(l.region);
+            int rep = Rules.BottomryRep(level, Reputations.Required(l.region, level), l.principal / Loans.Rate(l.currency), l.startDay, l.dueDay, GameState.day);
+            if (rep > 0) Reputations.Change(rep, l.region);
         }
         // A pledged ship inside a shipyard's range can't be repaid at a box (it could be stripped there after a seizure).
         internal static bool InShipyard(PurchasableBoat b)
@@ -746,7 +792,7 @@ namespace EconomyOverhaul
             int due = BoxCost(l, box.region), have = Math.Max(0, PlayerGold.currency[l.currency]);
             if (have >= due)
             {
-                Pay(l.currency, due); World.State.bottomry.Remove(l);
+                Pay(l.currency, due); World.State.bottomry.Remove(l); Reward(l);
                 if (UISoundPlayer.instance) UISoundPlayer.instance.PlayGoldSound();
                 return;
             }
@@ -1175,7 +1221,12 @@ namespace EconomyOverhaul
         private readonly List<GameObject> hidden = new List<GameObject>(), shown = new List<GameObject>();
         private string ribbonOriginal; private Material normalRow, selectedRow;
         private List<Row> rows = new List<Row>(); private int selected, page, currency = -1;
+        // The row selected, by its loan or else its pledge, so a rebuild of the rows (a loan taken or repaid, the half-second
+        // refresh) keeps it selected where it moved; -1: none (the place is kept).
+        private int keptLoan = -1, keptPledge = -1;
+        private bool paged;   // the arrows turned the page: its first row is selected (else the page follows the kept row)
         private int shownCost = -1;   // the payout or the cost on the page when it was drawn
+        private float lockedUntil;   // a double click on the ribbon acts once: the rows change under the pointer after an action
         private LoanBox box; private float timer; private bool ready;
         internal bool Open { get; private set; }
         internal static BottomryPage For(CurrencyExchangeUI ui) { var p = ui.GetComponent<BottomryPage>(); if (!p) { p = ui.gameObject.AddComponent<BottomryPage>(); p.ui = ui; } return p; }
@@ -1219,8 +1270,8 @@ namespace EconomyOverhaul
             }
             // Paging arrows at the title line's ends, from the hidden amount buttons' plates.
             var amount = top.GetComponentsInChildren<CurrencyExchangeUIButton>(true).First(FxQuantityButton.IsAmountButton);
-            previous = Arrow(amount, new Vector3(.119f, -.86f, -.24f), "<", () => { page = Math.Max(0, page - 1); Refresh(); }, out previousLabel);
-            next = Arrow(amount, new Vector3(.119f, .86f, -.24f), ">", () => { page++; Refresh(); }, out nextLabel);
+            previous = Arrow(amount, new Vector3(.119f, -.86f, -.24f), "<", () => { page = Math.Max(0, page - 1); paged = true; Refresh(); }, out previousLabel);
+            next = Arrow(amount, new Vector3(.119f, .86f, -.24f), ">", () => { page++; paged = true; Refresh(); }, out nextLabel);
 
             var captionSource = bottom.Find("text currency name (1)").GetComponent<TextMesh>();
             caption = Clone(captionSource, bottom, "Bottomry caption", new Vector3(.067f, 0, .313f), captionSource.transform.localRotation, captionSource.transform.localScale);
@@ -1281,7 +1332,7 @@ namespace EconomyOverhaul
             foreach (var panel in new[] { top, bottom }) foreach (Transform child in panel) if (child.name.StartsWith("Exchange amount", StringComparison.Ordinal)) Hide(child.gameObject);
             foreach (var go in hidden) if (go) go.SetActive(false);
             foreach (var go in shown) if (go) go.SetActive(true);
-            ribbonPlate.sharedMaterial = ribbonMaterial; selected = 0; page = 0; currency = -1;
+            ribbonPlate.sharedMaterial = ribbonMaterial; selected = 0; page = 0; currency = -1; keptLoan = keptPledge = -1;
             Refresh();
         }
         private void ShowExchange()
@@ -1298,7 +1349,7 @@ namespace EconomyOverhaul
             if (!Open || !ui.uiActive) return;
             timer -= Time.unscaledDeltaTime; if (timer <= 0) { timer = .5f; Refresh(); }
         }
-        private void Select(int index) { selected = index; currency = -1; Refresh(); }
+        private void Select(int index) { selected = index; currency = -1; keptLoan = keptPledge = -1; Refresh(); }
         // Payout currency, chosen with the bottom coins (the loan currency is fixed when repaying).
         internal void Coin(int index, Transform coin)
         {
@@ -1312,7 +1363,7 @@ namespace EconomyOverhaul
             outline.parent = coin; outline.localPosition = new Vector3(0, 0, outline.localPosition.z);
         }
 
-        private void Rows()
+        private bool Rows()
         {
             var list = new List<Row>();
             foreach (var b in Pledges.All().Where(b => Pledges.Owned(b) && !World.State.bottomry.Any(l => l.pledge == Pledges.Index(b) && l.region == box.region)))
@@ -1322,14 +1373,32 @@ namespace EconomyOverhaul
             list = list.OrderBy(r => r.pledge.isHouse).ThenBy(r => Pledges.Name(Pledges.Index(r.pledge))).ToList();
             list.AddRange(World.State.bottomry.OrderBy(l => l.dueDay).ThenBy(l => l.id).Select(l => new Row { loan = l, pledge = Pledges.Find(l.pledge) }));
             rows = list;
+            // The row selected stays selected where it moved: by its loan, else by its pledge (a repaid loan's pledge back among
+            // the pledges); else its place. Was its place only, so after a repay the same place held the next loan or a pledge,
+            // and a second click repaid or took that (the 2026-10-18 review, Claude's fix).
+            int found = keptLoan >= 0 ? rows.FindIndex(r => r.loan != null && r.loan.id == keptLoan) : -1;
+            if (found < 0 && keptPledge >= 0) found = rows.FindIndex(r => r.loan == null && r.pledge && Pledges.Index(r.pledge) == keptPledge);
+            if (found >= 0) selected = found;
             if (selected >= rows.Count) selected = Math.Max(0, rows.Count - 1);
+            return found >= 0;
+        }
+        private void Remember()
+        {
+            var row = selected < rows.Count ? rows[selected] : null;
+            keptLoan = row?.loan != null ? row.loan.id : -1;
+            keptPledge = row == null ? -1 : row.loan != null ? row.loan.pledge : row.pledge ? Pledges.Index(row.pledge) : -1;
         }
         internal void Refresh()
         {
             if (!Open || box == null) return;
-            Rows();
+            bool kept = Rows();
+            // The page goes with the kept row when the rows move it to another page (it stayed, and the half-second refresh put that
+            // page's first row in its place: the deep review of 2026-10-19, Claude's fix); the arrows still turn the page.
+            if (kept && !paged) page = selected / 4;
+            paged = false;
             int pages = Math.Max(1, (rows.Count + 3) / 4); page = Mathf.Clamp(page, 0, pages - 1);
             if (selected / 4 != page && rows.Count > 0) selected = Math.Min(rows.Count - 1, page * 4);
+            Remember();
             string region = BookUI.RegionName(box.region);
             for (int i = 0; i < 4; i++)
             {
@@ -1400,15 +1469,22 @@ namespace EconomyOverhaul
         internal void Confirm()
         {
             if (!Open || box == null || selected >= rows.Count) return;
+            // A double click acts once: the second click of a pair is ignored for half a second after a loan was taken or repaid
+            // (the rows change under the pointer; the review of 2026-10-18, Claude's fix).
+            if (Time.unscaledTime < lockedUntil) return;
             var row = rows[selected];
             // Terms that changed since the page was drawn (midnight's late interest, a new daily rate) are shown again first.
             Fx.AdvanceDay(GameState.day);
             int now = row.loan == null ? (row.pledge ? Bottomry.Payout(Bottomry.LocalPrincipal(row.pledge, box.region), box.region, currency < 0 ? Bottomry.LocalCurrency(box.region) : currency) : -1)
                 : Bottomry.BoxCost(row.loan, box.region);
             if (now != shownCost) { Loans.Notify("Terms changed: check and confirm again"); Refresh(); return; }
-            if (row.loan == null) { if (Bottomry.Take(row.pledge, box, currency < 0 ? Bottomry.LocalCurrency(box.region) : currency) != null) { selected = 0; currency = -1; } }
+            if (row.loan == null)
+            {
+                if (Bottomry.Take(row.pledge, box, currency < 0 ? Bottomry.LocalCurrency(box.region) : currency) != null)
+                { selected = 0; currency = -1; keptLoan = keptPledge = -1; lockedUntil = Time.unscaledTime + BookUI.ClickLock; }
+            }
             else if (Bottomry.InShipyard(row.pledge)) Loans.Notify("Move the " + Pledges.Name(row.loan.pledge) + " out of the shipyard first");
-            else Bottomry.RepayAtBox(row.loan, box);
+            else { Bottomry.RepayAtBox(row.loan, box); lockedUntil = Time.unscaledTime + BookUI.ClickLock; }
             Refresh();
         }
     }
@@ -1441,7 +1517,7 @@ namespace EconomyOverhaul
     internal sealed class BankruptcyPrompt
     {
         // Each button's plate (the ledger style puts the clickable surface under it) and its label.
-        private readonly GameObject button, yes, no, buttonLabel, yesLabel, noLabel; private readonly Func<int> region; private float until;
+        private readonly GameObject button, yes, no, buttonLabel, yesLabel, noLabel; private readonly Func<int> region; private float until, asked;
         internal bool Asking => yes && yes.activeSelf;
         internal BankruptcyPrompt(Transform parent, MeshRenderer native, Font font, string label, float x, float y, float width, float height,
             Func<int> region, Action after, out TextMesh text)
@@ -1450,7 +1526,9 @@ namespace EconomyOverhaul
             GameObject Plate(LoanAction a) => a.transform.parent != parent ? a.transform.parent.gameObject : a.gameObject;
             button = Plate(BookUI.Button(parent, native, font, label, x, y, width, height, Ask, tint, out text)); buttonLabel = text.gameObject;
             float half = (width - .012f) / 2, offset = (width - half) / 2;
-            yes = Plate(BookUI.Button(parent, native, font, "Yes", x + offset, y, half, height, () => { Stop(); Loans.Bankruptcy(region()); after?.Invoke(); }, tint, out var yesText));
+            // Yes covers the right half of the button just clicked: a double click there is not a Yes (ignored for half a second
+            // after the question appears; the review of 2026-10-18, Claude's fix).
+            yes = Plate(BookUI.Button(parent, native, font, "Yes", x + offset, y, half, height, () => { if (Time.unscaledTime < asked + BookUI.ClickLock) return; Stop(); Loans.Bankruptcy(region()); after?.Invoke(); }, tint, out var yesText));
             no = Plate(BookUI.Button(parent, native, font, "No", x - offset, y, half, height, Stop, Color.white, out var noText));
             yesLabel = yesText.gameObject; noLabel = noText.gameObject;
             Stop();
@@ -1463,7 +1541,7 @@ namespace EconomyOverhaul
         private void Ask()
         {
             var refusal = Loans.BankruptcyRefusal(region()); if (refusal != null) { Loans.Notify(refusal); return; }
-            Show(true); until = Time.unscaledTime + 15;
+            Show(true); asked = Time.unscaledTime; until = asked + 15;
         }
         internal void Stop() { if (yes) Show(false); }
         // Called while the book is open: the question lapses after 15 seconds.
@@ -1485,6 +1563,8 @@ namespace EconomyOverhaul
     {
         internal static readonly Color Ink = Color.black, Warning = Color.black;
         private const float TextScale = .8f;
+        // Seconds a button that changed the rows or asked a question ignores the next click (a double click acts once).
+        internal const float ClickLock = .5f;
         internal static string RegionName(int r) => r == 0 ? "Al'Ankh" : r == 1 ? "Emerald" : r == 2 ? "Aestrin" : "Chronos";
         internal static string Credit(double value, int r) => double.IsPositiveInfinity(value) ? "Unlimited" : Math.Floor(value * Loans.Rate(r)).ToString("N0");
         internal static float MeasureLine(TextMesh text, string value)
@@ -1699,9 +1779,7 @@ namespace EconomyOverhaul
                 p.z = -(.431f + (frontY - .431f) * .88f); row.transform.position = frame.TransformPoint(p);
                 var s = row.transform.localScale; s.y *= .88f; row.transform.localScale = s;
             }
-            var conversion = Fields.Get<TextMesh>(ui, "textConversionInfo").transform;
-            conversion.position += frame.TransformVector(Vector3.back * .041f);
-            BulkTradeUI.Attach(ui, loan, loanText);
+            BulkTradeUI.Attach(ui, loan, loanText);   // it also puts the conversion note in its own place (CreateCartControl)
             root.SetActive(false);
         }
         private void LateUpdate()
@@ -1776,7 +1854,7 @@ namespace EconomyOverhaul
         private readonly Dictionary<Material, Texture> plateTextures = new Dictionary<Material, Texture>();
         private MeshRenderer[] separators = new MeshRenderer[4], bottomrySeparators = new MeshRenderer[3]; private Material dividerMaterial;
         private int selected, pageIndex, bottomryPageIndex;
-        private float timer;
+        private float timer, repaidAt = -10;
         internal static void Attach(MissionListUI ui)
         { if (EconomyUI.instance && !ui.GetComponent<LedgerUI>()) ui.gameObject.AddComponent<LedgerUI>().Build(ui); }
         private void Build(MissionListUI ui)
@@ -2018,7 +2096,13 @@ namespace EconomyOverhaul
             }
             bottomryPageLabel.text = "Page " + (bottomryPageIndex + 1) + " / " + pages;
         }
-        private void RepayRow(int row) { if (Bottomry.RepayRemote(shownLoans[row])) Refresh(); }
+        // After a repayment the row holds the next loan: a double click repays one (the second click ignored for half a second; the
+        // review of 2026-10-18, Claude's fix).
+        private void RepayRow(int row)
+        {
+            if (Time.unscaledTime < repaidAt + BookUI.ClickLock) return;
+            if (Bottomry.RepayRemote(shownLoans[row])) { repaidAt = Time.unscaledTime; Refresh(); }
+        }
         // Two label lines on one plate need a smaller font than BookUI.Button gives.
         private static void ScaleLabel(TextMesh label, float factor)
         {
@@ -2358,7 +2442,7 @@ namespace EconomyOverhaul
             if (!Is(b)) return "Not your rental";
             var lenders = Bottomry.On(Current.ship).Select(l => BookUI.RegionName(l.region)).Distinct().ToArray();
             if (lenders.Length > 0) return "Pledged in " + string.Join(", ", lenders) + ": repay the loan first";
-            if (!Moored(b)) return HasCleats(b) ? "Moor her at the two red cleats of her berth" : "Anchor or tie her up at her berth";
+            if (!Moored(b)) return HasCleats(b) ? "Moor it at the two red cleats of its berth" : "Anchor or tie it up at its berth";
             return null;
         }
         internal static bool Return(PurchasableBoat b)
@@ -2455,15 +2539,17 @@ namespace EconomyOverhaul
         }
         // A bankrupt lender's loans on her take back what they paid out (as on any pledge) and are forgiven; the lender takes
         // her back (never pledged again), her other loans are charged and the rental ends with its bill. Bankruptcy in her
-        // home region, or in all regions, is refused while she is rented (Loans.BankruptcyRefusal).
-        internal static void Bankruptcy(int region)
+        // home region, or in all regions, is refused while she is rented (Loans.BankruptcyRefusal). True: the rental ended (its
+        // notice shown).
+        internal static bool Bankruptcy(int region)
         {
-            var r = Current; if (r == null) return;
-            var forgiven = Bottomry.On(r.ship).Where(l => l.region == region).ToArray(); if (forgiven.Length == 0) return;
+            var r = Current; if (r == null) return false;
+            var forgiven = Bottomry.On(r.ship).Where(l => l.region == region).ToArray(); if (forgiven.Length == 0) return false;
             foreach (var l in forgiven) { Bottomry.TakeBack(l); World.State.bottomry.Remove(l); }
             if (!World.State.burned.Contains(r.ship)) World.State.burned.Add(r.ship);
             ChargeLoans(r.ship);
             ForcedEnd(Ship(), Ending.Lender, DaysDue, null, "Bankruptcy in " + BookUI.RegionName(region) + ": the lender took the " + Name(r.ship) + " back");
+            return true;
         }
         // A lender takes the pledged rental (day 11, or short at a box): the rest of that loan and every other loan on her are
         // charged, and the rental ends with its bill.
@@ -2522,7 +2608,8 @@ namespace EconomyOverhaul
             if (!buy) { Destroy(scroll); scroll = null; return; }
             var plate = buy.gameObject; DestroyImmediate(buy);
             foreach (var extra in plate.GetComponents<Component>()) if (extra && extra.GetType().Name == "Outline") DestroyImmediate(extra);
-            button = plate.AddComponent<LoanAction>(); button.action = Open; button.lookText = "Boat rental";
+            // no look text while pointed at (the user, 2026-10-18: the hint removed), as the game's own sale sign
+            button = plate.AddComponent<LoanAction>(); button.action = Open; button.lookText = "";
             var texts = scroll.GetComponentsInChildren<TextMesh>(true);
             label = texts.FirstOrDefault(t => t.transform.parent == plate.transform.parent);
             text = texts.FirstOrDefault(t => t != label);
@@ -2555,11 +2642,11 @@ namespace EconomyOverhaul
             bool show = World.Ready && (rented ? Rentals.Moored(boat) : Rentals.ForRent(boat));
             if (scroll.activeSelf != show) scroll.SetActive(show);
             if (!show) return;
-            if (rented) { text.text = "RETURN BOAT\n\nmoored at her berth"; label.text = "Return"; button.lookText = "Return boat"; return; }
+            if (rented) { text.text = "RETURN BOAT\n\nmoored at her berth"; label.text = "Return"; return; }
             int region = Rentals.HomeRegion(boat), currency = Rentals.Currency(region);
             text.text = Reputations.Level(region) < Rules.RentalLevel ? "BOAT RENTAL\n\nneeds " + BookUI.RegionName(region) + " rep. " + Rules.RentalLevel
                 : "BOAT RENTAL\n\n" + Rentals.Money(Rules.RentalDaily(Rentals.Value(boat, currency)), currency) + " a day";
-            label.text = "Rent"; button.lookText = "Boat rental";
+            label.text = "Rent";
         }
         // While the player is aboard the rental: her home cleats glow red until one of her ropes is tied there, then in
         // the game's orange-yellow hint colour; with both tied the glow stops. Notes once when another ship holds one.
@@ -2739,12 +2826,12 @@ namespace EconomyOverhaul
                 leftLabels[0].text = "Deposit:"; leftValues[0].text = Rentals.Money(Rules.RentalDeposit(value), currency); leftNotes[0].text = "refunded on return";
                 leftLabels[1].text = "Daily rent:"; leftValues[1].text = Rentals.Money(Rules.RentalDaily(value), currency); leftNotes[1].text = "taken every " + Rules.RentalPeriod + " days";
                 leftLabels[2].text = "Needs:"; leftValues[2].text = BookUI.RegionName(region) + " reputation " + Rules.RentalLevel; leftNotes[2].text = "you have level " + level;
-                rightLabels[0].text = "To return her:";
-                rightValues[0].text = Rentals.HasCleats(boat) ? "moor her at the two\nred cleats of this berth" : "anchor or tie her up\nat this berth";
+                rightLabels[0].text = "To return the ship:";
+                rightValues[0].text = Rentals.HasCleats(boat) ? "moor it at the two\nred cleats of this berth" : "anchor or tie it up\nat this berth";
                 rightLabels[1].text = "Not repaired or not clean?"; rightValues[1].text = "you pay double the repair\nand cleaning fee";
                 // A refusal takes the info line.
                 var refusal = Rentals.Refusal(boat);
-                info.text = refusal ?? "If you can't pay the rent when it is due, she is\ntaken home and you are sent to your own ship.";
+                info.text = refusal ?? "If you can't pay the rent when it is due, the ship will\nbe forced retrieved and you are sent to your own ship.";
                 status.text = "";
                 confirmText.text = "Confirm rent"; confirm.lookText = "Confirm rent"; Enable(refusal == null);
                 return;
@@ -2765,6 +2852,21 @@ namespace EconomyOverhaul
             var why = Rentals.ReturnRefusal(boat);
             status.text = why ?? "";
             confirmText.text = "Return"; confirm.lookText = "Return"; Enable(why == null);
+        }
+    }
+    // Escape (or F10, or the pad's back button) closes the rental scroll, as the game's StartMenu.LateUpdate closes its own trade and
+    // exchange books. It knows only its own, so it opened the settings over the scroll, and leaving them locked the cursor while the
+    // scroll kept the player's control off (the review of 2026-10-18, Claude's fix). The game's own conditions for that key. Not when
+    // an earlier mod's prefix has used the press (it skips the game's handling: Sailwind Player Model closing its own pause menu,
+    // RadFixes leaving the boat camera's settings), so one press closes one thing.
+    [HarmonyPatch(typeof(StartMenu), "LateUpdate")] internal static class RentalPanelEscapePatch
+    {
+        static bool Prefix(bool __runOriginal)
+        {
+            if (!__runOriginal) return false;
+            if (!RentalPanel.IsOpen || !GameState.playing || GameState.currentlyLoading || GameState.currentShipyard) return true;
+            if (!Input.GetKeyDown(KeyCode.Escape) && !Input.GetKeyDown(KeyCode.F10) && !Input.GetKeyDown(KeyCode.JoystickButton6)) return true;
+            RentalPanel.Close(); return false;
         }
     }
 

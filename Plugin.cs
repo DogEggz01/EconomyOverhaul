@@ -38,7 +38,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "0.10.1";
+        public const string Version = "1.0.0";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -76,7 +76,10 @@ namespace EconomyOverhaul
             if (!Startup.Running) BottleneckCompatibility.Poll();
             if (Startup.IsPreparing) Startup.Pump(); else World.Tick();
             Startup.SaveWhenReady();
+            World.SaveRetryTick();
+            VisibleTraders.Update();
         }
+        private void FixedUpdate() => VisibleTraders.FixedUpdate();
         private void OnGUI() { Startup.Draw(); World.DrawSaveWarning(); }
         private IEnumerator Start()
         {
@@ -142,9 +145,10 @@ namespace EconomyOverhaul
             Startup.Cancel();
             TradeBook.Reset();
             Ready = false; Loading = false; SaveBlocked = false; SaveOffAdvice = ReloadAdvice; State = new SaveState();
+            saveFailures = 0; retryAt = -1; keepLastGood = false;
             Fleet.BeginRegistrationGrace();
             Markets.Clear(); Cargo.Clear(); Removed.Clear(); Missions.Reset(); Missions.DeliveredItems.Clear();
-            Tarps.Clear(); Uninstall.Reset();
+            Tarps.Clear(); Uninstall.Reset(); VisibleTraders.Reset();
         }
         internal static void NewGame()
         {
@@ -162,9 +166,14 @@ namespace EconomyOverhaul
             if (!GameState.playing || GameState.currentShipyard || (EconomyUI.instance && EconomyUI.instance.uiActive)) return;
             double dt = Time.deltaTime * Sun.sun.timescale / .008;
             State.trafficTime += dt;
+            VisibleTraders.TrafficDt = dt;
             Fleet.Tick(dt);
         }
-        internal static void Save()
+        internal static void Save() => Save(true);
+        // write false: everything but the writing, for the check before the game saves (CanSave). The writing (the state as JSON,
+        // about 315 ms for its 4.7 million characters, vt-ropes-4) is done once a save, in the game's SaveModData (SaveForGame); it
+        // was done in both until 2026-10-20 (the user: "make the mod serialize its economy once per save (keep the safety check)").
+        private static void Save(bool write)
         {
             // After the uninstall button the save carries no data of the mod (MIDSAVE_DRAFT.md).
             if (Uninstall.Prepared) { GameState.modData.Remove(Plugin.Guid); return; }
@@ -176,26 +185,87 @@ namespace EconomyOverhaul
             State.tarps = Tarps.Records();
             State.savedHour = CalendarHour;
             StateCodec.Validate(State);
-            GameState.modData[Plugin.Guid] = StateCodec.Write(State);
+            if (write) GameState.modData[Plugin.Guid] = StateCodec.Write(State);
+        }
+        // The game's save (SaveLoadManager.DoSaveGame, through SaveModData at the end of the frame CanSave passed in): the state
+        // checked again and written. Should it fail there, the game's save is stopped before its file is made (the exception ends
+        // DoSaveGame; SaveSlots.PushBackups and the file come after SaveModData), so the last save stays as it was; saving turns
+        // off as after a failed check, and the game's busy flag is cleared (the stopped coroutine never clears it, and every later
+        // save would be refused as "not ready").
+        private static readonly System.Reflection.FieldInfo saveBusy = AccessTools.Field(typeof(SaveLoadManager), "busy");
+        internal static void SaveForGame(SaveLoadManager manager)
+        {
+            // the economy left as the last save wrote it (SaveFailed: the tries used up): the game saves with that
+            if (keepLastGood) { keepLastGood = false; return; }
+            try { Save(true); saveFailures = 0; }
+            catch (Exception e)
+            {
+                // (preparation not done is a deferred save, not a damaged state: CanSave refuses it before, so only a save the
+                // guard did not see reaches here; stopped all the same)
+                if (manager) saveBusy?.SetValue(manager, false);
+                if (Startup.BlocksGameplay) throw;
+                if (SaveFailed(e, true, "while the game saved")) throw;   // this save stopped before its file; tried again soon
+            }
+        }
+        // A save whose economy fails (the user, 2026-10-20, of saving turned off until a reload: "no this is very inconvient,
+        // default save time is 15min and what you do here waste player time"; then "1+2"): (1) that save waits and is tried again
+        // 5 s later, up to 3 times; (2) then the game saves with the economy's last good data (the payload the last save wrote; the
+        // other mods' and the game's data as now) and the notice says so; the next save tries the economy again. Saving is never
+        // turned off for it (SaveBlocked stays for a save whose economy could not be read at its load). A failure is a fault, not
+        // play (StateCodec.Validate: numbers out of range, a port the mod does not manage, a missing list), so each is logged.
+        // Returns whether this save is to wait.
+        internal const int SaveRetries = 3;
+        internal const float SaveRetryDelay = 5f;
+        private static int saveFailures;
+        private static float retryAt = -1;
+        private static bool retryCompressed = true, keepLastGood;
+        internal static int SaveFailures => saveFailures;
+        internal static bool SaveRetryPending => retryAt >= 0;
+        internal const string SaveRetryNotice = "EconomyOverhaul could not save the economy; trying again in a few seconds.";
+        internal const string LastGoodNotice = "EconomyOverhaul could not save the economy; the game was saved with the economy of your last save. See BepInEx log.";
+        private static bool SaveFailed(Exception e, bool compressed, string when)
+        {
+            saveFailures++;
+            if (saveFailures <= SaveRetries)
+            {
+                Plugin.Log?.LogError("Economic save failed " + when + " (try " + saveFailures + " of " + (SaveRetries + 1) + "); this save waits, tried again in " + SaveRetryDelay + " s. " + e);
+                retryAt = Time.realtimeSinceStartup + SaveRetryDelay; retryCompressed = compressed;
+                Loans.Notify(SaveRetryNotice);
+                return true;
+            }
+            Plugin.Log?.LogError("Economic save failed " + when + " (try " + saveFailures + " of " + (SaveRetries + 1) + "); the game saves with the economy of the last save. " + e);
+            saveFailures = 0; retryAt = -1;
+            Loans.Notify(LastGoodNotice);
+            return false;
+        }
+        // Each frame (Plugin.Update): a waiting save tried again once the game can save.
+        internal static void SaveRetryTick()
+        {
+            if (retryAt < 0 || Time.realtimeSinceStartup < retryAt) return;
+            var m = SaveLoadManager.instance;
+            if (!m || !GameState.playing || GameState.currentlyLoading || !SaveLoadManager.readyToSave || GameState.inBed || GameState.currentShipyard ||
+                (saveBusy != null && (bool)saveBusy.GetValue(m))) { retryAt = Time.realtimeSinceStartup + 1f; return; }
+            retryAt = -1;
+            m.SaveGame(retryCompressed);
         }
         // What the player can do while saving is off: a save this version cannot read (one from an older version) never will,
         // so start a new game; otherwise the last save was kept as it was, so reload it.
         private const string ReloadAdvice = "Reload your save", NewGameAdvice = "Start a new game";
         private static string SaveOffAdvice = ReloadAdvice;
         internal static string SaveOffNotice => "EconomyOverhaul save error. " + SaveOffAdvice + "; see BepInEx log.";
-        // Every save the game tries while saving is off says so again.
-        internal static bool CanSave()
+        // Every save the game tries while saving is off (a save whose economy could not be read at its load) says so again; a
+        // failed check waits and is tried again, then saves with the last good economy (SaveFailed).
+        internal static bool CanSave(bool compressed = true)
         {
             if (SaveBlocked) { Loans.Notify(SaveOffNotice); return false; }
             if (Startup.BlocksGameplay) return false;
             if (!Ready) return true;
-            try { Save(); return true; }
+            try { Save(false); return true; }
             catch (Exception e)
             {
-                SaveBlocked = true;
-                Plugin.Log?.LogError("Economic save validation failed before writing; previous save protected. " + e);
-                Loans.Notify(SaveOffNotice);
-                return false;
+                if (SaveFailed(e, compressed, "at the check before the game's save")) return false;
+                keepLastGood = true;   // the tries used up: the game saves now, its economy as the last save wrote it
+                return true;
             }
         }
         private static GUIStyle warningStyle;
@@ -259,11 +329,17 @@ namespace EconomyOverhaul
                 foreach (var row in Supply.ManagedRows())
                 {
                     var m = Market(row.Port); var office = m ? m.GetComponent<IslandMissionOffice>() : null;
-                    if (office) Missions.Migrate(m, office, MarketData(row.Port));
+                    // One port's failure is logged and the others go on: an exception here ends the game's LoadGame, and the
+                    // save hangs on the loading screen (a player's 0.10.1 report). That port's warehouse keeps its old goods;
+                    // the warehouse cycle resizes it in play (Missions.Resize).
+                    try { if (office) Missions.Migrate(m, office, MarketData(row.Port)); }
+                    catch (Exception e) { Plugin.Log.LogError("Warehouse migration failed at port " + row.Port + "; its old warehouse is kept. " + e); }
                 }
                 Plugin.Log.LogInfo("Mission warehouses migrated to state version 5 (port capacity + 100, 80% filled).");
-                State.version = 5;
             }
+            // Every migration done (a version-4 or -5 save's reports joined at its read, StateCodec.Share; its warehouses above):
+            // written as the current version from now on.
+            State.version = SaveState.Current;
             Ready = true; Loading = false; Fx.Ensure(); Fx.Sync(); Fleet.BeginRegistrationGrace(); Economy.Configure(); TradeBook.Loaded(); Bottomry.Loaded(); Rentals.Loaded(); Tarps.Loaded(); Missions.Loaded();
             // Refresh each market's own current quotes after a curve upgrade. Foreign
             // reports and fleet-carried stock observations remain stale as before.
@@ -290,7 +366,7 @@ namespace EconomyOverhaul
         static void Prefix() { World.Reset(); World.Loading = true; GameState.modData.Remove(Plugin.Guid); }
         static void Postfix() { World.Loading = false; }
     }
-    [HarmonyPatch(typeof(SaveLoadManager), "SaveModData")] internal static class SavePatch { static void Prefix() => World.Save(); }
+    [HarmonyPatch(typeof(SaveLoadManager), "SaveModData")] internal static class SavePatch { static void Prefix(SaveLoadManager __instance) => World.SaveForGame(__instance); }
     [HarmonyPatch(typeof(SaveLoadManager), "LoadModData")] internal static class LoadPatch { static void Postfix() => World.Load(); }
     [HarmonyPatch(typeof(SaveLoadManager), "SaveGame")] internal static class ProtectSavePatch { static bool Prefix(bool compressed) => Startup.RequestSave(compressed); }
 
@@ -306,6 +382,9 @@ namespace EconomyOverhaul
         internal static bool TarpWearing => TarpWear?.Value ?? true;
         private static bool tarpWearWas = true;   // the option's value before its last change
         internal static bool WaterHintEnabled => WaterDamageHint?.Value ?? true;
+        // Visible traders (the user, 2026-10-18: on by default; off, the traders run exactly as today, unseen).
+        internal static ConfigEntry<bool> VisibleTraders;
+        internal static bool VisibleTradersEnabled => VisibleTraders?.Value ?? true;
         internal static void Bind(ConfigFile config)
         {
             WaterDamage = config.Bind("Cargo", "Enable water damage", true,
@@ -335,6 +414,9 @@ namespace EconomyOverhaul
             // Each tarp's health so far, worn as the option was, becomes its start from now (user, 2026-10-09).
             TarpWear.SettingChanged += (s,e) => { tarpWearWas = Tarps.Rebase(tarpWearWas); };
             tarpWearWas = TarpWear.Value;
+            VisibleTraders = config.Bind("Traders", "Visible traders", true,
+                "Draw the trader fleet's ships on the sea within 3 km of you: sailing their lanes, lying at their ports' berths and anchorages, a lantern on each mast at night, their main cargo on deck. When off, the traders sail unseen as before; the trade is the same either way.");
+            VisibleTraders.SettingChanged += (s,e) => EconomyOverhaul.VisibleTraders.SettingChanged();
             // A button, not a setting (MIDSAVE_DRAFT.md): its stored value is never used.
             config.Bind("Uninstall", "Prepare to uninstall", "", new ConfigDescription(
                 "Before removing the mod from a running game: ends a ship rental and charges open loans, removes every item of the mod (wood planks and their bundles, canvas packs and tarps, wood poles and their bundles) and stops the mod. Then save, quit and remove the mod. Click twice to confirm.",
@@ -406,10 +488,16 @@ namespace EconomyOverhaul
     }
 
     // ---- Save state ----
-    // Every field is required: a save without one (an older version) is refused.
+    // The serializer (DataContractJsonSerializer) refuses a save that lacks a field unless the field is [OptionalField]: a field
+    // added after 0.8.5 (the first public release) must be, and reads 0 or null when missing (no constructor runs; StateCodec.Read
+    // fills the lists an older save lacks). StateCodec.Validate then refuses a save whose records are missing or out of range.
     [Serializable] public sealed class SaveState
     {
-        public int version = 5;   // 5 since the warehouse rework (2026-10-14); a version-4 save is read and migrated
+        // 6 since each price report is written once (SAVE_SIZE_DRAFT.md, 2026-10-20), 5 since the warehouse rework (2026-10-14). A
+        // version-4 or -5 save is read and migrated (StateCodec.Read joins its reports, World.Load its warehouses); 0.10.8 and
+        // older refuse a version-6 save (the user: "only implement old saves into new mod version").
+        internal const int Current = 6;
+        public int version = Current;
         public int chronosReputation;
         public FxState fx;
         public double trafficTime;
@@ -447,6 +535,10 @@ namespace EconomyOverhaul
         [System.Runtime.Serialization.OptionalField] public double savedHour;
         // Dynamic demand events (2026-10-16): optional, none in older saves (5 made at the first midnight).
         [System.Runtime.Serialization.OptionalField] public DemandState demand;
+        // Version 6: the distinct price reports, which the markets' and traders' report lists point into by number
+        // (MarketState.reportIds and incomingIds, BoatState.reportIds). Only in the written copy (StateCodec.Write); null in memory.
+        [System.Runtime.Serialization.OptionalField] public List<ReportState> reportTable;
+        internal SaveState Copy() => (SaveState)MemberwiseClone();
     }
 
     internal static class StateCodec
@@ -457,17 +549,107 @@ namespace EconomyOverhaul
             new DataContractJsonSerializerSettings { MaxItemsInObjectGraph = int.MaxValue });
         internal static string Write(SaveState state)
         {
-            using (var stream = new MemoryStream()) { Serializer().WriteObject(stream, state); return Encoding.UTF8.GetString(stream.ToArray()); }
+            // Only a migrated state (World.Load sets the version after its migrations): a version-4 state written as 6 would skip
+            // its warehouse migration at the next load.
+            if (state == null || state.version != SaveState.Current) throw new InvalidDataException("Economic state of version " + state?.version + " is not migrated to " + SaveState.Current);
+            using (var stream = new MemoryStream()) { Serializer().WriteObject(stream, Tabled(state)); return Encoding.UTF8.GetString(stream.ToArray()); }
+        }
+        // Version 6 (SAVE_SIZE_DRAFT.md, option A): a report is made once and passed on by reference (a market's own and incoming
+        // lists, the traders'), but the serializer writes each reference in full (2,805 reports for 510 distinct, 3.6 MB of the
+        // 4.8, vt-ropes-6). The written copy holds each report once in reportTable, numbered in the order first met, and every
+        // list as numbers into it; the live state is not changed (shallow copies of the state, the markets and the traders).
+        private static SaveState Tabled(SaveState state)
+        {
+            var table = new List<ReportState>(); var numbers = new Dictionary<ReportState, int>();   // ReportState has no Equals: by reference
+            int[] Numbers(List<ReportState> reports)
+            {
+                if (reports == null) return null;
+                var ids = new int[reports.Count];
+                for (int i = 0; i < ids.Length; i++)
+                {
+                    var r = reports[i] ?? throw new InvalidDataException("Economic state holds an empty price report");
+                    if (!numbers.TryGetValue(r, out int id)) { id = table.Count; numbers.Add(r, id); table.Add(r); }
+                    ids[i] = id;
+                }
+                return ids;
+            }
+            var copy = state.Copy(); copy.reportTable = table;
+            copy.markets = state.markets?.Select(m =>
+            {
+                if (m == null) return null;
+                var c = m.Copy(); c.reportIds = Numbers(m.reports); c.incomingIds = Numbers(m.incoming); c.reports = c.incoming = null; return c;
+            }).ToList();
+            copy.fleet = state.fleet?.Select(b =>
+            {
+                if (b == null) return null;
+                var c = b.Copy(); c.reportIds = Numbers(b.reports); c.reports = null; return c;
+            }).ToList();
+            return copy;
+        }
+        // A version-6 save: every list's numbers turned back into the table's reports, shared again as before the save. A table
+        // missing or holding a damaged report, or a number outside it, refuses the save; a list without numbers is left null
+        // (Validate refuses a market's or trader's missing reports; a market's incoming may be null, as in play).
+        private static void Untable(SaveState s)
+        {
+            var table = s.reportTable;
+            if (table == null || !table.All(Report)) throw new InvalidDataException("Economic save's price report table is missing or damaged");
+            List<ReportState> Reports(int[] ids)
+            {
+                if (ids == null) return null;
+                var list = new List<ReportState>(ids.Length);
+                foreach (int id in ids)
+                {
+                    if (id < 0 || id >= table.Count) throw new InvalidDataException("Economic save's price report " + id + " is outside its table of " + table.Count);
+                    list.Add(table[id]);
+                }
+                return list;
+            }
+            if (s.markets != null) foreach (var m in s.markets) if (m != null) { m.reports = Reports(m.reportIds); m.incoming = Reports(m.incomingIds); m.reportIds = m.incomingIds = null; }
+            if (s.fleet != null) foreach (var b in s.fleet) if (b != null) { b.reports = Reports(b.reportIds); b.reportIds = null; }
+            s.reportTable = null;
+        }
+        // The migration of a version-4 or -5 save (0.8.5-0.10.8; the user: "remember about the migration when you build a"): it
+        // wrote every reference to a report in full, and its read made each a separate object (2,805 for 510). A report never
+        // changes once made (Economy.CaptureReport), so copies equal in every field are one report: each list's copies are
+        // joined into one shared object, as in play before that save, and the next save (version 6) writes each once.
+        private static void Share(SaveState s)
+        {
+            var shared = new Dictionary<ReportState, ReportState>(SameReport.Instance); int total = 0;
+            void Join(List<ReportState> reports)
+            {
+                if (reports == null) return;
+                for (int i = 0; i < reports.Count; i++, total++)
+                    if (shared.TryGetValue(reports[i], out var one)) reports[i] = one; else shared.Add(reports[i], reports[i]);
+            }
+            foreach (var m in s.markets) { Join(m.reports); Join(m.incoming); }
+            foreach (var b in s.fleet) Join(b.reports);
+            Plugin.Log?.LogInfo("Economic save of state version " + s.version + ": its " + total + " price reports joined into " + shared.Count + " shared ones (written as version " + SaveState.Current + " from the next save).");
+        }
+        // Equal in every field (after Validate: no report or array is null).
+        private sealed class SameReport : IEqualityComparer<ReportState>
+        {
+            internal static readonly SameReport Instance = new SameReport();
+            public bool Equals(ReportState a, ReportState b) => ReferenceEquals(a, b) || a != null && b != null && a.port == b.port && a.day == b.day &&
+                a.approved == b.approved && a.cap.Equals(b.cap) && a.surplus.Equals(b.surplus) && a.deficit.Equals(b.deficit) &&
+                a.supply.SequenceEqual(b.supply) && a.values.SequenceEqual(b.values) && a.buy.SequenceEqual(b.buy) && a.sell.SequenceEqual(b.sell);
+            public int GetHashCode(ReportState r) => unchecked(((r.port * 397) ^ r.day) * 397 ^ r.cap.GetHashCode());
         }
         internal static SaveState Read(string json)
         {
             using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
             {
                 var result = (SaveState)Serializer().ReadObject(stream);
+                if (result?.version == SaveState.Current) Untable(result);
                 if (result != null && result.tarps == null) result.tarps = new List<TarpState>();   // a 0.8.5 save
                 // Demand data from a build before the tavern (stage 3) has no heard list: an empty one, not a refused save.
                 if (result?.demand != null && result.demand.heard == null) result.demand.heard = new List<int>();
-                Validate(result); return result;
+                Validate(result);
+                if (result.version < SaveState.Current) Share(result);
+                // Every trader sails at its group's speed in the fleet table, also in a game saved before the table changed (the
+                // user, 2026-10-18: the small and heavy buff reaches existing games), and waits its group's wait in port (the medium
+                // locals' and the Happy Bay trader's since the sail plans, 2026-10-19); a trip or a wait under way keeps its time left.
+                foreach (var b in result.fleet) { var d = FleetDefinitions.Current.FirstOrDefault(x => x.Matches(b)); if (d != null) { b.speed = d.Speed; b.wait = d.Wait; } }
+                return result;
             }
         }
         private static bool Finite(double n) => !double.IsNaN(n) && !double.IsInfinity(n);
@@ -481,7 +663,7 @@ namespace EconomyOverhaul
             (d.group == null || FleetDefinitions.KnownGroup(d.group));
         internal static void Validate(SaveState s)
         {
-            bool valid = s != null && (s.version == 4 || s.version == 5) &&s.chronosReputation >= 0 && s.chronosReputation <= Reputations.Cap && s.markets != null && s.fleet != null && s.cargo != null && s.missions != null &&
+            bool valid = s != null && s.version >= 4 && s.version <= SaveState.Current && s.chronosReputation >= 0 && s.chronosReputation <= Reputations.Cap && s.markets != null && s.fleet != null && s.cargo != null && s.missions != null &&
                 s.fractionalPenalty?.Length == 4 && s.removedCargo != null &&
                 Finite(s.trafficTime) && s.fractionalPenalty.All(x => Finite(x) && x >= 0 && x < 1) && Finite(s.savedHour) && s.savedHour >= 0 &&
                 Finite(s.loanPauseUntil) && s.bottomry != null && s.seized != null && s.bottomryNextId >= 0 &&
@@ -507,7 +689,7 @@ namespace EconomyOverhaul
             valid &= s.fleet.Count == FleetDefinitions.Total && s.fleet.All(b => b != null && PortId(b.origin) && (b.destination == -1 || PortId(b.destination)) &&
                 b.units > 0 && b.units <= (b.group == "chronos" ? 150 : 120) && b.weight > 0 && b.speed > 0 && Finite(b.speed) && Finite(b.wait) && Finite(b.remaining) && Finite(b.trip) &&
                 b.network != null && b.network.Length > 0 && b.network.All(PortId) && b.goods != null && b.goods.Length <= b.units &&
-                b.goods.All(g => g > 0 && g < 65 && g != 45 && g != 51) && b.reports != null && b.reports.All(Report) &&
+                b.goods.All(g => g > 0 && g < 65 && g != 45 && g != 51) && b.reports != null && b.reports.All(Report) && b.lane >= 0 && b.lane < 16 &&
                 FleetDefinitions.KnownGroup(b.group)) && s.fleet.Select(b => b.id).Distinct().Count() == s.fleet.Count;
             valid &= s.missions.All(m => m != null && PortId(m.origin) && PortId(m.destination) && m.creditedDeliveries >= 0 &&
                 m.category >= (int)MissionCategory.None && m.category <= (int)MissionCategory.Luxury && m.modifiers >= 0 && m.modifiers <= 15);
@@ -790,7 +972,7 @@ namespace EconomyOverhaul
         internal static bool RequestSave(bool compressed)
         {
             if (IsPreparing) { deferredSave = compressed; return false; }
-            return World.CanSave();
+            return World.CanSave(compressed);
         }
         internal static void SaveWhenReady()
         {
@@ -871,6 +1053,19 @@ namespace EconomyOverhaul
                 cycle(); count++;
             }
             return count; // Any negative remainder is saved backlog, not discarded time.
+        }
+        // The same, the cycle's state passed in: the markets' and the warehouses' clocks advance every frame, and their lambdas then
+        // capture nothing, so no closure or delegate is made each time (the review of 2026-10-18).
+        internal static int Advance<T>(ref double remaining, double elapsed, double interval, int budget, T state, Action<T> cycle, Func<T, bool> blocked = null)
+        {
+            remaining -= elapsed;
+            int count = 0;
+            while (remaining <= 0 && count < budget && !(blocked != null && blocked(state)))
+            {
+                remaining += interval;
+                cycle(state); count++;
+            }
+            return count;
         }
     }
 
