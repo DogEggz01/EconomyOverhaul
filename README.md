@@ -143,6 +143,7 @@
   - If you still renting ship, you need to return the rented ship first.
 - Add Loan tab in Log menu. It record your current loan amount in each region, and each region's credit limit and interest rate.
   - Under loan tab there is also a bankruptcy button that will bankrupt you in all region. I'm not sure when you will need it but i will leave it here.
+- Repaying loan now give you small amount of rep. It's a percentage of current reputation needed, so you always have some progress.
 ## Respondentia Loan (Cargo loan)
 <img width="3840" height="2160" alt="2075C5~1" src="https://github.com/user-attachments/assets/63a67915-b383-4826-a224-0398a3cbc1c8" />
 
