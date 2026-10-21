@@ -38,7 +38,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "1.0.0";
+        public const string Version = "1.0.1";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -170,9 +170,10 @@ namespace EconomyOverhaul
             Fleet.Tick(dt);
         }
         internal static void Save() => Save(true);
-        // write false: everything but the writing, for the check before the game saves (CanSave). The writing (the state as JSON,
-        // about 315 ms for its 4.7 million characters, vt-ropes-4) is done once a save, in the game's SaveModData (SaveForGame); it
-        // was done in both until 2026-10-20 (the user: "make the mod serialize its economy once per save (keep the safety check)").
+        // write false: everything but the writing, for the check before the game saves (CanSave). The writing (since state version 7
+        // binary, StateCodec.Encode, about 15 ms; the JSON before it 100-110 ms, the probe savecodec) is done once a save, in the
+        // game's SaveModData (SaveForGame); it was done in both until 2026-10-20 (the user: "make the mod serialize its economy once
+        // per save (keep the safety check)").
         private static void Save(bool write)
         {
             // After the uninstall button the save carries no data of the mod (MIDSAVE_DRAFT.md).
@@ -185,7 +186,7 @@ namespace EconomyOverhaul
             State.tarps = Tarps.Records();
             State.savedHour = CalendarHour;
             StateCodec.Validate(State);
-            if (write) GameState.modData[Plugin.Guid] = StateCodec.Write(State);
+            if (write) GameState.modData[Plugin.Guid] = StateCodec.Encode(State);
         }
         // The game's save (SaveLoadManager.DoSaveGame, through SaveModData at the end of the frame CanSave passed in): the state
         // checked again and written. Should it fail there, the game's save is stopped before its file is made (the exception ends
@@ -294,8 +295,9 @@ namespace EconomyOverhaul
             {
                 try
                 {
-                    // Saves from before this version are not read (new games only): saving stays off to protect them.
-                    State = StateCodec.Read(json);
+                    // A save this version cannot read (a later version's, a damaged one) is kept: saving stays off to protect it.
+                    // Binary from state version 7, JSON for the released versions 4-6 (StateCodec.Decode).
+                    State = StateCodec.Decode(json);
                 }
                 catch (Exception e)
                 {
@@ -337,8 +339,8 @@ namespace EconomyOverhaul
                 }
                 Plugin.Log.LogInfo("Mission warehouses migrated to state version 5 (port capacity + 100, 80% filled).");
             }
-            // Every migration done (a version-4 or -5 save's reports joined at its read, StateCodec.Share; its warehouses above):
-            // written as the current version from now on.
+            // Every migration done (a version-4 or -5 save's reports joined at its read, StateCodec.Share; a version-6 save's table
+            // read, StateCodec.Untable; a version-4 save's warehouses above): written as the current version (binary) from now on.
             State.version = SaveState.Current;
             Ready = true; Loading = false; Fx.Ensure(); Fx.Sync(); Fleet.BeginRegistrationGrace(); Economy.Configure(); TradeBook.Loaded(); Bottomry.Loaded(); Rentals.Loaded(); Tarps.Loaded(); Missions.Loaded();
             // Refresh each market's own current quotes after a curve upgrade. Foreign
@@ -488,15 +490,18 @@ namespace EconomyOverhaul
     }
 
     // ---- Save state ----
-    // The serializer (DataContractJsonSerializer) refuses a save that lacks a field unless the field is [OptionalField]: a field
-    // added after 0.8.5 (the first public release) must be, and reads 0 or null when missing (no constructor runs; StateCodec.Read
-    // fills the lists an older save lacks). StateCodec.Validate then refuses a save whose records are missing or out of range.
+    // Both serializers (DataContractJsonSerializer for the released JSON saves, BinaryFormatter since version 7) refuse a save that
+    // lacks a field unless the field is [OptionalField]: a field added after 0.8.5 (the first public release) must be, and reads 0
+    // or null when missing (no constructor runs; StateCodec.Finish fills the lists an older save lacks). StateCodec.Validate then
+    // refuses a save whose records are missing or out of range. The binary save names every class and field: never rename, retype
+    // or move one (to another namespace); a change that must happen needs a mapping in StateCodec.TypeBinder and a version step.
     [Serializable] public sealed class SaveState
     {
-        // 6 since each price report is written once (SAVE_SIZE_DRAFT.md, 2026-10-20), 5 since the warehouse rework (2026-10-14). A
-        // version-4 or -5 save is read and migrated (StateCodec.Read joins its reports, World.Load its warehouses); 0.10.8 and
-        // older refuse a version-6 save (the user: "only implement old saves into new mod version").
-        internal const int Current = 6;
+        // 7 since the slot is binary (BINARY_SAVE_DRAFT.md, 2026-10-21), 6 since each price report is written once
+        // (SAVE_SIZE_DRAFT.md, 2026-10-20), 5 since the warehouse rework (2026-10-14). A version-4, -5 or -6 save (JSON) is read and
+        // migrated (StateCodec.Read joins or untables its reports, World.Load its warehouses); 1.0.0 and older refuse a version-7
+        // save (the user: "only implement old saves into new mod version").
+        internal const int Current = 7;
         public int version = Current;
         public int chronosReputation;
         public FxState fx;
@@ -536,7 +541,8 @@ namespace EconomyOverhaul
         // Dynamic demand events (2026-10-16): optional, none in older saves (5 made at the first midnight).
         [System.Runtime.Serialization.OptionalField] public DemandState demand;
         // Version 6: the distinct price reports, which the markets' and traders' report lists point into by number
-        // (MarketState.reportIds and incomingIds, BoatState.reportIds). Only in the written copy (StateCodec.Write); null in memory.
+        // (MarketState.reportIds and incomingIds, BoatState.reportIds). Only in the JSON copy (StateCodec.Write); null in memory and
+        // in the binary save (the formatter keeps shared reports shared by itself).
         [System.Runtime.Serialization.OptionalField] public List<ReportState> reportTable;
         internal SaveState Copy() => (SaveState)MemberwiseClone();
     }
@@ -547,6 +553,57 @@ namespace EconomyOverhaul
         // game's .NET serializer and verify the complete graph on the actual player.
         private static DataContractJsonSerializer Serializer() => new DataContractJsonSerializer(typeof(SaveState),
             new DataContractJsonSerializerSettings { MaxItemsInObjectGraph = int.MaxValue });
+
+        // State version 7 (BINARY_SAVE_DRAFT.md; the user, 2026-10-21): the game's slot holds BinaryPrefix and the Base64 of
+        // BinaryFormatter, the formatter the game writes its own save with. On the user's saves, in the game's Mono (the probe
+        // savecodec): written in 15-18 ms against the JSON's 99-110, read in 17-24 ms against 364-1,201, the same economy back. It
+        // keeps shared objects shared by itself, so the live state is written as it is (no report table). Write and Read stay JSON:
+        // they read the released saves (versions 4-6), and the tests and the QA build and compare states as JSON text.
+        internal const string BinaryPrefix = "EOB7:";
+        private static System.Runtime.Serialization.Formatters.Binary.BinaryFormatter Formatter() =>
+            new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter { Binder = TypeBinder.Instance };
+        internal static string Encode(SaveState state)
+        {
+            if (state == null || state.version != SaveState.Current) throw new InvalidDataException("Economic state of version " + state?.version + " is not migrated to " + SaveState.Current);
+            using (var stream = new MemoryStream()) { Formatter().Serialize(stream, state); return BinaryPrefix + Convert.ToBase64String(stream.GetBuffer(), 0, (int)stream.Length); }
+        }
+        // The one entry point for the game's slot: binary from version 7 on, anything else the JSON of a released save (Read). A
+        // damaged slot (cut short, a bad character, a class the binder cannot find) throws, and World.Load keeps the save untouched.
+        internal static SaveState Decode(string slot)
+        {
+            if (slot == null || !slot.StartsWith(BinaryPrefix, StringComparison.Ordinal)) return Read(slot);
+            SaveState result;
+            using (var stream = new MemoryStream(Convert.FromBase64String(slot.Substring(BinaryPrefix.Length))))
+                result = Formatter().Deserialize(stream) as SaveState ?? throw new InvalidDataException("Economic save's binary data holds no economic state");
+            if (result.version < 7) throw new InvalidDataException("Economic binary save of state version " + result.version);
+            return Finish(result);
+        }
+        // For inspection only (the QA and scratchpad tools; the user's B2: no setting in the game): a slot as JSON text, a binary
+        // slot read and written with Write, a JSON slot as it is.
+        internal static string SlotJson(string slot) => slot != null && slot.StartsWith(BinaryPrefix, StringComparison.Ordinal) ? Write(Decode(slot)) : slot;
+        // BinaryFormatter names each class with its assembly's full name, the version included, and the version changes with each
+        // release (EconomyOverhaul.csproj): every mention of this mod's assembly, also inside a generic type's arguments (a
+        // List<MarketState> names MarketState with its assembly), is read as the assembly running now, whatever its version. Other
+        // assemblies (mscorlib) as named, the one loaded first.
+        internal sealed class TypeBinder : System.Runtime.Serialization.SerializationBinder
+        {
+            internal static readonly TypeBinder Instance = new TypeBinder();
+            private static readonly Assembly Own = typeof(SaveState).Assembly;
+            private static readonly string OwnName = Own.GetName().Name;
+            private readonly Dictionary<string, Type> found = new Dictionary<string, Type>();
+            public override Type BindToType(string assemblyName, string typeName)
+            {
+                string name = typeName + ", " + assemblyName;
+                lock (found)
+                {
+                    if (!found.TryGetValue(name, out var type)) found.Add(name, type = Type.GetType(name, Resolve, null, true));
+                    return type;
+                }
+            }
+            private static Assembly Resolve(AssemblyName name) => name.Name == OwnName ? Own :
+                AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == name.Name) ?? Assembly.Load(name);
+        }
+
         internal static string Write(SaveState state)
         {
             // Only a migrated state (World.Load sets the version after its migrations): a version-4 state written as 6 would skip
@@ -636,21 +693,26 @@ namespace EconomyOverhaul
         }
         internal static SaveState Read(string json)
         {
-            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
-            {
-                var result = (SaveState)Serializer().ReadObject(stream);
-                if (result?.version == SaveState.Current) Untable(result);
-                if (result != null && result.tarps == null) result.tarps = new List<TarpState>();   // a 0.8.5 save
-                // Demand data from a build before the tavern (stage 3) has no heard list: an empty one, not a refused save.
-                if (result?.demand != null && result.demand.heard == null) result.demand.heard = new List<int>();
-                Validate(result);
-                if (result.version < SaveState.Current) Share(result);
-                // Every trader sails at its group's speed in the fleet table, also in a game saved before the table changed (the
-                // user, 2026-10-18: the small and heavy buff reaches existing games), and waits its group's wait in port (the medium
-                // locals' and the Happy Bay trader's since the sail plans, 2026-10-19); a trip or a wait under way keeps its time left.
-                foreach (var b in result.fleet) { var d = FleetDefinitions.Current.FirstOrDefault(x => x.Matches(b)); if (d != null) { b.speed = d.Speed; b.wait = d.Wait; } }
-                return result;
-            }
+            SaveState result;
+            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json))) result = (SaveState)Serializer().ReadObject(stream);
+            // JSON of version 6 (1.0.0's slot) and 7 (Write's text) holds the report table.
+            if (result?.version >= 6) Untable(result);
+            return Finish(result);
+        }
+        // After the read, JSON or binary alike: the lists an older save lacks, the check, an older save's copies of the reports
+        // joined, the fleet table.
+        private static SaveState Finish(SaveState result)
+        {
+            if (result != null && result.tarps == null) result.tarps = new List<TarpState>();   // a 0.8.5 save
+            // Demand data from a build before the tavern (stage 3) has no heard list: an empty one, not a refused save.
+            if (result?.demand != null && result.demand.heard == null) result.demand.heard = new List<int>();
+            Validate(result);
+            if (result.version < 6) Share(result);
+            // Every trader sails at its group's speed in the fleet table, also in a game saved before the table changed (the
+            // user, 2026-10-18: the small and heavy buff reaches existing games), and waits its group's wait in port (the medium
+            // locals' and the Happy Bay trader's since the sail plans, 2026-10-19); a trip or a wait under way keeps its time left.
+            foreach (var b in result.fleet) { var d = FleetDefinitions.Current.FirstOrDefault(x => x.Matches(b)); if (d != null) { b.speed = d.Speed; b.wait = d.Wait; } }
+            return result;
         }
         private static bool Finite(double n) => !double.IsNaN(n) && !double.IsInfinity(n);
         private static bool PortId(int id) => id == BottleneckCompatibility.PortId || id >= 0 && id < 34 && id != 7 && id != 8;

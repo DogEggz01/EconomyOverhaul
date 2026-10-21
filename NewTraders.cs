@@ -1038,6 +1038,73 @@ namespace EconomyOverhaul
         // EA blue lantern", "ffl-small will use blue EA lantern like Shuttle"), and the third independent Junk 134 too ("independant
         // junk 3 please use blue EA lantern", 2026-10-19); the rest their hull's.
         public static int TraderLantern(string plan, int hull) => plan == "happy" ? 111 : plan == "shuttle" || plan == "ffl-small" || plan == "indep-junk-3" ? 134 : TraderLantern(hull);
+        // The helmsmen's outfits (HELMSMEN_CHRONOS_DRAFT.md, the user, 2026-10-21): each outfit's style is its material, the game's
+        // NPC AlAnkh, NPC East (Emerald), NPC Medi (Aestrin), NPC East Swamp (Fire Fish Lagoon), NPC Senna, NPC Generic.
+        public const int OutfitAlAnkh = 0, OutfitEmerald = 1, OutfitAestrin = 2, OutfitLagoon = 3, OutfitSenna = 4, OutfitGeneric = 5;
+        public static readonly string[] OutfitNames = { "Al'Ankh", "Emerald", "Aestrin", "Lagoon", "Senna", "generic" };
+        public static int OutfitKind(string material)
+        {
+            if (material == null) return -1;
+            bool Has(string s) => material.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0;
+            return Has("AlAnkh") ? OutfitAlAnkh : Has("East Swamp") ? OutfitLagoon : Has("East") ? OutfitEmerald : Has("Medi") ? OutfitAestrin : Has("Senna") ? OutfitSenna : Has("Generic") ? OutfitGeneric : -1;
+        }
+        // An outfit's style: the one most of its worn parts' materials have (-1 when none is known).
+        public static int OutfitKind(IEnumerable<string> partMaterials)
+        {
+            var counts = new int[6];
+            foreach (var m in partMaterials) { int k = OutfitKind(m); if (k >= 0) counts[k]++; }
+            int best = -1; for (int k = 0; k < counts.Length; k++) if (counts[k] > 0 && (best < 0 || counts[k] > counts[best])) best = k;
+            return best;
+        }
+        // The style a trader's helmsman wears: its home region's (0 Al'Ankh, 1 Emerald, 2 Aestrin); the Fire Fish Lagoon small pair
+        // the Lagoon's; the Chronos traders Aestrin's ("H1: Aestrin"); the Happy Bay trader Emerald's ("H2: Emerald"); an independent
+        // any (-1: "Independent trader just pick random one").
+        public static int HelmsmanStyle(string group, int home, bool ffl)
+        {
+            if (group == "independent") return -1;
+            if (group == "chronos") return OutfitAestrin;
+            if (group == "happy") return OutfitEmerald;
+            if (group == "small" && ffl) return OutfitLagoon;
+            return home >= 0 && home < 3 ? home : -1;
+        }
+        // The outfit a trader drawn now wears, by its index in `kinds` (each outfit's style); `worn`: the outfits the other drawn
+        // traders wear ("H3: No same outfit drawn at same time"). Its style's not worn; else a generic one not worn (the user: "if
+        // regional outfit is running out because too many trader drawn, it can pick from general one to keep it still look different
+        // from others"); else any not worn (Claude's choice); only with every outfit worn, any. An independent: any not worn, else any.
+        // roll in [0, 1) picks among them; -1 when there is no outfit.
+        // A line in two rows of even width (TraderBubble.Layout): the break between words that makes the wider row narrowest.
+        public static string EvenRows(string line, Func<string, float> width)
+        {
+            var words = line.Split(' ');
+            if (words.Length < 2) return line;
+            string best = line; float bestWidth = float.MaxValue;
+            for (int k = 1; k < words.Length; k++)
+            {
+                string a = string.Join(" ", words, 0, k), b = string.Join(" ", words, k, words.Length - k);
+                float w = Math.Max(width(a), width(b));
+                if (w < bestWidth) { bestWidth = w; best = a + "\n" + b; }
+            }
+            return best;
+        }
+        // A trader's bubble line: any but its last (Claude's choice, to confirm), roll in [0, 1).
+        public static int PickLine(int count, int last, double roll)
+        {
+            if (count <= 0) return -1;
+            if (count == 1 || last < 0 || last >= count) return Math.Max(0, Math.Min(count - 1, (int)(roll * count)));
+            int k = Math.Max(0, Math.Min(count - 2, (int)(roll * (count - 1))));
+            return k >= last ? k + 1 : k;
+        }
+        public static int PickOutfit(int style, IList<int> kinds, ICollection<int> worn, double roll)
+        {
+            var all = Enumerable.Range(0, kinds.Count).ToList();
+            List<int> Free(Func<int, bool> fits) => all.Where(i => fits(i) && !worn.Contains(i)).ToList();
+            var pool = style >= 0 ? Free(i => kinds[i] == style) : new List<int>();
+            if (pool.Count == 0 && style >= 0) pool = Free(i => kinds[i] == OutfitGeneric);
+            if (pool.Count == 0) pool = Free(i => true);
+            if (pool.Count == 0) pool = all;
+            if (pool.Count == 0) return -1;
+            return pool[Math.Max(0, Math.Min(pool.Count - 1, (int)(roll * pool.Count)))];
+        }
         // Which traders carry the user's captured sail plans (TRADER_RIGS_DRAFT.md, "Which traders get a plan", the user's words
         // there): the Happy Bay trader, the shuttle, each region's medium local, the two heavies (one plan), the FFL small pair (one
         // plan), the last 2 by id of each region's 7 small locals (smallFromLast 0 and 1: the highest ids), the Chronos trader of
@@ -1233,6 +1300,163 @@ namespace EconomyOverhaul
         public const double LegSpread = 20, LegRoomSpare = 3;
         public static double LegHalfWidth(double fromBerth, double room, double beam) =>
             Math.Max(0, Math.Min(LegSpread * Clamp((fromBerth - 10) / 40, 0, 1), room - beam / 2 - LegRoomSpare));
+
+        // ---- The traders meeting the player's ships (TRADER_COLLISION_DRAFT.md, the user's answers C1-C6 and K1-K7, 2026-10-21) ----
+        // In port a trader eases into its place across a leg from its berth as LegHalfWidth does: none within 10 m, the whole from 50 m.
+        public static double PortEase(double fromBerth) => Clamp((fromBerth - 10) / 40, 0, 1);
+        // In port a trader stops short of a player's ship blocking the rest of its way (part 2, K3 (a)): full speed until 28 m from
+        // it, stopped 8 m short (gap: from its bow to where the ship blocks the way).
+        public const double StopShort = 8, StopEase = 20;
+        public static double InPortSpeed(double speed, double gap) => speed * Clamp((gap - StopShort) / StopEase, 0, 1);
+        // Getting round a player's ship lying in the way at one place (part 1, "Blocked"): the trader keeps WayMargin from it and
+        // from the water's edge. The offsets its middle may take across the leg there (+ to starboard), as far as the water allows
+        // in port ("not only its 20 m spread"), eased from its berth (PortEase); the middle of the water where it is narrower than
+        // the beam and both margins.
+        public const double WayMargin = 2;
+        public static void PortOffsets(double fromBerth, double left, double right, double halfBeam, out double min, out double max)
+        {
+            min = -(left - halfBeam - WayMargin); max = right - halfBeam - WayMargin;
+            if (min > max) min = max = (right - left) / 2;
+            double k = PortEase(fromBerth); min *= k; max *= k;
+        }
+        // The offset within min..max nearest `at` that keeps WayMargin from a ship lying lo..hi across the way; NaN when none does
+        // (the way is blocked there).
+        public static double PassOffset(double min, double max, double lo, double hi, double halfBeam, double at)
+        {
+            double a = lo - halfBeam - WayMargin, b = hi + halfBeam + WayMargin, best = double.NaN;
+            if (min <= Math.Min(max, a)) best = Clamp(at, min, Math.Min(max, a));
+            if (Math.Max(min, b) <= max) { double r = Clamp(at, Math.Max(min, b), max); if (double.IsNaN(best) || Math.Abs(r - at) < Math.Abs(best - at)) best = r; }
+            return best;
+        }
+        // Single file (part 4b, C5): where the water is narrower than both beams + 6 m (2 m between the hulls and 2 m to each side).
+        // A trader does not start into such a stretch while a player's ship is in it or within the trader's own length of either end.
+        public const double SingleFileSpare = 6;
+        public static bool SingleFile(double width, double beamA, double beamB) => width < beamA + beamB + SingleFileSpare;
+        // Keeping right in narrow water (part 4a, C4): where the water is under 40 m wide, its starboard side 2 m from the water's
+        // edge on its right (its port side at least 2 m from the left edge; the middle where both do not fit), eased from its berth.
+        public const double KeepRightUnder = 40, KeepRightEdge = 2;
+        public static bool KeepsRight(double left, double right) => left + right < KeepRightUnder;
+        public static double KeepRight(double fromBerth, double left, double right, double beam)
+        {
+            double o = right - KeepRightEdge - beam / 2, least = -(left - KeepRightEdge - beam / 2);
+            if (least > o) o = (right - left) / 2;
+            return o * PortEase(fromBerth);
+        }
+        // Beside a player's ship (part 2, K4 (a)): within 3 m of its hull, the trader's move loses its part toward that ship (unit
+        // toward it: tx, tz); along or away it may still move.
+        public const double BesideGap = 3;
+        public static void WithoutToward(ref double mx, ref double mz, double tx, double tz)
+        {
+            double d = mx * tx + mz * tz;
+            if (d > 0) { mx -= d * tx; mz -= d * tz; }
+        }
+        // Its place is kept as floats, which round x and z each its own way (in 3.9 mm steps 33-66 km from the world's origin; Sage
+        // Hills lies at x 42,900, z -41,800): a step with no part toward a ship could still go a little toward it, the same way every
+        // frame (vtcollide vtc-12: lying still beside a ship, 0.8 and 1.6 m nearer in 30 s, under 2 mm a frame). From (fx, fz) to
+        // (px, pz): a coordinate rounded toward the ship (unit tx, tz) goes one float step back (rounding is at most half a step, so
+        // both back always do); false where it still goes toward it.
+        public static bool NoFloatToward(float fx, float fz, ref float px, ref float pz, double tx, double tz)
+        {
+            if (FloatToward(fx, fz, px, pz, tx, tz) <= 0) return true;
+            float bx = FloatBack(px, tx), bz = FloatBack(pz, tz);
+            if (FloatToward(fx, fz, bx, pz, tx, tz) <= 0) { px = bx; return true; }
+            if (FloatToward(fx, fz, px, bz, tx, tz) <= 0) { pz = bz; return true; }
+            if (FloatToward(fx, fz, bx, bz, tx, tz) <= 0) { px = bx; pz = bz; return true; }
+            return false;
+        }
+        private static double FloatToward(float fx, float fz, float px, float pz, double tx, double tz) => (double)(px - fx) * tx + (double)(pz - fz) * tz;
+        // one float step against t (0.75 of 2^-23 of the value rounds to the next float that way)
+        private static float FloatBack(float p, double t)
+        {
+            if (t == 0) return p;
+            double u = Math.Max(Math.Abs((double)p) * 8.940696716308594e-8, 1e-30);
+            return (float)(t > 0 ? p - u : p + u);
+        }
+        // An anchorage slot holds a player's ship when its hull lies within half the trader's length + 2 m of the slot (part 2).
+        public static bool SlotHeld(double slotX, double slotZ, HullBox ship, double traderLength) => BoxDistance(ship, slotX, slotZ) <= traderLength / 2 + 2;
+        // The berth a trader takes on its way in (part 1): the user's rule (PickBerth) among the berths with a clear way, by the
+        // shorter clear way (Claude's choice). ways[i]: berth i's first and second way's lengths, NaN where that way is blocked or
+        // missing. way: 1 or 2 (0 with no berth).
+        public static int PickBerthWay(IList<int> classes, IList<bool> taken, int hullClass, IList<double[]> ways, out int way)
+        {
+            var t = new bool[classes.Count];
+            for (int i = 0; i < t.Length; i++) t[i] = taken[i] || ShorterWay(ways[i]) == 0;
+            int k = PickBerth(classes, t, hullClass);
+            way = k >= 0 ? ShorterWay(ways[k]) : 0;
+            return k;
+        }
+        // The shorter of a place's clear ways: 1 or 2, 0 when neither is clear (NaN: blocked or none).
+        public static int ShorterWay(double[] lengths)
+        {
+            int best = 0;
+            for (int w = 0; w < lengths.Length; w++) if (!double.IsNaN(lengths[w]) && (best == 0 || lengths[w] < lengths[best - 1])) best = w + 1;
+            return best;
+        }
+        // Boxes on the water (part 3, C3 "check ship's whole hull"): two overlap within `margin` of each other (separating axes).
+        public static bool BoxesOverlap(HullBox p, HullBox q, double margin) =>
+            !(Apart(p, q, p.Fx, p.Fz, margin) || Apart(p, q, p.Rx, p.Rz, margin) || Apart(p, q, q.Fx, q.Fz, margin) || Apart(p, q, q.Rx, q.Rz, margin));
+        private static bool Apart(HullBox p, HullBox q, double x, double z, double margin)
+        {
+            double rp = p.A * Math.Abs(p.Fx * x + p.Fz * z) + p.B * Math.Abs(p.Rx * x + p.Rz * z);
+            double rq = q.A * Math.Abs(q.Fx * x + q.Fz * z) + q.B * Math.Abs(q.Rx * x + q.Rz * z);
+            return Math.Abs((q.X - p.X) * x + (q.Z - p.Z) * z) > rp + rq + margin;
+        }
+        // From a point to a box (0 inside it).
+        public static double BoxDistance(HullBox h, double x, double z)
+        {
+            double dx = x - h.X, dz = z - h.Z;
+            double u = Math.Max(0, Math.Abs(dx * h.Fx + dz * h.Fz) - h.A), v = Math.Max(0, Math.Abs(dx * h.Rx + dz * h.Rz) - h.B);
+            return Math.Sqrt(u * u + v * v);
+        }
+        // The nearest point of a box to (x, z) (the point itself inside it).
+        public static void BoxNearest(HullBox h, double x, double z, out double nx, out double nz)
+        {
+            double dx = x - h.X, dz = z - h.Z;
+            double u = Clamp(dx * h.Fx + dz * h.Fz, -h.A, h.A), v = Clamp(dx * h.Rx + dz * h.Rz, -h.B, h.B);
+            nx = h.X + u * h.Fx + v * h.Rx; nz = h.Z + u * h.Fz + v * h.Rz;
+        }
+        // The axis two boxes lie farthest apart along (of their sides' four directions), as a unit from p toward q, and that gap
+        // (negative where they overlap: the least overlap). Moving across it, p keeps that gap to q (the beside rule, part 2: the way
+        // from p's middle to q's nearest point let a long hull slide round q's corner, nearer along its whole side; vtcollide vtc-10).
+        public static double BoxApart(HullBox p, HullBox q, out double tx, out double tz)
+        {
+            double best = double.NegativeInfinity; tx = 0; tz = 0;
+            for (int i = 0; i < 4; i++)
+            {
+                double x = i == 0 ? p.Fx : i == 1 ? p.Rx : i == 2 ? q.Fx : q.Rx, z = i == 0 ? p.Fz : i == 1 ? p.Rz : i == 2 ? q.Fz : q.Rz;
+                double d = (q.X - p.X) * x + (q.Z - p.Z) * z;
+                double rp = p.A * Math.Abs(p.Fx * x + p.Fz * z) + p.B * Math.Abs(p.Rx * x + p.Rz * z);
+                double rq = q.A * Math.Abs(q.Fx * x + q.Fz * z) + q.B * Math.Abs(q.Rx * x + q.Rz * z);
+                double gap = Math.Abs(d) - rp - rq;
+                if (gap > best) { best = gap; double s = d < 0 ? -1 : 1; tx = x * s; tz = z * s; }
+            }
+            return best;
+        }
+        // What a box takes across a way at one place: the part of it within `band` m along the way (direction dx, dz) of the point
+        // (px, pz), as offsets lo..hi across it (+ to starboard). False when none of it is there.
+        // Each edge of the box clipped to the band; its ends' offsets give the span (no allocation: it runs for every place along a
+        // leg a ship lies near).
+        public static bool BoxAcross(HullBox h, double px, double pz, double dx, double dz, double band, out double lo, out double hi)
+        {
+            lo = double.PositiveInfinity; hi = double.NegativeInfinity;
+            for (int i = 0; i < 4; i++)
+            {
+                h.Corner(i, out double ax, out double az); h.Corner((i + 1) % 4, out double bx, out double bz);
+                double a0 = (ax - px) * dx + (az - pz) * dz, a1 = (ax - px) * dz - (az - pz) * dx;     // along, across (+ starboard)
+                double b0 = (bx - px) * dx + (bz - pz) * dz, b1 = (bx - px) * dz - (bz - pz) * dx;
+                double t0 = 0, t1 = 1;
+                if (Math.Abs(b0 - a0) < 1e-9) { if (Math.Abs(a0) > band) continue; }
+                else
+                {
+                    double ta = (-band - a0) / (b0 - a0), tb = (band - a0) / (b0 - a0);
+                    t0 = Math.Max(0, Math.Min(ta, tb)); t1 = Math.Min(1, Math.Max(ta, tb));
+                    if (t0 > t1) continue;
+                }
+                double c0 = a1 + (b1 - a1) * t0, c1 = a1 + (b1 - a1) * t1;
+                lo = Math.Min(lo, Math.Min(c0, c1)); hi = Math.Max(hi, Math.Max(c0, c1));
+            }
+            return lo <= hi;
+        }
         // A sail plan's lanterns on its own masts (the user, 2026-10-20: "move the lantern to fit the mast"; the hull's lantern places
         // were measured on the stock masts, 0.3-0.6 m off them, and hung up to 8 m from any mast on a plan whose masts moved, rig-9's
         // VT TRADERRIG lanterns). Each measured place (x, y, z in the hull's frame) stays where a mast still stands within 1 m of it at
@@ -1291,6 +1515,26 @@ namespace EconomyOverhaul
         }
     }
 
+    // A hull's box on the water, in real (unshifted) metres: its middle, its bow's direction (unit), half its length and half its
+    // beam (TRADER_COLLISION_DRAFT.md, part 3: the player's ships by their whole hull; a trader's own; a berth's rectangle).
+    public sealed class HullBox
+    {
+        public readonly double X, Z, Fx, Fz, A, B;
+        public HullBox(double x, double z, double fx, double fz, double halfLength, double halfBeam)
+        {
+            double n = Math.Sqrt(fx * fx + fz * fz); if (n < 1e-9) { fx = 0; fz = 1; n = 1; }
+            X = x; Z = z; Fx = fx / n; Fz = fz / n; A = halfLength; B = halfBeam;
+        }
+        public double Rx => Fz;     // to starboard (the mod's Across)
+        public double Rz => -Fx;
+        // corner i (0 bow starboard, 1 bow port, 2 stern port, 3 stern starboard)
+        public void Corner(int i, out double x, out double z)
+        {
+            double u = i < 2 ? A : -A, v = i == 0 || i == 3 ? B : -B;
+            x = X + u * Fx + v * Rx; z = Z + u * Fz + v * Rz;
+        }
+    }
+
     // ---- Lane map ----
     // A polyline in real (unshifted) x, z: places along it in metres.
     internal sealed class LanePath
@@ -1306,10 +1550,32 @@ namespace EconomyOverhaul
             Points = list.ToArray(); Along = new float[Points.Length];
             for (int i = 1; i < Points.Length; i++) Along[i] = Along[i - 1] + Vector2.Distance(Points[i - 1], Points[i]);
             Length = Along[Along.Length - 1];
+            Min = Max = Points[0];
+            foreach (var p in Points) { Min = Vector2.Min(Min, p); Max = Vector2.Max(Max, p); }
         }
         internal Vector2 Start => Points[0];
         internal Vector2 End => Points[Points.Length - 1];
-        internal LanePath Reversed() => new LanePath(Points.Reverse()) { room = room, roomStep = roomStep, roomFromEnd = !roomFromEnd };
+        internal readonly Vector2 Min, Max;      // its bounds
+        internal LanePath Reversed() => new LanePath(Points.Reverse()) { room = room, roomStep = roomStep, roomFromEnd = !roomFromEnd, left = left, right = right, widthStep = widthStep, widthFromEnd = !widthFromEnd };
+        // A harbour leg's water each side (Data/lanes.txt's W records, at its hull's depth): to its left and right every widthStep m from
+        // its first point as stored; on the reversed leg read from its end with the sides swapped. None: wide water (WideWater each side).
+        private float[] left, right; private float widthStep; private bool widthFromEnd;
+        internal const float WideWater = 60f;
+        internal bool HasWidth => left != null;
+        internal void SetWidth(float step, float[] l, float[] r) { widthStep = step; left = l; right = r; widthFromEnd = false; }
+        internal void WidthAt(float s, out float l, out float r)
+        {
+            if (left == null || left.Length == 0 || widthStep <= 0) { l = r = WideWater; return; }
+            float t = Mathf.Clamp(widthFromEnd ? Length - s : s, 0, Length) / widthStep; int i = Mathf.Min((int)t, left.Length - 1);
+            float a = i + 1 < left.Length ? Mathf.Lerp(left[i], left[i + 1], t - i) : left[i], b = i + 1 < right.Length ? Mathf.Lerp(right[i], right[i + 1], t - i) : right[i];
+            if (widthFromEnd) { l = b; r = a; } else { l = a; r = b; }
+        }
+        // Whether a box lies within `margin` of the leg's bounds (a cheap first look before the places along it).
+        internal bool Near(HullBox h, float margin)
+        {
+            float reach = (float)(h.A + h.B) + margin;
+            return h.X >= Min.x - reach && h.X <= Max.x + reach && h.Z >= Min.y - reach && h.Z <= Max.y + reach;
+        }
         // A harbour leg's room (Data/lanes.txt's R records): the distance from its middle to the nearest rock or dock every roomStep m
         // from its first point as stored (kept the other way round on the reversed leg); none: room enough everywhere.
         private float[] room; private float roomStep; private bool roomFromEnd;
@@ -1351,6 +1617,15 @@ namespace EconomyOverhaul
         internal LanePath Leg;   // from the berth to the port's approach point
         private LanePath inLeg;
         internal LanePath InLeg => inLeg ?? (inLeg = Leg.Reversed());   // from the approach point to the berth
+        // its second way (TRADER_COLLISION_DRAFT.md, part 1; Data/lanes.txt's S records), from the berth to the approach point; null
+        // where it has none
+        internal LanePath Second;
+        private LanePath secondIn;
+        // its direct way from the port's anchorage (way 3; Data/lanes.txt's D records, 2026-10-21 evening), from the anchorage's
+        // centre to the berth; null where it has none (only in-bound: out of a berth a trader leaves by its first or second way)
+        internal LanePath Direct;
+        internal LanePath Out(int way) => way == 2 ? Second : Leg;
+        internal LanePath In(int way) => way == 3 ? Direct : way == 2 ? (Second == null ? null : secondIn ?? (secondIn = Second.Reversed())) : InLeg;
     }
     internal sealed class TraderHarbour
     {
@@ -1360,6 +1635,92 @@ namespace EconomyOverhaul
         internal Vector2 Anchorage;
         internal float AnchorRadius;
         internal LanePath AnchorLeg;   // from the approach point to the anchorage's centre
+        internal LanePath AnchorSecond;   // its second way, the same way round (null: none)
+        private LanePath anchorOut, anchorOut2;
+        internal LanePath AnchorIn(int way) => way == 2 ? AnchorSecond : AnchorLeg;
+        internal LanePath AnchorOut(int way) => way == 2 ? (AnchorSecond == null ? null : anchorOut2 ?? (anchorOut2 = AnchorSecond.Reversed())) : AnchorLeg == null ? null : anchorOut ?? (anchorOut = AnchorLeg.Reversed());
+    }
+
+    // The rest of a harbour leg against the player's ships (TRADER_COLLISION_DRAFT.md, parts 1 and 4): whether one blocks it, where
+    // (along the leg), whether there by a single-file stretch (and where that stretch starts), and the offset across the leg that
+    // gets round the nearest one that does not block it (NaN: none in the way).
+    internal struct WayLook { internal bool Blocked, SingleFile; internal float At, Aside, StretchStart; }
+    internal static class TraderWays
+    {
+        // the places looked at every Step m, each the part of a ship within Band m along the leg; the first PlaceSkip m from a berth
+        // or the anchorage are not a single-file stretch (the dock beside the berth, as the draft's measures left out)
+        internal const float Step = 5f, Band = 2.5f, PlaceSkip = 30f;
+        // leg: the way the trader sails it; from: its middle's place along it; placeAtEnd: the leg ends at its berth or anchorage
+        // (in-bound), else starts there (out-bound); length, beam: its hull; offset: its place across the leg now. Only the leg
+        // ahead of its bow counts (a ship beside it is the beside rule's).
+        internal static WayLook Look(LanePath leg, float from, bool placeAtEnd, IList<HullBox> ships, float length, float beam, float offset)
+        {
+            var w = new WayLook { At = float.PositiveInfinity, Aside = float.NaN, StretchStart = -1 };
+            if (leg == null || ships == null || ships.Count == 0) return w;
+            float bow = from + length / 2, asideAt = float.PositiveInfinity;
+            foreach (var h in ships)
+            {
+                if (!leg.Near(h, LanePath.WideWater + Band)) continue;
+                float reach = (float)(h.A + h.B) + Band + LanePath.WideWater;
+                bool[] single = null;
+                for (int i = Mathf.Max(0, Mathf.CeilToInt(bow / Step)); i * Step <= leg.Length + .01f; i++)
+                {
+                    float s = Mathf.Min(i * Step, leg.Length); var p = leg.At(s);
+                    if ((new Vector2((float)h.X, (float)h.Z) - p).sqrMagnitude > reach * reach) continue;
+                    var d = leg.Direction(s, Step);
+                    if (!Rules.BoxAcross(h, p.x, p.y, d.x, d.y, Band, out double lo, out double hi)) continue;
+                    leg.WidthAt(s, out float l, out float r);
+                    if (hi < -l - 1 || lo > r + 1) continue;    // beyond the water's edge there: not in this water
+                    if (single == null) single = SingleFileNear(leg, placeAtEnd, length, beam, (float)(2 * h.B));
+                    bool inSingle = single[Mathf.Min(i, single.Length - 1)];
+                    double off = double.NaN;
+                    if (!inSingle)
+                    {
+                        Rules.PortOffsets(placeAtEnd ? leg.Length - s : s, l, r, beam / 2, out double min, out double max);
+                        off = Rules.PassOffset(min, max, lo, hi, beam / 2, offset);
+                    }
+                    if (inSingle || double.IsNaN(off))
+                    {
+                        if (s < w.At) { w.At = s; w.Blocked = true; w.SingleFile = inSingle; w.StretchStart = inSingle ? StretchStart(leg, placeAtEnd, beam, (float)(2 * h.B), s, length) : -1; }
+                        break;
+                    }
+                    if (s < asideAt) { asideAt = s; w.Aside = (float)off; }
+                }
+            }
+            if (w.Blocked && asideAt > w.At) w.Aside = float.NaN;
+            return w;
+        }
+        // Single file at each place (every Step m): the water there narrower than both beams + 6 m (Rules.SingleFile), or within the
+        // trader's length of such a place (part 4b: "within its own length of either end").
+        private static bool[] SingleFileNear(LanePath leg, bool placeAtEnd, float length, float beam, float shipBeam)
+        {
+            int n = Mathf.FloorToInt(leg.Length / Step) + 2; var raw = new bool[n]; var near = new bool[n];
+            for (int i = 0; i < n; i++) raw[i] = Narrow(leg, placeAtEnd, Mathf.Min(i * Step, leg.Length), beam, shipBeam);
+            int k = Mathf.CeilToInt(length / Step);
+            for (int i = 0; i < n; i++) if (raw[i]) for (int j = Mathf.Max(0, i - k); j <= Mathf.Min(n - 1, i + k); j++) near[j] = true;
+            return near;
+        }
+        private static bool Narrow(LanePath leg, bool placeAtEnd, float s, float beam, float shipBeam)
+        {
+            if ((placeAtEnd ? leg.Length - s : s) < PlaceSkip) return false;
+            leg.WidthAt(s, out float l, out float r);
+            return Rules.SingleFile(l + r, beam, shipBeam);
+        }
+        // Where the single-file stretch met at s starts along the leg: the narrow place nearest s within the trader's length (in whole
+        // steps, as SingleFileNear widens the stretches), then back to the first of its run.
+        internal static float StretchStart(LanePath leg, bool placeAtEnd, float beam, float shipBeam, float s, float length)
+        {
+            int i0 = Mathf.RoundToInt(s / Step), k = Mathf.CeilToInt(length / Step), last = Mathf.FloorToInt(leg.Length / Step) + 1, found = -1;
+            for (int d = 0; d <= k && found < 0; d++)
+                foreach (int j in new[] { i0 - d, i0 + d })
+                    if (j >= 0 && j <= last && Narrow(leg, placeAtEnd, Mathf.Min(j * Step, leg.Length), beam, shipBeam)) { found = j; break; }
+            if (found < 0) return s;
+            while (found - 1 >= 0 && Narrow(leg, placeAtEnd, (found - 1) * Step, beam, shipBeam)) found--;
+            return found * Step;
+        }
+        // Whether the water at s is narrow enough to back out stern first (part 4c: "turning round is no option there"; in water
+        // 40 m wide or more it turns round).
+        internal static bool BackAstern(LanePath leg, float s) { leg.WidthAt(s, out float l, out float r); return l + r < Rules.KeepRightUnder; }
     }
 
     // The approved lane map and berths (2026-10-17), embedded as Data/lanes.txt (Data/MakeLanes.py makes it from the drawing).
@@ -1473,17 +1834,47 @@ namespace EconomyOverhaul
                             h.Anchorage = new Vector2(F(f[2]), F(f[3])); h.AnchorRadius = F(f[4]); h.AnchorLeg = new LanePath(Points(f, 5));
                             break;
                         }
-                    case "R":
+                    case "R": case "RS": case "RD":
                         {
-                            var h = Harbour(int.Parse(f[1]));
-                            var leg = f[2] == "A" ? h.AnchorLeg : h.Berths.FirstOrDefault(b => b.Number == int.Parse(f[2]))?.Leg;
+                            var leg = LegOf(f[1], f[2], f[0] == "RS" ? 2 : f[0] == "RD" ? 3 : 1);
                             var room = new float[f.Length - 4]; for (int k = 4; k < f.Length; k++) room[k - 4] = F(f[k]);
                             leg?.SetRoom(F(f[3]), room);
+                            break;
+                        }
+                    // the trader collision records (2026-10-21): a second way, the water each side of a way
+                    case "S":
+                        {
+                            var h = Harbour(int.Parse(f[1])); var p = new LanePath(Points(f, 3));
+                            if (f[2] == "A") h.AnchorSecond = p;
+                            else { var b = h.Berths.FirstOrDefault(x => x.Number == int.Parse(f[2])); if (b != null) b.Second = p; }
+                            break;
+                        }
+                    // a direct way from the anchorage to a berth (2026-10-21 evening)
+                    case "D":
+                        {
+                            var b = Harbour(int.Parse(f[1])).Berths.FirstOrDefault(x => x.Number == int.Parse(f[2]));
+                            if (b != null) b.Direct = new LanePath(Points(f, 3));
+                            break;
+                        }
+                    case "W":
+                        {
+                            var leg = LegOf(f[1], f[2], int.Parse(f[3]));
+                            int n = (f.Length - 5) / 2; var l = new float[n]; var r = new float[n];
+                            for (int k = 0; k < n; k++) { l[k] = F(f[5 + 2 * k]); r[k] = F(f[6 + 2 * k]); }
+                            leg?.SetWidth(F(f[4]), l, r);
                             break;
                         }
                 }
             }
             Loaded = true;
+        }
+        // A berth's (or the anchorage's, "A") leg as stored: way 1 its first, 2 its second, 3 a berth's direct way from the anchorage.
+        private static LanePath LegOf(string port, string place, int way)
+        {
+            var h = Harbour(int.Parse(port));
+            if (place == "A") return way == 2 ? h.AnchorSecond : h.AnchorLeg;
+            var b = h.Berths.FirstOrDefault(x => x.Number == int.Parse(place));
+            return b == null ? null : way == 3 ? b.Direct : way == 2 ? b.Second : b.Leg;
         }
         private static Graph Region(string name) { if (!graphs.TryGetValue(name, out var g)) graphs[name] = g = new Graph(); return g; }
         private static TraderHarbour Harbour(int port) { if (!harbours.TryGetValue(port, out var h)) harbours[port] = h = new TraderHarbour { Port = port }; return h; }
@@ -1803,6 +2194,10 @@ namespace EconomyOverhaul
         internal Collider[] Colliders;
         // its ropes (the game's RopeEffect, each with its line; drawn by the game while the copy is shown, TraderHulls.ShowRopes)
         internal RopeEffect[] Ropes = new RopeEffect[0];
+        // its helmsman's parts (TraderHulls.HelmParts' order) and the outfit he wears while drawn (-1: none chosen)
+        internal GameObject[] HelmParts; internal Renderer[] HelmRenderers; internal int Outfit = -1;
+        // its speech bubble while shown (TraderBubble), the time it is gone once shrinking (0 while it shows), its line
+        internal GameObject Bubble; internal float BubbleGone; internal int BubbleLine = -1;
         internal GameObject Cargo;
         internal int CargoGood;
         internal bool Shown, Lit;
@@ -1896,7 +2291,7 @@ namespace EconomyOverhaul
                 catch (Exception e) { planQueue.Clear(); Plugin.Log?.LogError("Visible traders: reading the sail plans failed: " + e); }
             }
             catch (Exception e) { Plugin.Log?.LogError("Visible traders: taking the hull templates failed: " + e); }
-            Plugin.Log?.LogInfo("Visible traders: " + templates.Count + " of 8 hull templates taken in " + sw.ElapsedMilliseconds + " ms (helmsman " + (helmsman ? "yes" : "none") + ", lanterns " + (lanterns.Count > 0 ? string.Join(", ", lanterns.Keys.Select(k => k.ToString()).ToArray()) : "none") + "); " + planQueue.Count + " sail plans to take.");
+            Plugin.Log?.LogInfo("Visible traders: " + templates.Count + " of 8 hull templates taken in " + sw.ElapsedMilliseconds + " ms (helmsman " + (helmsman ? "yes, " + outfitReport : "none") + ", lanterns " + (lanterns.Count > 0 ? string.Join(", ", lanterns.Keys.Select(k => k.ToString()).ToArray()) : "none") + "); " + planQueue.Count + " sail plans to take.");
             planWatch.Reset();
         }
 
@@ -2596,7 +2991,22 @@ namespace EconomyOverhaul
             return 0;
         }
 
-        // The helmsman from the game's own NPC boats (the user, question 9: static), its clothing variants not worn dropped.
+        // The helmsman from the game's own NPC boats (the user, question 9: static), in his pose, dressed in an outfit of the game's
+        // NPCs (HELMSMEN_CHRONOS_DRAFT.md). Every person in the game is one model (Modular NPC: its clothes under Modular_Characters,
+        // ~720 parts, about 15 switched on, and its bones under Root); an outfit is which parts are on and their material, set by hand
+        // in its scene. The outfits of every Modular NPC of the main scene (the port dudes and the NPC boats' sailors, loaded at sea
+        // too) are read once and kept in memory only (the user: "This don't need to be save"). The template keeps only the model's
+        // own parts (another child, such as Talkative NPCs' speech bubble or the game's empty mesh combiner, goes) and of its clothes
+        // those some outfit wears, switched off; Dress switches a copy's on.
+        internal sealed class Outfit { internal int Kind; internal int[] Parts; internal Material[][] Materials; internal Mesh[] Meshes; internal string From; }
+        private static readonly List<Outfit> outfits = new List<Outfit>();
+        private static string[] helmParts = new string[0];   // the template's clothes, as paths under it
+        private static Mesh[] helmMeshes = new Mesh[0];      // and their own meshes
+        private static string outfitReport = "no outfits read";
+        internal static IList<Outfit> Outfits => outfits;
+        private static Transform NpcRoot(Transform t) { for (var c = t; c; c = c.parent) if (c.Find("Modular_Characters")) return c; return null; }
+        private static string PathUnder(Transform t, Transform root) { var l = new List<string>(); for (var c = t; c && c != root; c = c.parent) l.Insert(0, c.name); return string.Join("/", l.ToArray()); }
+        private static IEnumerable<SkinnedMeshRenderer> Clothes(Transform root) { var mc = root.Find("Modular_Characters"); return mc ? mc.GetComponentsInChildren<SkinnedMeshRenderer>(true) : Enumerable.Empty<SkinnedMeshRenderer>(); }
         private static GameObject HelmsmanTemplate()
         {
             NPCAnimations source = null;
@@ -2606,15 +3016,88 @@ namespace EconomyOverhaul
                 source = b.GetComponentsInChildren<NPCAnimations>(true).FirstOrDefault(); if (source) break;
             }
             if (!source) return null;
-            Transform rootT = source.transform; for (var c = source.transform; c; c = c.parent) if (c.name == "Modular NPC") { rootT = c; break; }
+            outfits.Clear(); helmParts = new string[0];
+            Transform rootT = NpcRoot(source.transform);
+            if (!rootT) { rootT = source.transform; for (var c = source.transform; c; c = c.parent) if (c.name == "Modular NPC") { rootT = c; break; } }
+            // the outfits: each Modular NPC's worn clothes (on under it, with a mesh) and their materials, alike ones counted once
+            var read = new List<KeyValuePair<string[], Material[][]>>(); var froms = new List<string>(); var meshes = new List<Mesh[]>(); var boneCounts = new List<int[]>(); var keys = new HashSet<string>(); int npcs = 0;
+            if (NpcRoot(source.transform))
+                foreach (var npc in Resources.FindObjectsOfTypeAll<NPCAnimations>())
+                {
+                    if (!npc || npc.gameObject.scene != rootT.gameObject.scene) continue;
+                    var root = NpcRoot(npc.transform); if (!root) continue;
+                    var worn = Clothes(root).Where(r => r.sharedMesh && ActiveUnder(r.transform, root)).Select(r => new KeyValuePair<string, SkinnedMeshRenderer>(PathUnder(r.transform, root), r)).OrderBy(p => p.Key, StringComparer.Ordinal).ToList();
+                    if (worn.Count == 0) continue;
+                    npcs++;
+                    string key = string.Join("|", worn.Select(p => p.Key + "=" + string.Join(",", p.Value.sharedMaterials.Select(m => m ? m.GetInstanceID().ToString() : "-").ToArray())).ToArray());
+                    if (!keys.Add(key)) continue;
+                    read.Add(new KeyValuePair<string[], Material[][]>(worn.Select(p => p.Key).ToArray(), worn.Select(p => p.Value.sharedMaterials).ToArray()));
+                    meshes.Add(worn.Select(p => p.Value.sharedMesh).ToArray()); boneCounts.Add(worn.Select(p => p.Value.bones.Length).ToArray());
+                    froms.Add(root.parent ? root.parent.name : root.name);
+                }
             var go = Object.Instantiate(rootT.gameObject, holder.transform, false); go.name = "helmsman template";
+            bool modular = go.transform.Find("Modular_Characters");
+            if (modular) foreach (var child in go.transform.Cast<Transform>().ToList()) if (child.name != "Modular_Characters" && child.name != "Root") Object.DestroyImmediate(child.gameObject);
             foreach (var c in go.GetComponentsInChildren<Component>(true))
                 if (c && !(c is Transform) && !(c is Renderer) && !(c is MeshFilter) && !Required(c)) { try { Object.DestroyImmediate(c); } catch { } }
-            foreach (var t in go.GetComponentsInChildren<Transform>(true).Where(t => t != go.transform && !t.gameObject.activeSelf && ActiveUnder(t.parent, go.transform)).ToList())
-                if (t) Object.DestroyImmediate(t.gameObject);
+            if (modular && read.Count > 0)
+            {
+                // its clothes: those some outfit wears kept (switched off, drawn when switched on), the rest dropped
+                var wanted = new HashSet<string>(read.SelectMany(o => o.Key));
+                var mine = new Dictionary<string, SkinnedMeshRenderer>(); int twins = 0;
+                foreach (var r in Clothes(go.transform)) { string p = PathUnder(r.transform, go.transform); if (mine.ContainsKey(p)) twins++; else mine[p] = r; }
+                foreach (var p in mine) if (!wanted.Contains(p.Key) && p.Value && p.Value.GetComponentsInChildren<SkinnedMeshRenderer>(true).All(r => r == p.Value)) Object.DestroyImmediate(p.Value.gameObject);
+                helmParts = wanted.Where(mine.ContainsKey).OrderBy(p => p, StringComparer.Ordinal).ToArray();
+                var index = new Dictionary<string, int>(); for (int i = 0; i < helmParts.Length; i++) index[helmParts[i]] = i;
+                int unlike = 0, missing = 0, unfit = 0;
+                for (int o = 0; o < read.Count; o++)
+                {
+                    var paths = read[o].Key;
+                    if (paths.Any(p => !index.ContainsKey(p))) { missing++; continue; }
+                    // a part whose mesh differs from the helmsman's at that place wears the NPC's own (the same rig: its bone count alike)
+                    var own = new Mesh[paths.Length];
+                    for (int k = 0; k < paths.Length; k++)
+                        if (meshes[o][k] != mine[paths[k]].sharedMesh) { unlike++; if (boneCounts[o][k] == mine[paths[k]].bones.Length) own[k] = meshes[o][k]; else unfit++; }
+                    var mats = read[o].Value;
+                    outfits.Add(new Outfit { Parts = paths.Select(p => index[p]).ToArray(), Materials = mats, Meshes = own, From = froms[o],
+                                             Kind = Rules.OutfitKind(mats.Select(m => m.Length > 0 && m[0] ? m[0].name : null)) });
+                }
+                helmMeshes = helmParts.Select(p => mine[p].sharedMesh).ToArray();
+                foreach (var p in helmParts)
+                {
+                    var r = mine[p];
+                    for (var c = r.transform.parent; c && c != go.transform; c = c.parent) if (!c.gameObject.activeSelf) c.gameObject.SetActive(true);
+                    r.gameObject.SetActive(false); r.enabled = true;
+                }
+                outfitReport = outfits.Count + " outfits from " + npcs + " NPCs (" + string.Join(", ", Enumerable.Range(-1, 7).Select(k => (k < 0 ? "unknown" : Rules.OutfitNames[k]) + " " + outfits.Count(x => x.Kind == k)).ToArray()) +
+                               "), " + helmParts.Length + " of " + mine.Count + " parts kept" + (missing > 0 ? ", " + missing + " outfits with parts the helmsman lacks dropped" : "") + ", meshes unlike the helmsman's " + unlike + " (worn as the NPC's own but " + unfit + " of another rig)" + (twins > 0 ? ", " + twins + " parts named alike" : "");
+            }
+            else
+            {
+                // no outfits: as before, the sailor's own clothes, the others dropped
+                foreach (var t in go.GetComponentsInChildren<Transform>(true).Where(t => t != go.transform && !t.gameObject.activeSelf && ActiveUnder(t.parent, go.transform)).ToList())
+                    if (t) Object.DestroyImmediate(t.gameObject);
+                outfitReport = "no outfits read (his own clothes)";
+            }
             foreach (var s in go.GetComponentsInChildren<SkinnedMeshRenderer>(true)) s.updateWhenOffscreen = true;
             go.transform.localPosition = Vector3.zero; go.transform.localRotation = Quaternion.identity;
             return go;
+        }
+        // A copy's helmsman put in an outfit (its parts on, their materials).
+        internal static void Dress(TraderCopy c, int outfit)
+        {
+            if (c.HelmParts == null || outfit < 0 || outfit >= outfits.Count) return;
+            var o = outfits[outfit]; var on = new bool[c.HelmParts.Length];
+            foreach (int k in o.Parts) on[k] = true;
+            for (int i = 0; i < c.HelmParts.Length; i++) if (c.HelmParts[i] && c.HelmParts[i].activeSelf != on[i]) c.HelmParts[i].SetActive(on[i]);
+            for (int k = 0; k < o.Parts.Length; k++)
+            {
+                var r = c.HelmRenderers[o.Parts[k]]; if (!r) continue;
+                r.sharedMaterials = o.Materials[k];
+                var mesh = o.Meshes != null && o.Meshes[k] ? o.Meshes[k] : helmMeshes[o.Parts[k]];
+                if (r is SkinnedMeshRenderer s && s.sharedMesh != mesh) s.sharedMesh = mesh;
+            }
+            c.Outfit = outfit;
         }
 
         // A prefab's looks only (meshes, renderers, lights, particles), as an inactive template.
@@ -2706,6 +3189,8 @@ namespace EconomyOverhaul
             c.Ropes = go.GetComponentsInChildren<RopeEffect>(true);
             c.SailT = t.Sails.Select(s => FindIndex(go.transform, s.Path)).ToArray();
             c.Sails = c.SailT.Select(s => s ? s.GetComponent<Sail>() : null).ToArray();
+            var helm = go.transform.Find("helmsman");
+            if (helm && helmParts.Length > 0) { c.HelmParts = helmParts.Select(p => { var x = helm.Find(p); return x ? x.gameObject : null; }).ToArray(); c.HelmRenderers = c.HelmParts.Select(g => g ? g.GetComponent<Renderer>() : null).ToArray(); }
             if (c.Body) bodies.Add(c.Body);
             Park(c);
             go.SetActive(true);
@@ -2826,7 +3311,9 @@ namespace EconomyOverhaul
         internal static void Give(TraderCopy c)
         {
             if (c == null) return;
-            c.Boat = null;
+            c.Boat = null; c.Outfit = -1;
+            if (c.Bubble) Object.Destroy(c.Bubble);
+            c.Bubble = null; c.BubbleGone = 0;
             if (!c.Go) return;
             Hide(c); Park(c);
             if (c.Body) c.Body.detectCollisions = true;   // a fast clock may have left it passing through (Rules.CopySolid)
@@ -2933,6 +3420,16 @@ namespace EconomyOverhaul
             internal float FurledSince = -1; internal bool SailsParked;   // its reef animators culled while furled in port (TraderHulls.ParkSails)
             internal int ShowStep;
             internal Vector3 TargetReal; internal Quaternion TargetRot;
+            // Meeting the player's ships (TRADER_COLLISION_DRAFT.md; nothing of it saved: a load puts each trader as before):
+            // Way: its harbour leg's way, 1 the first, 2 the second (part 1). Back: going back along its leg (U falling) to BackTo,
+            // Astern: stern first while the water is under 40 m wide (part 4c; it turns round in wider water). HoldAt: waiting on its
+            // leg there for its way to clear. StopGap: from its bow to a player's ship blocking the rest of its way (-1: none; it
+            // stops 8 m short). Aside: its place across the leg that gets round a player's ship (NaN: none), until AsideTill.
+            // Beside: unit vectors toward the player's ships within 3 m of its hull (part 2), until BesideTill.
+            internal int Way = 1;
+            internal bool Back, Astern;
+            internal float BackTo = -1, HoldAt = -1, StopGap = -1, Aside = float.NaN, AsideTill, NextWays, NextAlt, NextLeave;
+            internal int BesideCount; internal readonly Vector2[] Beside = new Vector2[4]; internal float BesideTill;
             // each water sample's last good height (a Crest query that fails keeps it; NaN before the first)
             internal readonly float[] Water = { float.NaN, float.NaN, float.NaN, float.NaN };
         }
@@ -2995,6 +3492,18 @@ namespace EconomyOverhaul
             int hull = HullOf(b); if (hull < 0) return null;
             string plan = PlanOf(b);
             return plan != null && TraderHulls.Template(plan) != null ? plan : Rules.TraderKey(null, hull);
+        }
+        // Its helmsman's outfit, chosen at each draw (not saved: the user, "every time it could be different NPC model"), never one
+        // another drawn trader wears (Rules.PickOutfit).
+        private static void Wear(BoatState b, TraderCopy copy)
+        {
+            var all = TraderHulls.Outfits; if (all.Count == 0 || copy.HelmParts == null) return;
+            bool ffl = b.group == "small" && b.network != null && b.network.Any(p => p >= 22 && p <= 25);
+            int style = Rules.HelmsmanStyle(b.group, b.home, ffl);
+            var worn = new HashSet<int>(TraderHulls.Copies.Where(c => c != copy && c.Boat != null && c.Outfit >= 0).Select(c => c.Outfit));
+            int pick = Rules.PickOutfit(style, all.Select(o => o.Kind).ToList(), worn, UnityEngine.Random.value * .999999);
+            TraderHulls.Dress(copy, pick);
+            if (pick >= 0) Plugin.Log?.LogInfo("Visible traders: trader " + b.id + " (" + b.group + ", style " + (style >= 0 ? Rules.OutfitNames[style] : "any") + ") wears outfit " + pick + " (" + (all[pick].Kind >= 0 ? Rules.OutfitNames[all[pick].Kind] : "unknown") + ", from " + all[pick].From + "); outfits worn by the other drawn: " + worn.Count + ".");
         }
         internal static LanePath TripOf(BoatState b) => b.destination >= 0 ? LaneMap.Trip(b.origin, b.destination, b.lane) : null;
         // Where a trader out of sight is: its share of the trip along its lanes; while it waits, where it would be drawn: its port's
@@ -3127,7 +3636,7 @@ namespace EconomyOverhaul
         // of the ships they passed through stay (Meet: a ship the player owns since is made solid again).
         internal static void Reset()
         {
-            ReleaseAll(); keptBerth.Clear(); scrambled = null; islandOf.Clear(); islandMiss.Clear(); failedOnce = false; nextRegistered = 0;
+            ReleaseAll(); keptBerth.Clear(); scrambled = null; islandOf.Clear(); islandMiss.Clear(); failedOnce = false; nextRegistered = 0; nextHulls = -1; hullPartOf.Clear();
         }
         private static void ReleaseAll() { foreach (var v in shown.Values.ToList()) Release(v); berthHolders.Clear(); anchorSlots.Clear(); toBegin.Clear(); }
         // The traders the last scan picked to be drawn, nearest first, not yet taken from the pool (Update takes one a frame).
@@ -3137,7 +3646,7 @@ namespace EconomyOverhaul
         internal static void Update()
         {
             long t0 = FrameParts.Now;
-            try { UpdateParts(); }
+            try { UpdateParts(); TraderBubble.Step(); }
             finally { FrameParts.End(t0, shown.Count); }
         }
         private static void UpdateParts()
@@ -3327,7 +3836,7 @@ namespace EconomyOverhaul
                     FreePlace(v); v.Berth = kept; berthHolders[kept.Port * 1000 + kept.Number] = b.id;
                     v.Phase = Phase.Moored; v.Pos = kept.Centre; v.Yaw = BerthYaw(kept, YawOf(kept.InLeg.Direction(kept.InLeg.Length, 10)));
                 }
-                else if (TakePlace(v, h, PortLoaded(b.origin)))
+                else if (TakePlace(v, h, PortLoaded(b.origin), false))
                 {
                     if (v.Berth != null) { v.Phase = Phase.Moored; v.Pos = v.Berth.Centre; v.Yaw = BerthYaw(v.Berth, YawOf(v.Berth.InLeg.Direction(v.Berth.InLeg.Length, 10))); }
                     else { v.Phase = Phase.Anchored; v.Yaw = YawOf(-WindBlows()); v.Pos = AnchorPoint(v, h); }
@@ -3335,6 +3844,7 @@ namespace EconomyOverhaul
                 else { v.Phase = Phase.Wait; v.Yaw = YawOf(-WindBlows()); v.Pos = WaitPoint(v, h); }
             }
             copy.Boat = b; shown[b.id] = v;
+            Wear(b, copy);
             v.Placed = false; v.ShowStep = 0;
             Pose(v, 0, 0, true);
             // first drawn in port, its wait has been running unseen: it goes on
@@ -3384,15 +3894,23 @@ namespace EconomyOverhaul
                         b.remaining = Rules.TripRemaining(b.trip, v.S, v.Path.Length);
                         return true;
                     case Phase.LegOut:
-                        v.U = Mathf.Min(v.U + d, v.Leg.Length);
+                        v.U = v.Back ? Mathf.Max(v.BackTo, v.U - d) : Mathf.Min(v.U + d, v.Leg.Length);
                         // the trip's timer starts at the approach point, where today's straight line starts (VISIBLE_TRADERS.md)
                         if (b.destination >= 0) { b.remaining = b.trip; return true; }
-                        return false;
+                        // going to the approach point to choose again: its wait held until it is moored or anchored (it runs on for
+                        // one that was: Settled)
+                        return Rules.WaitHeld(true, v.Settled);
                     case Phase.LegIn:
-                        v.U = Mathf.Min(v.U + d * Mathf.Clamp((v.Leg.Length - v.U) / 30f, .25f, 1f), v.Leg.Length);
+                        if (v.Back) v.U = Mathf.Max(v.BackTo, v.U - d);
+                        else v.U = Mathf.Min(v.U + d * Mathf.Clamp((v.Leg.Length - v.U) / 30f, .25f, 1f), v.Leg.Length);
                         return Rules.WaitHeld(b.destination < 0, v.Settled);
                     // waiting at the approach point for its place: held too (the wait starts moored or anchored)
                     case Phase.Wait: return Rules.WaitHeld(b.destination < 0, v.Settled);
+                    // its wait over but no way out clear of the player's ships: it stays, its trip clock held at the full trip
+                    // (TRADER_COLLISION_DRAFT.md, part 1)
+                    case Phase.Moored: case Phase.Anchored:
+                        if (b.destination >= 0) { b.remaining = b.trip; return true; }
+                        return false;
                     default: return false;
                 }
             }
@@ -3423,46 +3941,72 @@ namespace EconomyOverhaul
                 if (!SetTrip(v)) { Release(v); return; }
                 v.S = (float)Rules.TripPlace(b.trip, b.remaining, v.Path.Length);
             }
-            if (b.destination >= 0 && (v.Phase == Phase.Wait || v.Phase == Phase.LegIn || v.Phase == Phase.Moored || v.Phase == Phase.Anchored)) { if (!Leave(v)) { Release(v); return; } }
-            if (v.Phase == Phase.LegOut && v.U >= v.Leg.Length - .01f)
+            // its wait over: out by a clear way (Leave; one with none clear stays at its place, its trip clock held); not while it goes
+            // back to its berth or anchorage on its way out (LegOut, Back), which Leave would turn round again
+            if (b.destination >= 0 && Time.time >= v.NextLeave && (v.Phase == Phase.Wait || v.Phase == Phase.LegIn || v.Phase == Phase.Moored || v.Phase == Phase.Anchored)) { if (!Leave(v)) { Release(v); return; } }
+            if (v.Back && v.U <= v.BackTo + .01f) EndBack(v);
+            if (v.Phase == Phase.LegOut && !v.Back && v.U >= v.Leg.Length - .01f)
             {
-                // a berth held for it on its way from the anchorage is let go when it sails instead
+                // the place it left (held while it might go back to it) is let go at the approach point
                 if (b.destination >= 0) { FreePlace(v); if (!SetTrip(v)) { Release(v); return; } v.Phase = Phase.Sail; v.S = 0; }
-                else { v.Phase = Phase.Wait; v.NextCheck = 0; }
+                else { FreePlace(v); v.Phase = Phase.Wait; v.NextCheck = 0; }
             }
             FrameParts.Add(FrameParts.Trips, t); t = FrameParts.Now;
-            // waiting at the approach point: a berth while its island is loaded, else the anchorage (question 11)
+            // waiting at the approach point: a berth while its island is loaded, else the anchorage (question 11), each only by a way
+            // clear of the player's ships (TRADER_COLLISION_DRAFT.md, part 1); none: it waits here with its wait held (the user:
+            // "waiting time still start counting until trader enter berth/anchorage"), but at a port with neither (none today)
             if (v.Phase == Phase.Wait && b.destination < 0 && Time.time >= v.NextCheck)
             {
                 v.NextCheck = Time.time + 1f;
                 var h = LaneMap.HarbourOf(v.Port);
-                if (h != null && TakePlace(v, h, PortLoaded(v.Port))) { v.Leg = v.Berth != null ? v.Berth.InLeg : h.AnchorLeg; v.U = 0; v.Phase = Phase.LegIn; }
-                else v.Settled = true;   // nowhere to go: it waits here, and its wait runs
+                if (h != null && TakePlace(v, h, PortLoaded(v.Port), true)) StartLeg(v, v.Berth != null ? v.Berth.In(v.Way) : h.AnchorIn(v.Way), v.Way, Phase.LegIn);
+                else if (h == null || h.Berths.Count == 0 && h.AnchorLeg == null) v.Settled = true;
             }
-            if (v.Phase == Phase.LegIn && v.U >= v.Leg.Length - .01f) { v.Phase = v.Berth != null ? Phase.Moored : Phase.Anchored; v.Settled = true; }
-            // a ship in a moored trader's berth (a recovery, the player mooring there): it goes to another berth or the anchorage
-            // (the user, 2026-10-17)
-            if (v.Phase == Phase.Moored && Time.time >= v.NextCheck)
-            {
-                v.NextCheck = Time.time + 2f;
-                if (ShipIn(v.Berth)) { var leg = v.Berth.Leg; FreePlace(v); v.Leg = leg; v.U = 0; v.Phase = Phase.LegOut; }
-            }
-            // anchored while its island was not loaded or the berths were full: once the island is loaded and a berth it fits is
-            // free, that berth is held for it and it goes there by the approach point (VISIBLE_TRADERS.md, "Chosen by Claude")
-            if (v.Phase == Phase.Anchored && b.destination < 0 && Time.time >= v.NextCheck)
+            if (v.Phase == Phase.LegIn && !v.Back && v.U >= v.Leg.Length - .01f) { v.Phase = v.Berth != null ? Phase.Moored : Phase.Anchored; v.Settled = true; v.HoldAt = -1; }
+            // on a harbour leg: a player's ship in the rest of its way (part 1; 4 times a second)
+            if ((v.Phase == Phase.LegIn || v.Phase == Phase.LegOut) && Time.time >= v.NextWays) Ways(v);
+            // on its way in it looks at its berth every 2 s, as a moored one does (part 1, "The fix"): a ship come into it, and it
+            // goes back to the approach point to choose again; an anchorage slot a player's ship has come into: another slot
+            if (v.Phase == Phase.LegIn && !v.Back && b.destination < 0 && Time.time >= v.NextCheck)
             {
                 v.NextCheck = Time.time + 2f;
                 var h = LaneMap.HarbourOf(v.Port);
-                int k = h != null && h.AnchorLeg != null && PortLoaded(v.Port) ? FreeBerth(v, h) : -1;
-                if (k >= 0)
+                if (v.Berth != null && ShipIn(v.Berth)) GoBack(v, 0f);
+                else if (v.Berth == null && v.Slot >= 0 && h != null && SlotHeld(v, h, v.Slot)) { if (!MoveSlot(v, h)) GoBack(v, 0f); }
+            }
+            // a ship in a moored trader's berth (a recovery, the player mooring there): it goes to another berth or the anchorage
+            // (the user, 2026-10-17), out by a clear way; with none clear it stays (and moves nothing into the ship, part 2)
+            if (v.Phase == Phase.Moored && b.destination < 0 && Time.time >= v.NextCheck)
+            {
+                v.NextCheck = Time.time + 2f;
+                int way = ShipIn(v.Berth) ? OutWay(v, 0) : 0;
+                if (way > 0) { var leg = v.Berth.Out(way); FreePlace(v); StartLeg(v, leg, way, Phase.LegOut); }
+            }
+            // anchored while its island was not loaded or the berths were full: once the island is loaded and a berth it fits is free
+            // with a clear way, it goes there by the shorter: its direct way from the anchorage (2026-10-21 evening, the user: "yes
+            // after fix"; its slot let go, the berth held), or out to the approach point to take it there (its anchorage slot held
+            // until there, the berth not; VISIBLE_TRADERS.md, "Chosen by Claude", and the collision build's choice (7))
+            if (v.Phase == Phase.Anchored && b.destination < 0 && Time.time >= v.NextCheck)
+            {
+                v.NextCheck = Time.time + 2f;
+                var h = LaneMap.HarbourOf(v.Port); int way = 0;
+                int k = h != null && h.AnchorLeg != null && PortLoaded(v.Port) ? FreeBerthWay(v, h, out way, null, 0, true) : -1;
+                if (k >= 0 && way == 3)
                 {
-                    FreePlace(v); v.Berth = h.Berths[k]; berthHolders[h.Port * 1000 + v.Berth.Number] = b.id;
-                    v.Leg = h.AnchorLeg.Reversed(); v.U = 0; v.Phase = Phase.LegOut;
+                    FreePlace(v); v.Berth = h.Berths[k]; berthHolders[h.Port * 1000 + v.Berth.Number] = v.Boat.id;
+                    StartLeg(v, v.Berth.Direct, 3, Phase.LegIn);
                 }
+                else if (k >= 0) { int outWay = OutWay(v, 0); if (outWay > 0) StartLeg(v, h.AnchorOut(outWay), outWay, Phase.LegOut); }
             }
             FrameParts.Add(FrameParts.Berths, t); t = FrameParts.Now;
             v.Speed = (float)Rules.TraderSpeed(b.speed, v.Wind, Vector2.Dot(DirOf(v.Yaw), WindBlows()));
             if (v.Phase != Phase.Sail && v.Phase != Phase.LegOut && v.Phase != Phase.LegIn) v.Speed = 0;
+            // in port: waiting on its leg it stands; a player's ship blocking the rest of its way, it stops 8 m short (part 2)
+            else if (v.Phase != Phase.Sail && !v.Back)
+            {
+                if (v.HoldAt >= 0) v.Speed = 0;
+                else if (v.StopGap >= 0) v.Speed = (float)Rules.InPortSpeed(v.Speed, v.StopGap);
+            }
             if (Time.time >= v.NextShips) { SaleShips(v); FrameParts.Add(FrameParts.SaleShips, t); t = FrameParts.Now; }
             if (Time.time >= v.NextContact) { Contacts(v, v.Phase == Phase.Sail || v.Phase == Phase.LegOut || v.Phase == Phase.LegIn); FrameParts.Add(FrameParts.Contacts, t); t = FrameParts.Now; }
             Pose(v, dt, fdt, false);
@@ -3475,7 +4019,10 @@ namespace EconomyOverhaul
         {
             v.Phase = Phase.Wait; v.Port = v.Boat.origin; v.Path = null; v.Leg = null; v.NextCheck = 0; v.Settled = false;
         }
-        // The wait is over (the fleet departed it): out the way it came in, then the lanes.
+        // The wait is over (the fleet departed it): out by the shorter way clear of the player's ships, then the lanes. With neither
+        // clear it stays at its berth or anchorage (sails furled, its trip clock held at the full trip: Clocked) and looks again
+        // every second (TRADER_COLLISION_DRAFT.md, part 1). Its place stays held on its way out, so it can go back to it (GoBack);
+        // it is let go at the approach point.
         private static bool Leave(Visual v)
         {
             var h = LaneMap.HarbourOf(v.Port);
@@ -3485,12 +4032,207 @@ namespace EconomyOverhaul
                     FreePlace(v);
                     if (!SetTrip(v)) return false;
                     v.Phase = Phase.Sail; v.S = 0; return true;
-                case Phase.Moored: { var leg = v.Berth.Leg; FreePlace(v); v.Leg = leg; v.U = 0; break; }
-                case Phase.Anchored: { FreePlace(v); if (h?.AnchorLeg == null) return false; v.Leg = h.AnchorLeg.Reversed(); v.U = 0; break; }
-                case Phase.LegIn: { var leg = v.Leg; float u = v.U; FreePlace(v); v.Leg = leg.Reversed(); v.U = Mathf.Max(0, leg.Length - u); break; }
+                case Phase.Moored: case Phase.Anchored:
+                    {
+                        if (v.Phase == Phase.Anchored && h?.AnchorLeg == null) { FreePlace(v); return false; }
+                        int way = OutWay(v, 0);
+                        if (way == 0) { v.NextLeave = Time.time + 1f; return true; }
+                        StartLeg(v, v.Phase == Phase.Moored ? v.Berth.Out(way) : h.AnchorOut(way), way, Phase.LegOut);
+                        break;
+                    }
+                // on a direct way from the anchorage it goes back there and leaves from it (its way out to the approach point)
+                case Phase.LegIn when v.Way == 3: { if (!v.Back) GoBack(v, 0f); v.NextLeave = Time.time + 1f; break; }
+                case Phase.LegIn: { var leg = v.Leg; float u = v.U; FreePlace(v); StartLeg(v, leg.Reversed(), v.Way, Phase.LegOut, Mathf.Max(0, leg.Length - u)); break; }
             }
-            v.Phase = Phase.LegOut;
             return true;
+        }
+        // On a harbour leg from u, nothing of the leg before carried over (going back, waiting, a stop, an aside); its ways looked at
+        // at once.
+        private static void StartLeg(Visual v, LanePath leg, int way, Phase phase, float u = 0)
+        {
+            v.Leg = leg; v.Way = way; v.U = u; v.Phase = phase;
+            v.Back = v.Astern = false; v.BackTo = v.HoldAt = v.StopGap = -1; v.Aside = float.NaN; v.NextWays = 0;
+        }
+
+        // ---- In port: the player's ships (TRADER_COLLISION_DRAFT.md, the user's answers of 2026-10-21) ----
+        // The player's ships by their whole hull (part 3, C3): every registered ship the player bought, and the one the player is
+        // aboard; only these (the user: "Player model shouldn't be recognized by trader, only player ship"). Each by the box of its
+        // hull mesh, the mesh the game's HullPlayerCollider copies for the swimming player (on every ship, modded ones too), turned
+        // with the hull; a ship without one by its Boat-tagged capsule. Looked up again 4 times a second.
+        private static readonly List<HullBox> playerHulls = new List<HullBox>();
+        private static readonly List<Transform> playerShips = new List<Transform>();
+        private static float nextHulls = -1;
+        private static readonly Dictionary<int, Component> hullPartOf = new Dictionary<int, Component>();
+        internal static List<HullBox> PlayerHulls()
+        {
+            if (Time.time < nextHulls) return playerHulls;
+            nextHulls = Time.time + .25f; playerHulls.Clear(); playerShips.Clear();
+            if (!FloatingOriginManager.instance) return playerHulls;
+            foreach (var p in RegisteredShips()) if (p && PlayersShip(p.transform)) playerShips.Add(p.transform);
+            var on = GameState.currentBoat;
+            if (on)
+            {
+                Transform ship = null;
+                for (var x = on; x && x != Refs.shiftingWorld && !ship; x = x.parent) if (x.GetComponent<PurchasableBoat>() || x.GetComponent<BoatRefs>()) ship = x;
+                if (ship && !playerShips.Contains(ship)) playerShips.Add(ship);
+            }
+            foreach (var s in playerShips) { var box = HullOf(s); if (box != null) playerHulls.Add(box); }
+            return playerHulls;
+        }
+        internal static HullBox HullOf(Transform ship)
+        {
+            int id = ship.GetInstanceID();
+            if (!hullPartOf.TryGetValue(id, out var part) || !part)
+            {
+                part = ship.GetComponentInChildren<HullPlayerCollider>(true);
+                if (!part) foreach (var c in ship.GetComponentsInChildren<CapsuleCollider>(true)) if (c.CompareTag("Boat")) { part = c; break; }
+                if (hullPartOf.Count > 256) hullPartOf.Clear();
+                hullPartOf[id] = part;
+            }
+            Bounds local; Transform t;
+            if (part is HullPlayerCollider hp)
+            {
+                var mesh = hp.GetComponent<MeshCollider>() ? hp.GetComponent<MeshCollider>().sharedMesh : null; if (!mesh) return null;
+                local = mesh.bounds; t = hp.transform;
+            }
+            else if (part is CapsuleCollider cap)
+            {
+                var size = Vector3.one * cap.radius * 2; size[cap.direction] = Mathf.Max(cap.height, cap.radius * 2);
+                local = new Bounds(cap.center, size); t = cap.transform;
+            }
+            else return null;
+            return Box(t, local);
+        }
+        // The box on the water of a box in a transform's frame: its middle, and the bounds in the frame of its longest level axis.
+        private static HullBox Box(Transform t, Bounds local)
+        {
+            var c = Real(t.TransformPoint(local.center));
+            var e = local.extents; var axes = new[] { t.TransformVector(new Vector3(e.x, 0, 0)), t.TransformVector(new Vector3(0, e.y, 0)), t.TransformVector(new Vector3(0, 0, e.z)) };
+            var f = new Vector2(axes[0].x, axes[0].z);
+            foreach (var a in axes) if (new Vector2(a.x, a.z).sqrMagnitude > f.sqrMagnitude) f = new Vector2(a.x, a.z);
+            f = f.sqrMagnitude > 1e-6f ? f.normalized : Vector2.up; var r = Across(f);
+            float ha = 0, hb = 0; foreach (var a in axes) { var h = new Vector2(a.x, a.z); ha += Mathf.Abs(Vector2.Dot(h, f)); hb += Mathf.Abs(Vector2.Dot(h, r)); }
+            return new HullBox(c.x, c.y, f.x, f.y, ha, hb);
+        }
+        private static Vector2 Real(Vector3 shifted) { var p = FloatingOriginManager.instance.ShiftingPosToRealPos(shifted - WorldLag()); return new Vector2(p.x, p.z); }
+        // The player's distance to a drawn trader's hull box, across the water (TraderBubble's 60 m).
+        internal static double HullDistance(Visual v, Vector2 p) => Rules.BoxDistance(BoxOf(v), p.x, p.y);
+        private static HullBox BoxOf(Visual v) => new HullBox(v.Pos.x, v.Pos.y, DirOf(v.Yaw).x, DirOf(v.Yaw).y, v.Size.x / 2, v.Size.y / 2);
+
+        // A way clear of the player's ships from its start (part 1): nothing blocking it ahead (TraderWays.Look). placeAtEnd: it ends at
+        // the berth or anchorage (in-bound).
+        private static bool WayClear(Visual v, LanePath leg, bool placeAtEnd) =>
+            leg != null && !TraderWays.Look(leg, 0f, placeAtEnd, PlayerHulls(), v.Size.x, v.Size.y, 0f).Blocked;
+        // Out from its berth or anchorage: the shorter clear way, 0 for none; skip: a way not to take (the one it found blocked).
+        private static int OutWay(Visual v, int skip)
+        {
+            var h = LaneMap.HarbourOf(v.Port); if (h == null) return 0;
+            var len = new double[2];
+            for (int w = 1; w <= 2; w++)
+            {
+                var leg = v.Berth != null ? v.Berth.Out(w) : h.AnchorOut(w);
+                len[w - 1] = w != skip && WayClear(v, leg, false) ? leg.Length : double.NaN;
+            }
+            return Rules.ShorterWay(len);
+        }
+        // An anchorage slot's place for this trader (AnchorPoint's), and whether a player's ship holds it (part 2).
+        private static Vector2 SlotPoint(Visual v, TraderHarbour h, int slot) => h.Anchorage + Across(-WindBlows()) * (slot - 1) * (v.Size.y + 4f);
+        private static bool SlotHeld(Visual v, TraderHarbour h, int slot)
+        {
+            var p = SlotPoint(v, h, slot);
+            foreach (var s in PlayerHulls()) if (Rules.SlotHeld(p.x, p.y, s, v.Size.x)) return true;
+            return false;
+        }
+        // A slot no player's ship holds, one no other trader holds first; past three the traders share them (the user's rule) but
+        // never one a player's ship holds; -1 when the player's ships hold all three.
+        private static int FreeSlot(Visual v, TraderHarbour h, int[] slots)
+        {
+            int open = -1, shared = 0; var ok = new bool[3];
+            for (int k = 0; k < 3; k++) { ok[k] = !SlotHeld(v, h, k); if (ok[k]) shared++; if (ok[k] && open < 0 && (slots[k] == -1 || slots[k] == v.Boat.id)) open = k; }
+            if (open >= 0 || shared == 0) return open;
+            int pick = v.Boat.id % shared;
+            for (int k = 0; k < 3; k++) if (ok[k] && pick-- == 0) return k;
+            return -1;
+        }
+        private static bool MoveSlot(Visual v, TraderHarbour h)
+        {
+            if (!anchorSlots.TryGetValue(h.Port, out var slots)) return false;
+            if (v.Slot >= 0 && slots[v.Slot] == v.Boat.id) slots[v.Slot] = -1;
+            int k = FreeSlot(v, h, slots); if (k < 0) return false;
+            v.Slot = k; if (slots[k] == -1) slots[k] = v.Boat.id;
+            return true;
+        }
+
+        // The ways check, 4 times a second on a harbour leg (parts 1, 2 and 4): a player's ship it can get round, and it moves aside
+        // as far as the water allows; one blocking the rest of its way, and it stops 8 m short (Step), then goes back to the approach
+        // point (in-bound) or its berth or anchorage (out-bound) when another way, berth or the anchorage is clear there; with none
+        // clear it backs out of a single-file stretch it is in (stern first, part 4c), else waits where it stopped (K3 (a)), looking
+        // again every second.
+        private static void Ways(Visual v)
+        {
+            v.NextWays = Time.time + .25f;
+            if (v.Back) return;
+            var look = TraderWays.Look(v.Leg, v.U, v.Phase == Phase.LegIn, PlayerHulls(), v.Size.x, v.Size.y, v.Offset);
+            if (!look.Blocked)
+            {
+                v.StopGap = -1; v.HoldAt = -1;
+                if (!float.IsNaN(look.Aside)) { v.Aside = look.Aside; v.AsideTill = Time.time + 2f; }
+                return;
+            }
+            v.StopGap = Mathf.Max(0, look.At - (v.U + v.Size.x / 2));
+            // still slowing toward it (the speed falls with the gap, so the last metre takes long: it counts as stopped within 1 m)
+            if (v.StopGap > Rules.StopShort + 1f && v.HoldAt < 0) return;
+            if (Time.time < v.NextAlt) return;
+            v.NextAlt = Time.time + 1f;
+            if (Alternative(v)) GoBack(v, 0f);
+            // inside a single-file stretch: out of it behind (its whole hull, and 2 m)
+            else if (look.SingleFile && v.U + v.Size.x / 2 > look.StretchStart) GoBack(v, Mathf.Max(0f, look.StretchStart - v.Size.x / 2 - (float)Rules.WayMargin));
+            else v.HoldAt = v.U;
+        }
+        // Another way from where going back ends: in-bound, from the approach point a berth with a clear way (not the way it is on),
+        // or the anchorage by a clear way with a slot free of the player's ships (by its other way when it is going there now);
+        // out-bound, its berth's or anchorage's other way, while it still holds that place.
+        private static bool Alternative(Visual v)
+        {
+            var h = LaneMap.HarbourOf(v.Port); if (h == null) return false;
+            // on a direct way from the anchorage: back to the anchorage, its own end, to choose again there (BackToAnchorage)
+            if (v.Phase == Phase.LegIn && v.Way == 3) return true;
+            if (v.Phase == Phase.LegOut) return (v.Berth != null || v.Slot >= 0) && OutWay(v, v.Way) > 0;
+            if (PortLoaded(v.Port) && FreeBerthWay(v, h, out _, v.Berth, v.Way) >= 0) return true;
+            if (h.AnchorLeg == null) return false;
+            if (v.Berth == null) return WayClear(v, h.AnchorIn(v.Way == 2 ? 1 : 2), true);
+            int[] slots = anchorSlots.TryGetValue(h.Port, out var s) ? s : new[] { -1, -1, -1 };
+            return FreeSlot(v, h, slots) >= 0 && (WayClear(v, h.AnchorIn(1), true) || WayClear(v, h.AnchorIn(2), true));
+        }
+        // Back along its leg to `to` (0: its start), stern first while the water is under 40 m wide (part 4c).
+        private static void GoBack(Visual v, float to)
+        {
+            v.Back = true; v.BackTo = Mathf.Min(to, v.U); v.HoldAt = -1; v.StopGap = -1; v.Aside = float.NaN;
+            v.Astern = TraderWays.BackAstern(v.Leg, v.U);
+        }
+        // Gone back: at the approach point (in-bound) it chooses again; at its berth or anchorage (out-bound) it lies there and
+        // leaves by another way (Leave); elsewhere on its leg it waits there for its way to clear.
+        private static void EndBack(Visual v)
+        {
+            v.Back = false; v.StopGap = -1;
+            if (v.BackTo > .01f) { v.HoldAt = v.U; return; }
+            if (v.Phase == Phase.LegIn && v.Way == 3) BackToAnchorage(v);
+            else if (v.Phase == Phase.LegIn) { FreePlace(v); v.Phase = Phase.Wait; v.NextCheck = 0; v.Leg = null; }
+            else if (v.Berth != null || v.Slot >= 0) { v.Phase = v.Berth != null ? Phase.Moored : Phase.Anchored; v.NextLeave = 0; v.NextCheck = Time.time + 2f; }
+            else v.HoldAt = v.U;
+        }
+        // Back at the anchorage by a berth's direct way: anchored again in a slot no player's ship holds, the berth let go, and it
+        // chooses again there (or leaves, its wait over); with no slot it waits at the way's start, the berth still held.
+        private static void BackToAnchorage(Visual v)
+        {
+            var h = LaneMap.HarbourOf(v.Port); var berth = v.Berth;
+            if (h != null && h.AnchorLeg != null && TakePlace(v, h, false, false))
+            {
+                v.Phase = Phase.Anchored; v.Leg = null; v.NextLeave = 0; v.NextCheck = Time.time + 2f;
+                return;
+            }
+            if (berth != null) { v.Berth = berth; berthHolders[berth.Port * 1000 + berth.Number] = v.Boat.id; }
+            v.HoldAt = v.U;
         }
 
         // ---- In port ----
@@ -3520,26 +4262,51 @@ namespace EconomyOverhaul
         }
         // The free berth this trader would take (the smallest size its hull fits, the lowest number), -1 for none; a berth its hull
         // is too long or wide for counts as taken (Rules.BerthFits).
-        private static int FreeBerth(Visual v, TraderHarbour h)
+        // Taken for this trader: another trader holds it, its hull does not fit, or a ship lies in it.
+        private static bool BerthTaken(Visual v, TraderBerth x) =>
+            berthHolders.TryGetValue(x.Port * 1000 + x.Number, out int id) && id != v.Boat.id || !Rules.BerthFits(x.Length, x.Beam, v.Size.x, v.Size.y) || ShipIn(x);
+        // Since 2026-10-21 only by a way clear of the player's ships (FreeBerthWay; QA vtsaleships reads this one).
+        private static int FreeBerth(Visual v, TraderHarbour h) => FreeBerthWay(v, h, out _, null, 0);
+        // The free berth on its way in (TRADER_COLLISION_DRAFT.md, part 1: the user's rule among the berths with a clear way in, by the
+        // shorter clear way, Rules.PickBerthWay); skipBerth and skipWay: the way it found blocked. anchored: from the anchorage, its
+        // ways 1 and 2 counted with the anchorage's shorter clear way out to the approach point, and way 3 the berth's direct way.
+        private static int FreeBerthWay(Visual v, TraderHarbour h, out int way, TraderBerth skipBerth, int skipWay, bool anchored = false)
         {
             var classes = h.Berths.Select(x => x.Class).ToList();
-            var taken = h.Berths.Select(x => berthHolders.TryGetValue(x.Port * 1000 + x.Number, out int id) && id != v.Boat.id
-                                             || !Rules.BerthFits(x.Length, x.Beam, v.Size.x, v.Size.y) || ShipIn(x)).ToList();
-            return Rules.PickBerth(classes, taken, v.Class);
+            var taken = h.Berths.Select(x => BerthTaken(v, x)).ToList();
+            var ways = new List<double[]>();
+            double outLen = double.NaN;
+            if (anchored) { int o = OutWay(v, 0); if (o > 0) outLen = h.AnchorOut(o).Length; }
+            for (int i = 0; i < h.Berths.Count; i++)
+            {
+                var len = new[] { double.NaN, double.NaN, double.NaN };
+                if (!taken[i])
+                    for (int w = 1; w <= (anchored ? 3 : 2); w++)
+                    {
+                        var leg = h.Berths[i].In(w);
+                        if (leg == null || h.Berths[i] == skipBerth && w == skipWay || anchored && w < 3 && double.IsNaN(outLen) || !WayClear(v, leg, true)) continue;
+                        len[w - 1] = (anchored && w < 3 ? outLen : 0) + leg.Length;
+                    }
+                ways.Add(len);
+            }
+            return Rules.PickBerthWay(classes, taken, v.Class, ways, out way);
         }
-        // The berth (when berth: its island loaded), else the anchorage (a slot of three, side by side). False when the port has
-        // neither.
-        private static bool TakePlace(Visual v, TraderHarbour h, bool berth)
+        // The berth (when berth: its island loaded), else the anchorage (a slot of three, side by side, none a player's ship holds).
+        // ways: only by a way clear of the player's ships (part 1; its first drawing in port puts it at its place, any way); v.Way
+        // set. False when there is none.
+        private static bool TakePlace(Visual v, TraderHarbour h, bool berth, bool ways)
         {
             FreePlace(v);
-            int k = berth ? FreeBerth(v, h) : -1;
-            if (k >= 0) { v.Berth = h.Berths[k]; berthHolders[h.Port * 1000 + v.Berth.Number] = v.Boat.id; v.Port = h.Port; return true; }
+            int way = 1, k = !berth ? -1 : ways ? FreeBerthWay(v, h, out way, null, 0) : Rules.PickBerth(h.Berths.Select(x => x.Class).ToList(), h.Berths.Select(x => BerthTaken(v, x)).ToList(), v.Class);
+            if (k >= 0) { v.Berth = h.Berths[k]; berthHolders[h.Port * 1000 + v.Berth.Number] = v.Boat.id; v.Port = h.Port; v.Way = Math.Max(1, way); return true; }
             if (h.AnchorLeg == null) return false;
+            if (ways) way = Rules.ShorterWay(new[] { WayClear(v, h.AnchorIn(1), true) ? h.AnchorLeg.Length : double.NaN, WayClear(v, h.AnchorIn(2), true) ? h.AnchorSecond.Length : double.NaN });
+            if (way == 0) return false;
             if (!anchorSlots.TryGetValue(h.Port, out var slots)) anchorSlots[h.Port] = slots = new[] { -1, -1, -1 };
-            int free = Array.IndexOf(slots, -1);
-            v.Slot = free >= 0 ? free : v.Boat.id % 3;   // more than three: they pass through each other (the user's rule)
-            if (free >= 0) slots[free] = v.Boat.id;
-            v.Berth = null; v.Port = h.Port;
+            // more than three: they pass through each other (the user's rule), never in a slot a player's ship holds (part 2)
+            int free = FreeSlot(v, h, slots); if (free < 0) return false;
+            v.Slot = free; if (slots[free] == -1) slots[free] = v.Boat.id;
+            v.Berth = null; v.Port = h.Port; v.Way = way;
             return true;
         }
         private static void FreePlace(Visual v)
@@ -3552,9 +4319,13 @@ namespace EconomyOverhaul
         // while a registered ship's place is in it, switched on or not: a ship for sale far off is switched off until the game's
         // distance check (10-20 s after a load, the probe vt_saleships), and a berth at its spot must not be taken before (the
         // user's feedback on 0.10.4, V1: "when that spot don't have ship(player buy it and sail away), trader can use it").
+        // The player's ships also by their whole hull's box (TRADER_COLLISION_DRAFT.md, part 3, C3: "check ship's whole hull"; a
+        // Baghlah's ends reach 7.75 m past its capsule; a ship across two berths takes both).
         private static bool ShipIn(TraderBerth berth)
         {
             if (berth == null) return false;
+            var box = new HullBox(berth.Centre.x, berth.Centre.y, DirOf(berth.Heading).x, DirOf(berth.Heading).y, berth.Length / 2, berth.Beam / 2);
+            foreach (var s in PlayerHulls()) if (Rules.BoxesOverlap(box, s, 2)) return true;
             var centre = Shift(berth.Centre, 1f); var turn = Quaternion.Euler(0, berth.Heading, 0);
             int n = Physics.OverlapBoxNonAlloc(centre, new Vector3(berth.Beam / 2 + 2, 4f, berth.Length / 2 + 2), found, turn, ~0, QueryTriggerInteraction.Ignore);
             for (int i = 0; i < n; i++) if (found[i] && found[i].CompareTag("Boat")) return true;
@@ -3575,6 +4346,7 @@ namespace EconomyOverhaul
             switch (v.Phase)
             {
                 case Phase.Moored: case Phase.Anchored: return 1f;
+                case Phase.LegIn when v.Way == 3: return 1f;      // the direct way from the anchorage: in port all along
                 case Phase.LegIn: return v.Leg != null && v.Leg.Length > 0 ? Mathf.Clamp01(v.U / v.Leg.Length) : 0f;
                 case Phase.LegOut: return v.Leg != null && v.Leg.Length > 0 ? 1f - Mathf.Clamp01(v.U / v.Leg.Length) : 0f;
                 default: return 0f;
@@ -3593,7 +4365,7 @@ namespace EconomyOverhaul
         // ---- Where it is, how it lies on the water ----
         private static void Pose(Visual v, float dt, float fdt, bool snap)
         {
-            Vector2 at, dir; float half = 0, yawTarget; bool held = false;
+            Vector2 at, dir; float half = 0, yawTarget, legTarget = float.NaN; bool held = false;
             var h = v.Port >= 0 ? LaneMap.HarbourOf(v.Port) : null;
             float span = Mathf.Max(8f, v.Size.x * .6f);
             switch (v.Phase)
@@ -3605,7 +4377,18 @@ namespace EconomyOverhaul
                         // traders spread 20 m each side, none within 10-50 m of the berth, and no further than the water there allows
                         // (Rules.LegHalfWidth: the leg's room, the user's report at Dragon Cliffs' sea gate, 2026-10-20)
                         float fromBerth = v.Phase == Phase.LegIn && (v.Berth != null || v.Slot >= 0) ? v.Leg.Length - v.U : v.Phase == Phase.LegOut ? v.U : 999f;
-                        half = (float)Rules.LegHalfWidth(fromBerth, v.Leg.RoomAt(v.U), v.Size.y);
+                        float room = v.Leg.RoomAt(v.U);
+                        half = (float)Rules.LegHalfWidth(fromBerth, room, v.Size.y);
+                        v.Leg.WidthAt(v.U, out float wl, out float wr);
+                        // round a player's ship in its way, as far as the water allows (TRADER_COLLISION_DRAFT.md, part 1; the room
+                        // record's limit too, 3 m from rock); else in water under 40 m its starboard side 2 m from the edge (part 4a)
+                        if (!float.IsNaN(v.Aside) && Time.time < v.AsideTill)
+                        {
+                            Rules.PortOffsets(fromBerth, wl, wr, v.Size.y / 2, out double min, out double max);
+                            float lim = float.IsPositiveInfinity(room) ? float.PositiveInfinity : Mathf.Max(0f, room - v.Size.y / 2 - (float)Rules.LegRoomSpare);
+                            legTarget = Mathf.Clamp(Mathf.Clamp(v.Aside, (float)min, (float)max), -lim, lim);
+                        }
+                        else if (Rules.KeepsRight(wl, wr)) legTarget = (float)Rules.KeepRight(fromBerth, wl, wr, v.Size.y);
                         break;
                     }
                 case Phase.Moored: at = v.Berth.Centre; dir = DirOf(BerthYaw(v.Berth, v.Yaw)); held = true; break;
@@ -3613,8 +4396,14 @@ namespace EconomyOverhaul
                 default: at = h != null ? WaitPoint(v, h) : v.Pos; dir = -WindBlows(); held = true; break;
             }
             yawTarget = YawOf(dir);
+            // going back along its leg: stern first while the water is under 40 m wide, turned round once it is wider (part 4c)
+            if (v.Back)
+            {
+                if (v.Astern && !TraderWays.BackAstern(v.Leg, v.U)) v.Astern = false;
+                if (!v.Astern) yawTarget = YawOf(-dir);
+            }
             // coming alongside: the last 30 m turn it along the berth
-            if (v.Phase == Phase.LegIn && v.Berth != null)
+            else if (v.Phase == Phase.LegIn && v.Berth != null)
             {
                 float left = v.Leg.Length - v.U;
                 if (left < 30f) yawTarget = Mathf.LerpAngle(BerthYaw(v.Berth, yawTarget), yawTarget, left / 30f);
@@ -3623,11 +4412,31 @@ namespace EconomyOverhaul
             if (held) pos = snap ? at : Vector2.MoveTowards(v.Pos, at, 1.5f * dt);
             else
             {
-                float target = (float)Rules.LaneShare(v.Boat.id) * half + v.Avoid;
-                target = Mathf.Clamp(target, -half, half);
+                float target = !float.IsNaN(legTarget) ? legTarget : Mathf.Clamp((float)Rules.LaneShare(v.Boat.id) * half + v.Avoid, -half, half);
+                if (v.Back) target = v.Offset;     // going back it keeps its place across the leg
                 v.Offset = snap ? target : Mathf.MoveTowards(v.Offset, target, (1.5f + .2f * v.Speed) * dt);
                 var aim = at + Across(dir) * v.Offset;
                 pos = snap ? aim : Vector2.MoveTowards(v.Pos, aim, (v.Speed + 3f) * dt);
+            }
+            // beside a player's ship (part 2): the move loses its part toward it (under way only its part across: it still moves along,
+            // and at sea shoves what lies ahead as before), and it does not turn (its ends would sweep); anchored or waiting it stops
+            // swinging with the wind
+            if (!snap && v.BesideCount > 0 && Time.time < v.BesideTill)
+            {
+                double mx = pos.x - v.Pos.x, mz = pos.y - v.Pos.y; var rb = Across(DirOf(v.Yaw));
+                Vector2 Toward(Vector2 to) { if (held) return to; float side = Vector2.Dot(to, rb); return Mathf.Abs(side) > .3f ? rb * Mathf.Sign(side) : Vector2.zero; }
+                for (int i = 0; i < v.BesideCount; i++)
+                {
+                    var t = Toward(v.Beside[i]);
+                    if (t != Vector2.zero) Rules.WithoutToward(ref mx, ref mz, t.x, t.y);
+                }
+                // stored as floats it must not round toward a ship either (Rules.NoFloatToward); where it would, it stays this frame
+                float px = v.Pos.x + (float)mx, pz = v.Pos.y + (float)mz; bool off = true;
+                for (int i = 0; i < v.BesideCount; i++) { var t = Toward(v.Beside[i]); if (t != Vector2.zero) Rules.NoFloatToward(v.Pos.x, v.Pos.y, ref px, ref pz, t.x, t.y); }
+                for (int i = 0; i < v.BesideCount; i++) { var t = Toward(v.Beside[i]); if (t != Vector2.zero && (double)(px - v.Pos.x) * t.x + (double)(pz - v.Pos.y) * t.y > 0) off = false; }
+                pos = off ? new Vector2(px, pz) : v.Pos;
+                yawTarget = v.Yaw;
+                if (!held) v.Offset = Vector2.Dot(pos - at, Across(dir));   // its place across follows where it is
             }
             if (!snap && fdt > 0) v.Velocity = (pos - v.Pos) / fdt;
             v.Pos = pos;
@@ -3690,7 +4499,8 @@ namespace EconomyOverhaul
         // game's own speed (the user's report of 2026-10-20: asleep the sails billowed as in a gale and furled at their own pace).
         private static void Sails(Visual v, float dt, float fdt)
         {
-            bool moving = v.Phase == Phase.Sail || v.Phase == Phase.LegOut || v.Phase == Phase.LegIn;
+            // (waiting on its harbour leg for its way to clear it furls them too: TRADER_COLLISION_DRAFT.md, part 1)
+            bool moving = v.Phase == Phase.Sail || (v.Phase == Phase.LegOut || v.Phase == Phase.LegIn) && v.HoldAt < 0;
             v.Unroll = Mathf.MoveTowards(v.Unroll, moving ? 1f : 0f, (float)Rules.FurlRate * dt);
             // furled in port its reef animators culled, always animating again as it sets out (TraderHulls.ParkSails)
             if (!moving && v.Unroll < .04f)
@@ -3802,12 +4612,18 @@ namespace EconomyOverhaul
         // to the player's ships and passes through the others.
         // ahead: under way (the box ahead and turning aside); in every phase the box round its own hull (3 m clear), so a ship that is
         // not the player's passes through it whichever way they meet, at a berth too (question 16).
+        // Since 2026-10-21 (TRADER_COLLISION_DRAFT.md): the player is not seen, only the player's ships (the user: "Player model shouldn't
+        // be recognized by trader, only player ship"; the copy's hull stays solid to the swimming player, K5 (a)); on a harbour leg
+        // the player's ships ahead are the ways check's (Ways: round them or stop short), at sea as before (C2: "keep the ahead as
+        // now"); and in every phase, at any distance, the player's ships within 3 m of its hull are noted for the beside rule (Pose).
         private static void Contacts(Visual v, bool ahead)
         {
             v.NextContact = Time.time + .25f;
+            Beside(v);
             var player = PlayerReal();
             if ((v.Pos - player).magnitude > Rules.TraderNear) return;
             var f2 = DirOf(v.Yaw); var turn = Quaternion.Euler(0, v.Yaw, 0);
+            bool inPort = v.Phase == Phase.LegIn || v.Phase == Phase.LegOut;
             if (ahead)
             {
                 float look = Mathf.Max(20f, v.Speed * 8f);
@@ -3821,9 +4637,9 @@ namespace EconomyOverhaul
                     if (body && body == v.Copy.Body) continue;
                     bool trader = body && TraderHulls.IsCopy(body);
                     var ship = trader ? null : ShipOf(c);
-                    bool person = c.CompareTag("Player") || c is CharacterController;
-                    if (!trader && !ship && !person) continue;
+                    if (!trader && !ship) continue;
                     if (ship) Meet(v, ship);
+                    if (ship && inPort && PlayersShip(ship)) continue;
                     float s = Vector3.Dot(c.bounds.center - me, right);
                     if (!any || Mathf.Abs(s) < Mathf.Abs(side)) side = s;
                     any = true;
@@ -3844,6 +4660,20 @@ namespace EconomyOverhaul
                 var body = c.attachedRigidbody;
                 if (body && (body == v.Copy.Body || TraderHulls.IsCopy(body))) continue;
                 var ship = ShipOf(c); if (ship) Meet(v, ship);
+            }
+        }
+        // The player's ships within 3 m of its hull (part 2, the beside rule; K4 (a): at sea too): the way toward each, hull to hull
+        // (Rules.BoxApart), kept until the next look.
+        private static void Beside(Visual v)
+        {
+            v.BesideCount = 0; v.BesideTill = Time.time + .5f;
+            var hulls = PlayerHulls(); if (hulls.Count == 0) return;
+            var me = BoxOf(v);
+            foreach (var s in hulls)
+            {
+                if (v.BesideCount >= v.Beside.Length || !Rules.BoxesOverlap(me, s, Rules.BesideGap)) continue;
+                Rules.BoxApart(me, s, out double tx, out double tz);
+                v.Beside[v.BesideCount++] = new Vector2((float)tx, (float)tz);
             }
         }
         // The ship a collider belongs to: the nearest parent with PurchasableBoat, BoatRefs or NPCBoatController (a sail or boom has a
@@ -3877,7 +4707,7 @@ namespace EconomyOverhaul
                         foreach (var t in theirs) if (t && t.enabled && !t.isTrigger) Physics.IgnoreCollision(a, t, false);
             }
         }
-        private static bool PlayersShip(Transform ship)
+        internal static bool PlayersShip(Transform ship)
         {
             var boat = ship.GetComponent<PurchasableBoat>();
             if (boat && boat.isPurchased()) return true;
@@ -4010,4 +4840,222 @@ namespace EconomyOverhaul
     }
     [HarmonyPatch(typeof(StartMenu), "StartNewGame")] internal static class TraderTemplatesNewGamePatch { [HarmonyPriority(Priority.First)] static void Prefix() => TraderHulls.Capture(); }
     [HarmonyPatch(typeof(SaveLoadManager), "LoadGame")] internal static class TraderTemplatesLoadPatch { [HarmonyPriority(Priority.First)] static void Prefix() => TraderHulls.Capture(); }
+
+    // ---- A trader speaks when a player's ship hits it (TRADER_DIALOGUE_DRAFT.md, the user, 2026-10-21) ----
+    // A bubble over the trader's helmsman: its lower edge 2.3 m over his feet ("probally 2.3 meter height over his feet"), the
+    // tavern bubble 5 times over ("10m looks like 2m from tavern"), one size in the world, drawn over everything ("keep it not hide
+    // by both ship and land"), turned to the view each frame as the game turns the tavern's (TavernRumorsDude.Update). It shows at
+    // the first contact between a player's ship and the trader, at any speed, whoever moved (the game's contact on the ship's body,
+    // BoatImpactSoundsCollider.OnCollisionEnter, before its own speed checks), until the player is 60 m from the trader's hull
+    // ("Change the bubble fade out to 60m"), then shrinks away with the game's tween; a contact after that gives a new one. One of
+    // the user's 17 lines (word for word) at random, never the trader's last (Claude's choice), on one row, the bubble as long as
+    // it needs (Layout). Nothing saved.
+    internal static class TraderBubble
+    {
+        internal static readonly string[] Lines = {
+            "I shouldn't skip that insurance...",
+            "OI! WHAT YE DOING?!",
+            "EVEN ME GRANDMA SAIL BETTER THAN YE!",
+            "GET OUT OF THE DAMN WAY!",
+            "(Staring at you menacingly)",
+            "BY POSEIDON'S BARNACLED BALLS!!",
+            "YOU DRANK TOO MUCH BILGE??",
+            "Shiver me timber! A Landlubber!",
+            "YE 'AVE OAKUM IN YE EYE??",
+            "Your approach lacks... subtlety.",
+            "Remarkable! All this water, and yet here you are...",
+            "... I see you\u2019ve chosen the direct route.",
+            "... A most intimate maneuver.",
+            "Do you generally navigate by impact?",
+            "An ambitious approach.",
+            "A bold maneuver. Not a good one, but certainly bold.",
+            "YE BLIND SWINE! KEEP OFF!" };
+        internal const float Times = 5f, LowerEdge = 2.3f, Away = 60f, ShrinkTime = .25f;
+        internal const float TavernWidth = 1.10f, TavernHeight = .38f;   // the tavern backing as drawn (TRADER_DIALOGUE_DRAFT.md; vtn-2 to vtn-5)
+        // The tavern bubble's look, from the first rumour NPC loaded, by its field TavernRumorsDude.speechUI (never by name: Talkative
+        // NPCs adds a second "speech ui"): the backing's mesh and colour, the text's font, size and colour, both placed as there.
+        private static bool taken; private static Mesh backMesh; private static Color backColour = new Color(.95f, .93f, .86f), textColour = Color.black;
+        private static Font font; private static int fontSize; private static float characterSize = 1f, lineSpacing = 1f;
+        private static TextAnchor anchor = TextAnchor.MiddleCenter; private static TextAlignment alignment = TextAlignment.Center;
+        private static Vector3 backAt, textAt, backScale = Vector3.one, textScale = Vector3.one;
+        private static Quaternion backTurn = Quaternion.identity, textTurn = Quaternion.identity;
+        private static float halfHeight = .19f, halfWidth = .55f;   // the tavern backing's (1.10 x 0.38 m) until taken
+        private static Material backMaterial, textMaterial; private static Texture2D white, rounded;
+        internal static string Look { get; private set; } = "none yet";
+        internal static bool KeepForTest;   // the picture test: bubbles shown far from the player stay
+        private static readonly Dictionary<int, int> lastLine = new Dictionary<int, int>();
+        private static readonly HashSet<int> noted = new HashSet<int>();
+        internal static void TakeLook(TavernRumorsDude dude)
+        {
+            if (taken || !dude || !dude.speechUI || !dude.text || !dude.text.font) return;
+            var su = dude.speechUI.transform; var inv = Quaternion.Inverse(su.rotation);
+            var text = dude.text; var textR = text.GetComponent<Renderer>();
+            var back = su.GetComponentsInChildren<MeshRenderer>(true).Where(r => r != textR && !r.GetComponent<TextMesh>() && r.GetComponent<MeshFilter>() && r.GetComponent<MeshFilter>().sharedMesh)
+                         .OrderByDescending(r => r.GetComponent<MeshFilter>().sharedMesh.name.IndexOf("bubble", StringComparison.OrdinalIgnoreCase) >= 0).ThenByDescending(r => r.GetComponent<MeshFilter>().sharedMesh.bounds.size.sqrMagnitude).FirstOrDefault();
+            if (!back) return;
+            taken = true;
+            var mesh = back.GetComponent<MeshFilter>().sharedMesh;
+            if (mesh.isReadable) { backMesh = Object.Instantiate(mesh); backMesh.colors = Enumerable.Repeat(Color.white, backMesh.vertexCount).ToArray(); }
+            if (back.sharedMaterial && back.sharedMaterial.HasProperty("_Color")) backColour = back.sharedMaterial.color;
+            backColour.a = 1f;
+            font = text.font; fontSize = text.fontSize; characterSize = text.characterSize; lineSpacing = text.lineSpacing; anchor = text.anchor; alignment = text.alignment; textColour = text.color;
+            var centre = inv * (back.transform.TransformPoint(mesh.bounds.center) - su.position);
+            backAt = inv * (back.transform.position - su.position) - centre; backTurn = inv * back.transform.rotation; backScale = back.transform.lossyScale;
+            textAt = inv * (text.transform.position - su.position) - centre; textTurn = inv * text.transform.rotation; textScale = text.transform.lossyScale;
+            // its width and height: the plate's two longest edges in the world, through its whole matrix (vtn-3 and vtn-4 read 0.50 x
+            // 0.20 m through lossyScale, which a turned part under a parent stretched unevenly gets wrong; its drawn box at the tavern
+            // is about 1.1 by 0.38 m, the draft's 1.10 x 0.38)
+            var m4 = back.transform.localToWorldMatrix; var bs = mesh.bounds.size;
+            var dims = new[] { m4.MultiplyVector(new Vector3(bs.x, 0, 0)).magnitude, m4.MultiplyVector(new Vector3(0, bs.y, 0)).magnitude, m4.MultiplyVector(new Vector3(0, 0, bs.z)).magnitude }.OrderByDescending(d => d).ToArray();
+            // ... but when it wakes the tavern's backing reads smaller than it is drawn (vtn-5: 0.50 x 0.20 m read here, its drawn box 0.38 m
+            // tall in every run), its text not (vtn-6: scaled with it, the text came out twice the tavern's against its backing): the
+            // backing takes the size it is drawn at (the draft's 1.10 x 0.38 m, the same at all 18 taverns), the text its own
+            float k = dims[1] > 1e-4f ? TavernHeight / dims[1] : 1f;
+            backAt *= k; backScale *= k;
+            halfWidth = TavernWidth / 2f; halfHeight = TavernHeight / 2f;
+            backMaterial = textMaterial = null;
+            Look = "the tavern's (port " + dude.portIndex + ": backing " + mesh.name + (mesh.isReadable ? "" : " not readable, a plain shape instead") + " read " + dims[0].ToString("F2") + " x " + dims[1].ToString("F2") + " m on waking (x" + k.ToString("F2") + "), drawn " + (2 * halfWidth).ToString("F2") + " x " + (2 * halfHeight).ToString("F2") +
+                   " m, colour " + backColour + "; font " + font.name + " size " + fontSize + " x " + characterSize + ", text scale " + textScale.x.ToString("F3") + ", text colour " + textColour + ")";
+            Plugin.Log?.LogInfo("Trader bubble: the look taken, " + Look + ".");
+        }
+        // Before any tavern is loaded (a save loaded at sea): a plain bubble made in code, with the game's notice font (Claude's pick).
+        private static void Materials()
+        {
+            if (backMaterial && textMaterial) return;
+            if (!font)
+            {
+                var notice = NotificationUi.instance ? NotificationUi.instance.GetComponentsInChildren<TextMesh>(true).FirstOrDefault(t => t.font) : null;
+                font = notice ? notice.font : Resources.GetBuiltinResource<Font>("Arial.ttf");
+                fontSize = 64; characterSize = .0115f; textScale = Vector3.one; textColour = Color.black; anchor = TextAnchor.MiddleCenter; alignment = TextAlignment.Center;
+                Look = "plain (no tavern loaded yet; font " + (font ? font.name : "none") + ")";
+            }
+            // the game's text shader (GUI/Text Shader: drawn over everything, ZTest Always) for both, the backing just before its text
+            var shader = font && font.material ? font.material.shader : Shader.Find("GUI/Text Shader");
+            if (!white) { white = new Texture2D(1, 1); white.SetPixel(0, 0, Color.white); white.Apply(); }
+            if (!rounded) rounded = RoundedMask(128, 48, 20);
+            backMaterial = new Material(shader) { name = "trader bubble backing", mainTexture = backMesh ? (Texture)white : rounded, color = backColour, renderQueue = 3100 };
+            textMaterial = new Material(font.material) { name = "trader bubble text", renderQueue = 3101 };
+        }
+        private static Texture2D RoundedMask(int w, int h, int r)
+        {
+            var t = new Texture2D(w, h, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+            for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
+            {
+                float dx = Mathf.Max(0, Mathf.Max(r - x - .5f, x + .5f - (w - r))), dy = Mathf.Max(0, Mathf.Max(r - y - .5f, y + .5f - (h - r)));
+                t.SetPixel(x, y, new Color(1, 1, 1, Mathf.Clamp01(r + .5f - Mathf.Sqrt(dx * dx + dy * dy))));
+            }
+            t.Apply(); return t;
+        }
+        private static Mesh quad;
+        private static Mesh Quad()
+        {
+            if (quad) return quad;
+            quad = new Mesh { name = "trader bubble plain", vertices = new[] { new Vector3(-1, -1), new Vector3(1, -1), new Vector3(-1, 1), new Vector3(1, 1) },
+                              uv = new[] { new Vector2(0, 0), new Vector2(1, 0), new Vector2(0, 1), new Vector2(1, 1) }, colors = Enumerable.Repeat(Color.white, 4).ToArray(), triangles = new[] { 0, 2, 1, 1, 2, 3 } };
+            quad.RecalculateBounds(); return quad;
+        }
+        // A new bubble on a drawn trader, its line chosen; `line` set: that line (the tests).
+        internal static void Show(TraderCopy c, int boatId, int line = -1)
+        {
+            if (c == null || !c.Go) return;
+            if (c.Bubble) Object.Destroy(c.Bubble);
+            Materials();
+            if (line < 0) line = Rules.PickLine(Lines.Length, lastLine.TryGetValue(boatId, out int last) ? last : -1, UnityEngine.Random.value * .999999);
+            lastLine[boatId] = line;
+            var root = new GameObject("trader bubble"); root.transform.SetParent(c.Go.transform, false);
+            var helm = c.Go.transform.Find("helmsman");
+            var feet = helm ? helm.localPosition : Vector3.up * 3f;
+            root.transform.localPosition = feet + Vector3.up * (LowerEdge + halfHeight * Times);
+            var back = new GameObject("backing"); back.transform.SetParent(root.transform, false);
+            back.AddComponent<MeshFilter>().sharedMesh = backMesh ? backMesh : Quad();
+            if (backMesh) { back.transform.localPosition = backAt * Times; back.transform.localRotation = backTurn; back.transform.localScale = backScale * Times; }
+            else back.transform.localScale = new Vector3(halfWidth * Times, halfHeight * Times, 1f);   // the tavern's size 5 times over (the quad is 2 x 2)
+            var br = back.AddComponent<MeshRenderer>(); br.sharedMaterial = backMaterial;
+            var words = new GameObject("text"); words.transform.SetParent(root.transform, false);
+            // with the game's backing the text placed as in the tavern; on the plain shape at its centre (vtn-2: the tavern's offset, made
+            // for its own mesh, put the text off the shape)
+            if (backMesh) { words.transform.localPosition = textAt * Times; words.transform.localRotation = textTurn; }
+            else { anchor = TextAnchor.MiddleCenter; alignment = TextAlignment.Center; }
+            words.transform.localScale = textScale * Times;
+            var tm = words.AddComponent<TextMesh>(); tm.font = font; tm.fontSize = fontSize; tm.characterSize = characterSize; tm.lineSpacing = lineSpacing; tm.anchor = anchor; tm.alignment = alignment; tm.color = textColour; tm.richText = false;
+            tm.text = Layout(Lines[line], out float width);
+            if (!backMesh) back.transform.localScale = new Vector3(width / 2f, halfHeight * Times, 1f);
+            var tr = words.GetComponent<MeshRenderer>(); tr.sharedMaterial = textMaterial;
+            foreach (var r in new Renderer[] { br, tr }) { r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false; r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off; r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off; }
+            root.layer = back.layer = words.layer = 0;
+            if (Refs.observerMirror) root.transform.rotation = Refs.observerMirror.transform.rotation;
+            c.Bubble = root; c.BubbleGone = 0; c.BubbleLine = line;
+            if (Juicebox.juice) { root.transform.localScale = Vector3.one * .9f; Juicebox.juice.TweenScale(root, Vector3.one, .1f); }
+            Plugin.Log?.LogInfo("Trader bubble: trader " + boatId + " says line " + (line + 1) + ".");
+        }
+        // A text's width in metres as drawn at `times` the tavern's: the font's own advances, a TextMesh drawing characterSize / 10 of a
+        // unit a font pixel, times its scale; its widest row.
+        internal static float TextMetres(string text, float times)
+        {
+            Materials();
+            if (!font || string.IsNullOrEmpty(text)) return 0f;
+            font.RequestCharactersInTexture(text, fontSize, FontStyle.Normal);
+            float widest = 0;
+            foreach (var row in text.Split('\n'))
+            {
+                float w = 0;
+                foreach (char ch in row) if (font.GetCharacterInfo(ch, out var ci, fontSize, FontStyle.Normal)) w += ci.advance;
+                widest = Mathf.Max(widest, w);
+            }
+            return widest * characterSize * .1f * textScale.x * times;
+        }
+        // The user, 2026-10-21 (after vtn-8): "i saw the text only have 1 or 2 word at 2nd line, i don't want that, either make it average
+        // or fit in 1 line, you can make the bubble longer": a line is drawn on one row, the bubble as long as it needs (its text 85% of
+        // the width, never narrower than the tavern's 5 times over); only a row longer than twice that width splits into two rows of
+        // even width (Rules.EvenRows). The text keeps the tavern's size.
+        internal const float TextShare = .85f, MostWidth = 2f;
+        internal static string Layout(string line, out float width)
+        {
+            float baseWidth = 2f * halfWidth * Times;
+            string text = line;
+            if (TextMetres(line, Times) > MostWidth * baseWidth * TextShare) text = Rules.EvenRows(line, t => TextMetres(t, Times));
+            width = Mathf.Max(baseWidth, TextMetres(text, Times) / TextShare);
+            return text;
+        }
+        // A contact on a ship's body (the game's impact listener): a trader copy met by a player's ship.
+        internal static void Contact(Transform at, Rigidbody body)
+        {
+            Transform ship = null;
+            for (var t = at; t && t != Refs.shiftingWorld && !ship; t = t.parent) if (t.GetComponent<PurchasableBoat>() || t.GetComponent<BoatRefs>()) ship = t;
+            if (!ship || !VisibleTraders.PlayersShip(ship)) { if (noted.Add(at.GetInstanceID())) Plugin.Log?.LogInfo("Trader bubble: a trader met by " + at.name + (ship ? ", not the player's ship" : ", no ship") + ": no bubble."); return; }
+            var v = VisibleTraders.Shown.FirstOrDefault(x => x.Copy != null && x.Copy.Body == body);
+            if (v == null || (v.Copy.Bubble && v.Copy.BubbleGone == 0)) return;   // one bubble a trader: contacts while it shows change nothing
+            Show(v.Copy, v.Boat.id);
+        }
+        // Each frame: turned to the view; 60 m from the trader's hull it shrinks away, then goes.
+        internal static void Step()
+        {
+            if (!Refs.observerMirror) return;
+            Vector2 player = Vector2.zero; bool known = false;
+            foreach (var v in VisibleTraders.Shown)
+            {
+                var c = v.Copy; if (c == null || !c.Bubble) continue;
+                if (c.BubbleGone > 0) { if (Time.time >= c.BubbleGone) { Object.Destroy(c.Bubble); c.Bubble = null; c.BubbleGone = 0; } continue; }
+                c.Bubble.transform.rotation = Refs.observerMirror.transform.rotation;
+                if (!known) { player = VisibleTraders.PlayerReal(); known = true; }
+                if (!KeepForTest && VisibleTraders.HullDistance(v, player) > Away)
+                {
+                    c.BubbleGone = Time.time + ShrinkTime;
+                    if (Juicebox.juice) Juicebox.juice.TweenScale(c.Bubble, Vector3.zero, ShrinkTime); else c.BubbleGone = Time.time;
+                }
+            }
+        }
+    }
+    [HarmonyPatch(typeof(TavernRumorsDude), "Awake")] internal static class TraderBubbleLookPatch
+    { static void Postfix(TavernRumorsDude __instance) { try { TraderBubble.TakeLook(__instance); } catch (Exception e) { Plugin.Log?.LogWarning("Trader bubble: the tavern's look not taken: " + e.Message); } } }
+    // A prefix: the game's method then calls its sounds, which a ship without them would stop with an error before a postfix.
+    [HarmonyPatch(typeof(BoatImpactSoundsCollider), "OnCollisionEnter")] internal static class TraderBubbleContactPatch
+    {
+        private static bool warned;
+        static void Prefix(BoatImpactSoundsCollider __instance, Collision collision)
+        {
+            try { var body = collision != null ? collision.rigidbody : null; if (body && TraderHulls.IsCopy(body)) TraderBubble.Contact(__instance.transform, body); }
+            catch (Exception e) { if (!warned) { warned = true; Plugin.Log?.LogWarning("Trader bubble: a contact failed: " + e); } }
+        }
+    }
 }

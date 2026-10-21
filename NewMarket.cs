@@ -547,10 +547,12 @@ namespace EconomyOverhaul
         public static bool Positive(double value) => value > 0 && !double.IsInfinity(value) && !double.IsNaN(value) && (float)value > 0 && !float.IsInfinity((float)value);
         // Base fee B: 5% at rep 0, 0.5% less per level to 0.5% at rep 9, 0.1% at rep 10.
         public static double Fee(int reputation) { int level = Math.Max(0, Math.Min(10, reputation)); return level == 10 ? .001 : .05 - .005 * level; }
-        // Chronos treats Lions, Dragons and Crowns alike (B); Gold received there costs half (B/2), at the
-        // booth as for goods. Elsewhere selling Gold at the booth is free and receiving it costs 2B.
-        public static double BoothFee(int sold, int bought, int reputation, bool chronos = false) => sold == bought ? 0 : chronos ? Fee(reputation) * (bought == 3 ? .5 : 1) : sold == 3 ? 0 : Fee(reputation) * (bought == 3 ? 2 : 1);
-        public static double GoodsFee(int native, int paid, bool buying, int reputation, bool chronos = false) => paid == 3 ? (buying ? 0 : (chronos ? .5 : 2) * Fee(reputation)) : native == paid ? 0 : Fee(reputation);
+        // At Chronos (HELMSMEN_CHRONOS_DRAFT.md, the user, 2026-10-21: "make chronos all exchange fee be 1/2B"): every exchange at its
+        // booth costs B/2; goods paid in Gold, its own coin, are free both ways ("Only goods free, so selling goods in gold also free");
+        // goods paid in a foreign coin B/2 ("Good paid in foregin coin at chronos also 1/2 B"). Elsewhere selling Gold at the booth is
+        // free and receiving it costs 2B; goods: the port's own coin free, Gold free to pay with and 2B to be paid in, others B.
+        public static double BoothFee(int sold, int bought, int reputation, bool chronos = false) => sold == bought ? 0 : chronos ? Fee(reputation) * .5 : sold == 3 ? 0 : Fee(reputation) * (bought == 3 ? 2 : 1);
+        public static double GoodsFee(int native, int paid, bool buying, int reputation, bool chronos = false) => chronos ? (paid == 3 ? 0 : .5 * Fee(reputation)) : paid == 3 ? (buying ? 0 : 2 * Fee(reputation)) : native == paid ? 0 : Fee(reputation);
         // Market value in the coins paid, at the daily rate (local or foreign coins alike).
         public static double Quote(double raw, int paid, double[] smooth) => raw * smooth[paid];
         public static int Coins(double amount, bool buying, double fee)
@@ -559,6 +561,15 @@ namespace EconomyOverhaul
             if (double.IsNaN(value) || double.IsInfinity(value) || value < 0 || value > int.MaxValue) throw new OverflowException("Price exceeds wallet limit");
             return (int)value;
         }
+        // Gold at Chronos rounds up at every step (the user, 2026-10-21, G1: "It need to round up no matter what. Even 0.1 gold becomes
+        // 1 gold"; G2: a sale too). A millionth under a whole coin counts as that coin (a product such as 500 x 0.006 lands a hair over).
+        public static int CoinsUp(double amount)
+        {
+            double value = Math.Ceiling(amount - 1e-6);
+            if (double.IsNaN(value) || double.IsInfinity(value) || value > int.MaxValue) throw new OverflowException("Price exceeds wallet limit");
+            return (int)Math.Max(0, value);
+        }
+        public static int CoinsUp(double amount, bool buying, double fee) => CoinsUp(amount * (buying ? 1 + fee : 1 - fee));
         public const int CloseDays = 5;
         // The day's closing rates, before its pressure settles, feed the booth's five-day table.
         public static void RecordClose(FxState state)
@@ -741,14 +752,16 @@ namespace EconomyOverhaul
             return Math.Max(0, Math.Min(2, GameState.currentCurrency));
         }
         internal static int Reputation(int region) => Reputations.Level(Math.Max(0, Math.Min(3, region)));
-        internal static MoneyQuote Quote(double raw, IslandMarket port, int payment, bool buying, double condition = 1)
+        // `atChronos`: shown at Chronos for another port (the trade book there): its Gold prices round up too.
+        internal static MoneyQuote Quote(double raw, IslandMarket port, int payment, bool buying, double condition = 1, bool atChronos = false)
         {
             var s = Ensure(); int native = Currency(port);
+            bool chronos = Reputations.Account(port) == Reputations.Chronos, up = payment == 3 && (chronos || atChronos);
             double value = FxRules.Quote(raw, payment, s.smooth);
-            int gross = FxRules.Coins(value, buying, 0);
-            if (!buying) gross = (int)Math.Floor(gross * condition);
-            double fee = FxRules.GoodsFee(native, payment, buying, Reputation(Reputations.Account(port)), Reputations.Account(port) == Reputations.Chronos);
-            return new MoneyQuote { Gross = gross, Total = FxRules.Coins(gross, buying, fee), Fee = fee };
+            int gross = up ? FxRules.CoinsUp(value) : FxRules.Coins(value, buying, 0);
+            if (!buying) gross = up ? FxRules.CoinsUp(gross * condition) : (int)Math.Floor(gross * condition);
+            double fee = FxRules.GoodsFee(native, payment, buying, Reputation(Reputations.Account(port)), chronos);
+            return new MoneyQuote { Gross = gross, Total = up ? FxRules.CoinsUp(gross, buying, fee) : FxRules.Coins(gross, buying, fee), Fee = fee };
         }
         internal static double NpcQuote(IslandMarket port, int good, bool buying)
         {
@@ -791,7 +804,7 @@ namespace EconomyOverhaul
             int raw = buying ? current.knownPrices[portIndex].buyPrices[good] : current.knownPrices[portIndex].sellPrices[good];
             double condition = 1;
             if (!buying && current == port) { var cargo = Loans.Next(port, good); if (cargo) condition = CargoCondition.Factor(cargo.GetComponent<ShipItem>()); }
-            return Quote(raw, port, payment, buying, condition);
+            return Quote(raw, port, payment, buying, condition, current && current.GetPortIndex() == 21);
         }
         internal static bool TryBookQuote(EconomyUI ui, int port, int good, bool buy, out MoneyQuote quote)
         {

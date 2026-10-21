@@ -295,9 +295,17 @@ namespace EconomyOverhaul
             button.SetActive(false);
         }
         private Vector3 plateScale, labelScale, atDrink, belowDrink;
+        // Talkative NPCs (TALKATIVE_NPCS_COMPAT.md, conflict 2; the user, 2026-10-21: "only fix 1 and 2"): a rumour NPC hit until his
+        // mood is low says "You owe me a drink." and gives no talk; our button hides while he says it (read from the game's own text,
+        // no reference to that mod) and the step reached shows again once he speaks otherwise.
+        internal const string OwedLine = "You owe me a drink.";
+        private bool owedHidden;
+        private bool Owed => dude.text && dude.text.text != null && dude.text.text.Trim() == OwedLine;
         private void LateUpdate()
         {
+            if (owedHidden && !Owed) { owedHidden = false; if (dude.speechUI && dude.speechUI.activeInHierarchy) Returned(); }
             if (!button || !button.activeSelf || !dude.drinkButton) return;
+            if (Owed) { button.SetActive(false); owedHidden = true; return; }
             var at = dude.drinkButton.activeSelf ? belowDrink : atDrink;
             if (button.transform.localPosition != at) button.transform.localPosition = at;
         }
@@ -381,7 +389,7 @@ namespace EconomyOverhaul
                 there ? BookUI.RegionName((int)there.region) : "abroad", GameState.day - told.startDay, Rules.Ruler(here ? (int)here.region : 0));
         }
         // The player went away: the button hides with the speech; the food asked for stays asked for.
-        internal void Left() { Hide(); if (step == Step.FoodHere) { food = null; step = Step.WaitFood; } }
+        internal void Left() { Hide(); owedHidden = false; if (step == Step.FoodHere) { food = null; step = Step.WaitFood; } }
         // Back: the button of the step reached shows again (the user's test of 0.10.1: after a drink, the ask button never came back);
         // food asked for and already lying by him counts as brought.
         internal void Returned()
@@ -406,9 +414,12 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(TavernRumorsDude), "ClickDrinkButton")] internal static class DemandAskPatch
     {
         static void Prefix(ShipItemBottle ___currentDrink, out bool __state) => __state = ___currentDrink;
-        static void Postfix(TavernRumorsDude __instance, ShipItemBottle ___currentDrink, bool __state)
+        // Only when the game's own method ran (Harmony's __runOriginal, as every prefix left it: HarmonyX gives a postfix the final
+        // value, Test.ps1): Talkative NPCs' prefix takes an "owed" drink and skips the method, with no rumour, so no news button then
+        // (TALKATIVE_NPCS_COMPAT.md, conflict 1).
+        static void Postfix(TavernRumorsDude __instance, ShipItemBottle ___currentDrink, bool __state, bool __runOriginal)
         {
-            if (!__state || ___currentDrink || !World.Ready || !Demand.Active.Any()) return;   // a drink was taken; there is news
+            if (!__runOriginal || !__state || ___currentDrink || !World.Ready || !Demand.Active.Any()) return;   // a drink was taken; there is news
             var talk = DemandTalk.For(__instance);
             if (talk.step == DemandTalk.Step.None || talk.step == DemandTalk.Step.Asking) { talk.step = DemandTalk.Step.Asking; talk.Show(Rules.AskButton); }
         }
