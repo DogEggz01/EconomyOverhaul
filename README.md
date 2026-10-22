@@ -12,7 +12,7 @@
   - Visible trading ship trading in the world, increase the sense of competition and make world more alive.
   - Tradebook QoL change: allow bulk trading, loading into/selling from cart service
   - Ship renting, Cargo loaning and Ship/house loaning system, replace the not-working vanilla reputation price discount.
-  - Water damage and Fragile goods system, provide more stragety decision for cargo placement and shipment.
+  - Water damage and Fragile goods system, provide more decision for cargo placement and shipment.
   - Wood plank for repairing boat on voyage, canvas tarp for covering goods from rain, wood poles for tying canvas or fending your ship to help you deal with water damage and fragile goods.
   - Reputation plays a bigger role, it will affect price availability, interest rate and credit limit and currency exchange rate.
   - Currency exchange rate now affect by actual import/export between region, instead of random flucutation. Weaker currency need to pay more to buy same goods.
