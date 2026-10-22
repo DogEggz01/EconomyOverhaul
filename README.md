@@ -1,12 +1,5 @@
 *Disclaimer: This mod is made with ChatGPT 6.0 Astra and Opus 5.5*
 ### Good time mod will cause market to overproduce under this mod!
-## Recommend mod
-- Mooring Line Fix: For seized ship to properly moored at the port
-  - https://github.com/DogEggz01/MooringLineFix/releases/latest
-- Keevi Fixes: Alternative for fixing mooring line, also comes with other QoL changes
-  - https://github.com/KeeviDev/SailwindKeeviFixes/releases/latest
-- Postal Expansion: For rep grind 
-  - https://github.com/DogEggz01/PostalExpansion/releases/latest
 ## Mod goal
 - Make Sailwind's economy bigger and more robost, and add risk when trading by adding cargo water damage, price intransparency, NPC trader competition and loans.
 - Early game will likely be harder with less price info, more NPC trader to compete, and lack of rain cover on small boat. but do provide you leverage option so you can take the risk to progress.
@@ -27,6 +20,18 @@
 - This mod can be add mid-save, it will run initialization when it detect it's your first time installing this mod. Your market stituation will be changed.
 - In configurator, there is a button for uninstall the mod, it will wipe the modded market, remove all item and mechanic added by this mod and stop progressing market.
 - After clicking the uninstall button in Configurator, you can save and quit game. Next time you load into save it will be vanilla market.(price report date need time to recover)
+## Recommend mod
+- Mooring Line Fix: For seized ship to properly moored at the port
+  - https://github.com/DogEggz01/MooringLineFix/releases/latest
+- Keevi Fixes: Alternative for fixing mooring line, also comes with other QoL changes
+  - https://github.com/KeeviDev/SailwindKeeviFixes/releases/latest
+- Postal Expansion: For rep grind 
+  - https://github.com/DogEggz01/PostalExpansion/releases/latest
+## Mod Compatibility
+- Economy Event, Better NPC ship: No conflict, coexsit
+- Dangerous Water: Loaned Cargo taken by pirate won't need to pay interest
+- Deft Hand: Make compatible with wood pole use
+- Talkative NPC: Make compatible with tavern sailor changes
 ## Port Capacity and Port production
 - All ports is separate into 4 tiers. Each tier have differenct port capacity, which affect their cargo hold capacity, production speed and demands.
 - Bigger the Port Capacity, more trade goods will be available, production/consumption will be faster.
@@ -77,9 +82,8 @@
 ## Trader, price infomation and tavern rumor change
 <img width="3840" height="2160" alt="2013AD~1" src="https://github.com/user-attachments/assets/e0fa8b57-7506-4ddc-8852-d3d549af2f87" />
 
-
 - Background trader amount is increase to accommodate for increase production/demand, and it's no longer background, you can see it sailing in the world.
-- Visible trader can be toggle off in configurator, it's cost more performance.
+- Visible trader can be toggle off in configurator, it will have performance impact, even if there is no visble trader nearby.
   - Current NPC trade fleet
     - Small local trader: Each region 7, FFL 2. Move at 5 knots. Stop at port for 2.5h.
       - Regional small boat, 5 Default rigging and 2 special rigging.
@@ -109,6 +113,7 @@
 - All trader speed is faster, but wait in port longer.
 - On trader's deck they will show the one cargo they carry the most, so you can take a guess what they are shipping.
 - Between traders there is no collision, but they will collide with player ship.
+- Trader will curse you if you hit their ship (or when they hit you, they are sailors *Shurg*)
 - They use simplified physic, so they will still sail in iron with their square blow back and move differently on water than normal ship
 - Their speed will be affect by wind strength and directions.
 - Tavern sailor now will prioritize to tell you latest depart ship with more precise time and ship infos. 
