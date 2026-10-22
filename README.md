@@ -11,6 +11,18 @@
 - Make Sailwind's economy bigger and more robost, and add risk when trading by adding cargo water damage, price intransparency, NPC trader competition and loans.
 - Early game will likely be harder with less price info, more NPC trader to compete, and lack of rain cover on small boat. but do provide you leverage option so you can take the risk to progress.
 - This mod didn't solve the late game economy problem that is money too easy to come by, in fact it might be more severe since Larger economy = more goods to sell.
+- Feature list:
+  - Goods are separated into 4 category, have differnt price curve and mission reward.
+  - Cargo mission gets more variety, some need to you transport alot, some need you fast. Difffernt rep and gold reward.
+  - Increase all port's production and demand, separate port into 4 levels, and make it grows overtime(no visual change)
+  - Dynamic demand events, creating more variety and profitable trade route, but NPC trader will compete with you. 
+  - Visible trading ship trading in the world, increase the sense of competition and make world more alive.
+  - Tradebook QoL change: allow bulk trading, loading into/selling from cart service
+  - Ship renting, Cargo loaning and Ship/house loaning system, replace the not-working vanilla reputation price discount.
+  - Water damage and Fragile goods system, provide more stragety decision for cargo placement and shipment.
+  - Wood plank for repairing boat on voyage, canvas tarp for covering goods from rain, wood poles for tying canvas or fending your ship to help you deal with water damage and fragile goods.
+  - Reputation plays a bigger role, it will affect price availability, interest rate and credit limit and currency exchange rate.
+  - Currency exchange rate now affect by actual import/export between region, instead of random flucutation. Weaker currency need to pay more to buy same goods.
 ## Install and uninstall
 - This mod can be add mid-save, it will run initialization when it detect it's your first time installing this mod. Your market stituation will be changed.
 - In configurator, there is a button for uninstall the mod, it will wipe the modded market, remove all item and mechanic added by this mod and stop progressing market.
