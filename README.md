@@ -335,4 +335,5 @@
 - Fragile cargo damage: Toggle on/off. Default on.
 - Fragile cargo hint: default on.
 - Tarp Wearing: make tarp wear across 10 days. Default on.
+- Visible Trader: toggle on/off.
 - Uninstall preparation: Click this before you remove this mod mid-save.
