@@ -32,6 +32,7 @@
 - Dangerous Water: Loaned Cargo taken by pirate won't need to pay interest
 - Deft Hand: Make compatible with wood pole use
 - Talkative NPC: Make compatible with tavern sailor changes
+- Better Port: Compatible with newly added island.
 ## Port Capacity and Port production
 - All ports is separate into 4 tiers. Each tier have differenct port capacity, which affect their cargo hold capacity, production speed and demands.
 - Bigger the Port Capacity, more trade goods will be available, production/consumption will be faster.
