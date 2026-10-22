@@ -38,7 +38,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "1.0.1";
+        public const string Version = "1.0.2";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;

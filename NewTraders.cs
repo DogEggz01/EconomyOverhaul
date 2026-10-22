@@ -1018,12 +1018,13 @@ namespace EconomyOverhaul
         }
         // Copies made at the start, per sail plan (TRADER_RIGS_DRAFT.md, the user, 2026-10-19: "5 local small for each region / 2
         // newly customized local small for each region (included FFL) / 2 regional long range / 1 copy for each customized
-        // brig/junk/sanbuq"): the stock Dhow, Cog and Kakam 5 each, the stock Sanbuq, Brig and Junk 2 each, the Baghlah and Jong 1;
-        // the four small plans 2 each, every other plan 1 (the two heavies share theirs); 47 in all (41 before, by hull).
+        // brig/junk/sanbuq"): the stock Dhow, Cog and Kakam 4 each (5 until 2026-10-22, the user: "reduce all default local small
+        // trader copy by 1"), the stock Sanbuq, Brig and Junk 2 each, the Baghlah and Jong 1; the four small plans 2 each, every
+        // other plan 1 (the two heavies share theirs); 44 in all (47 before, 41 before that, by hull).
         public static int TraderPool(string key)
         {
             if (key == null) return 0;
-            if (key.StartsWith(StockKey)) { int.TryParse(key.Substring(StockKey.Length), out int hull); return HullClass(hull) == 0 ? 5 : HullClass(hull) == 2 ? 1 : 2; }
+            if (key.StartsWith(StockKey)) { int.TryParse(key.Substring(StockKey.Length), out int hull); return HullClass(hull) == 0 ? 4 : HullClass(hull) == 2 ? 1 : 2; }
             return key.StartsWith("small-") || key == "ffl-small" ? 2 : 1;
         }
         // A copy's key: its plan, else its hull's stock rig.
@@ -1137,8 +1138,9 @@ namespace EconomyOverhaul
         public static bool WaitHeld(bool waitingInPort, bool atItsPlace) => waitingInPort && !atItsPlace;
         // A drawn trader's sails (question 10): the fore-and-aft sails (lateen, gaff, junk) and the jibs out from the centreline to
         // leeward, 25 degrees (the user, 2026-10-20: "Reduce all fore and aft sail of trader angle to only 25 degree, jib's reduce to
-        // 25 degree too"; 40, and a jib its sheeted-in angle and 20 more, before).
-        public const double SailOut = 25, JibOut = 25;
+        // 25 degree too"; 40, and a jib its sheeted-in angle and 20 more, before); the jibs 30 since 1.0.2 (the user, 2026-10-22:
+        // "make all trader's jib angle at 30 instead of current").
+        public const double SailOut = 25, JibOut = 30;
         // The speed rule while visible (the user, 2026-10-18 after 0.10.2, VISIBLE_TRADERS_DRAFT.md's last section; question 12
         // before): today's speed x its strength part x its course part. Strength: 0.75 at wind 7 to 1.25 at wind 21, in a straight
         // line between, held at both ends (the game's own wind numbers, as Windicators' dial shows them: 1.0 at 14). Course, by the
@@ -1493,6 +1495,10 @@ namespace EconomyOverhaul
             }
             return result;
         }
+        // The good on a drawn trader's deck: the hold's most carried good; with the hold sold (the fleet sells it at the approach
+        // point, Fleet.Arrive) the last trip's good stays on deck on its way in, until it is moored or anchored (the user's rule of
+        // question 17: "at sea and on its way in; the deck is empty while it waits in port").
+        public static int DeckGood(int mainGood, bool inPort, bool settled, int lastGood) => mainGood > 0 ? mainGood : inPort && !settled ? lastGood : 0;
         // The most carried good (most units; a tie to the one loaded first), 0 for none.
         public static int MainGood(IList<int> goods)
         {
@@ -2462,7 +2468,7 @@ namespace EconomyOverhaul
         }
 
         // The pose rule (the user, question 10): square sails squared; fore-and-aft sails and jibs out from the centreline
-        // (Rules.SailOut and Rules.JibOut, 25 degrees: the user, 2026-10-20; 40 and 16 + 20 before), to leeward
+        // (Rules.SailOut 25 and Rules.JibOut 30 degrees: the user, 2026-10-20 and 2026-10-22; 40 and 16 + 20 before), to leeward
         // by the game's own force rule (vt_measure run 2's PoseSails, as vt_dress).
         private static Quaternion Pose(Transform t, SailData d, Vector3 fwd, Vector3 right, Vector3 windDir)
         {
@@ -3152,14 +3158,18 @@ namespace EconomyOverhaul
         internal static bool PoolDone => poolDone;
         internal static bool HasPool => pool.Count > 0;
         // One copy a call, the stock rigs first (by hull), then the plans; not before every plan's template is taken.
+        // a copy made is made inactive at the next call (its scripts' Start runs the frame after it is made, as before)
+        private static readonly List<TraderCopy> made = new List<TraderCopy>();
         internal static bool BuildStep()
         {
             if (!PlansDone) return false;
+            foreach (var c in made) Sleep(c);
+            made.Clear();
             foreach (var t in templates.Values.OrderBy(x => x.Plan != null).ThenBy(x => x.Hull).ThenBy(x => x.Key, StringComparer.Ordinal).ToList())
             {
                 if (!pool.TryGetValue(t.Key, out var list)) pool[t.Key] = list = new List<TraderCopy>();
                 if (list.Count >= Rules.TraderPool(t.Key)) continue;
-                try { list.Add(MakeCopy(t)); }
+                try { var c = MakeCopy(t); list.Add(c); made.Add(c); }
                 catch (Exception e) { Plugin.Log?.LogError("Visible traders: a copy of " + t.Key + " failed: " + e); templates.Remove(t.Key); }
                 return true;
             }
@@ -3226,10 +3236,12 @@ namespace EconomyOverhaul
         private static readonly System.Reflection.FieldInfo ropeDistanceTimer = AccessTools.Field(typeof(RopeEffect), "distanceCheckTimer");
         private static void ShowRopes(TraderCopy c) { foreach (var r in c.Ropes) if (r) ropeDistanceTimer?.SetValue(r, 0f); }
 
-        // The hidden copies' cloth is left on (the user, 2026-10-18, from vt-5: switching a cloth on took up to 10.3 ms in a
-        // frame, 1.7 ms each on average; left on, +0.55 ms a frame with 141 hidden cloths). Off only for the test's measure of the
-        // other way (EconomyOverhaul.QA, VisibleTradersPlay: each cloth switched on when its trader is shown, a cloth a step).
-        internal static bool ClothsKeptOn { get; private set; } = true;
+        // A hidden copy is inactive with its cloth off (the user, 2026-10-22: "keep hidden copies inactive, switch the copy on
+        // without its cloth when drawn, then its cloth one a frame"): active and hidden, the 47 copies cost 1.2-1.5 ms every frame
+        // with none drawn (vtc6-1); switched on without cloth 0.55-1.43 ms, then a cloth a showing step (one large cloth a trader
+        // 7.7-10.4 ms, vtc7-1). Was: cloth left on (the user's "(B) Leave cloth on" of 2026-10-18, from vt-5). On only for the
+        // test's measure of the other way (KeepClothsOn).
+        internal static bool ClothsKeptOn { get; private set; }
         internal static void KeepClothsOn(bool on)
         {
             ClothsKeptOn = on;
@@ -3263,10 +3275,19 @@ namespace EconomyOverhaul
         internal static int ShowSteps(TraderCopy c) => 2 + ClothSteps(c);
         // The kind of a step, for the timings: 0 the behaviours, 1 a cloth, 2 what draws it.
         internal static int StepKind(TraderCopy c, int step) => step == 0 ? 0 : step <= ClothSteps(c) ? 1 : 2;
+        // One cloth switched on a frame over every trader drawn (vts-2: one a trader's step let two traders' large cloths, 7.7 and
+        // 10.5 ms, fall in one frame of 34.3 ms; a copy's large cloth is not at the same step on every hull or plan): a cloth step
+        // waits for the next frame when another cloth went on in this one.
+        // (An extra frame without a cloth after a large one was measured and dropped: no difference, vtg-3, VISIBLE_TRADERS.md.)
+        private static int clothFrame = -1;
+        internal static bool MayStep(TraderCopy c, int step) => StepKind(c, step) != 1 || clothFrame != Time.frameCount;
         internal static void ShowStep(TraderCopy c, int step)
         {
+            if (StepKind(c, step) == 1) clothFrame = Time.frameCount;
             if (step == 0)
             {
+                // switched on (its cloth off: a cloth a step below); a hidden copy is inactive (Sleep)
+                if (!c.Go.activeSelf) c.Go.SetActive(true);
                 // The game's cloth resets never run on a copy (WindClothResetPatch, ReefClothResetPatch): each cloth told to
                 // forget the copy's move from where it lay hidden instead.
                 foreach (var cl in c.Cloths) if (cl && cl.enabled) cl.ClearTransformMotion();
@@ -3274,7 +3295,7 @@ namespace EconomyOverhaul
                 ShowRopes(c);
                 return;
             }
-            if (step <= ClothSteps(c)) { var cl = c.Cloths[step - 1]; if (cl && !cl.enabled) cl.enabled = true; return; }
+            if (step <= ClothSteps(c)) { var cl = c.Cloths[step - 1]; if (cl && !cl.enabled) { cl.enabled = true; cl.ClearTransformMotion(); } return; }
             var on = c.Template.RendererOn;
             for (int i = 0; i < c.Renderers.Length; i++) if (c.Renderers[i]) c.Renderers[i].enabled = i >= on.Length || on[i];
             // a sail's furled look is the reef effect's to switch: as it is now
@@ -3318,6 +3339,16 @@ namespace EconomyOverhaul
             Hide(c); Park(c);
             if (c.Body) c.Body.detectCollisions = true;   // a fast clock may have left it passing through (Rules.CopySolid)
             SetCargo(c, 0);
+            Sleep(c);
+        }
+        // A hidden copy made inactive (its cloth already off by Hide): active and hidden the pool cost 1.2-1.5 ms a frame (vtc6-1).
+        // Switched on again by its first showing step.
+        internal static double MaxSleepMs;
+        internal static void Sleep(TraderCopy c)
+        {
+            if (!c.Go || !c.Go.activeSelf || c.Shown || c.Boat != null) return;
+            var sw = Stopwatch.StartNew(); c.Go.SetActive(false);
+            MaxSleepMs = Math.Max(MaxSleepMs, sw.Elapsed.TotalMilliseconds);
         }
         // The deck cargo: the good's looks only (it cannot be picked up), at the hull's place, laid as measured (question 17).
         internal static void SetCargo(TraderCopy c, int good)
@@ -3396,7 +3427,7 @@ namespace EconomyOverhaul
         internal static void ClearPool()
         {
             foreach (var c in Copies) if (c.Go) Object.Destroy(c.Go);
-            pool.Clear(); bodies.Clear(); copyWinds.Clear(); copyReefs.Clear(); poolDone = false;
+            pool.Clear(); made.Clear(); bodies.Clear(); copyWinds.Clear(); copyReefs.Clear(); poolDone = false;
         }
     }
 
@@ -3416,6 +3447,7 @@ namespace EconomyOverhaul
             internal Vector2 Velocity; internal int Side;
             internal bool Placed;
             internal bool Settled;     // moored or anchored once in this stay: its wait runs (Rules.WaitHeld)
+            internal int LastGood;     // the main good of the trip it sails or last sailed (Rules.DeckGood)
             internal float Heave = float.NaN, NextShips;
             internal float FurledSince = -1; internal bool SailsParked;   // its reef animators culled while furled in port (TraderHulls.ParkSails)
             internal int ShowStep;
@@ -3769,10 +3801,18 @@ namespace EconomyOverhaul
             {
                 bool lit = Lit(v.Pos);
                 if (v.Copy.Lit != lit) TraderHulls.SetLit(v.Copy, lit);
-                // the most carried good on deck while it carries any (the user, question 17: nothing while unloaded)
-                TraderHulls.SetCargo(v.Copy, v.Boat.goods != null && v.Boat.goods.Length > 0 ? Rules.MainGood(v.Boat.goods) : 0);
+                SetDeck(v);
             }
             FrameParts.Add(FrameParts.LitCargo, t);
+        }
+
+        // The most carried good on deck while it carries any, kept on its way in (Rules.DeckGood; the user, question 17: nothing
+        // while it waits in port).
+        private static void SetDeck(Visual v)
+        {
+            var b = v.Boat; int main = b.goods != null && b.goods.Length > 0 ? Rules.MainGood(b.goods) : 0;
+            if (b.destination >= 0) v.LastGood = main;
+            TraderHulls.SetCargo(v.Copy, Rules.DeckGood(main, b.destination < 0, v.Settled, v.LastGood));
         }
 
         // In the player's sight: its box (its length round it, 30 m up from under the water) inside the view of the game's camera.
@@ -3850,7 +3890,7 @@ namespace EconomyOverhaul
             // first drawn in port, its wait has been running unseen: it goes on
             if (b.destination < 0) v.Settled = true;
             ReadStorms(); TraderHulls.SetLit(copy, Lit(v.Pos));
-            TraderHulls.SetCargo(copy, b.goods != null && b.goods.Length > 0 ? Rules.MainGood(b.goods) : 0);
+            SetDeck(v);
             foreach (var s in copy.Sails) if (s) s.currentUnroll = v.Unroll;
             TraderHulls.PoseSails(copy, v.Unroll > .5f ? SailSide(v) : 0, 1);
             // at its place now, before its first show step tells its cloth to forget the move (it ran while the copy still lay where
@@ -3922,7 +3962,7 @@ namespace EconomyOverhaul
         {
             var b = v.Boat;
             long t = FrameParts.Now;
-            if (v.ShowStep < TraderHulls.ShowSteps(v.Copy))
+            if (v.ShowStep < TraderHulls.ShowSteps(v.Copy) && TraderHulls.MayStep(v.Copy, v.ShowStep))
             {
                 var sw = Stopwatch.StartNew(); TraderHulls.ShowStep(v.Copy, v.ShowStep);
                 double ms = sw.Elapsed.TotalMilliseconds; int kind = TraderHulls.StepKind(v.Copy, v.ShowStep);
