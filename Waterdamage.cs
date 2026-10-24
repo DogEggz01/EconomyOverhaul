@@ -80,6 +80,14 @@ namespace EconomyOverhaul
             if (waterContact || rain > 0 || noDry || !coverKnown || Ruined(health) || health >= ceiling) return health;
             return (float)Math.Min(ceiling, health + gameHours * DryingPerHour(exposed, clouds, hour));
         }
+        // Whether cargo is getting wetter now, the conditions AdvanceCondition takes condition off under (the user, 2026-10-23,
+        // SMALL_REQUESTS_DRAFT.md: "if it's out of the condition that will get wet, it don't show blue outline anymore", "rain should
+        // mark blue outline if it's not fully covered"): water at ImmersionStart or more, or rain on a top not fully covered once its
+        // cover is known. Wet cargo out of the water and the rain is not.
+        public static bool WettingNow(bool damagingWater, double rain, bool coverKnown, double exposed) => damagingWater || coverKnown && rain > 0 && exposed > 0;
+        // The outline of a looked-at crate getting wetter (the user: S5 (b), "use blue A for outline"), in place of the game's look
+        // colour.
+        public static readonly Color WetOutlineColor = new Color(.05f, .15f, .75f);
         // The cargo hint's own lines, added to the item's description below the game's look text. LookUI draws the look text
         // (extraText: name, crate quantity, a mission's destination and due day) down from its anchor, and the description
         // (hintText) centred on an anchor 1.3 look lines lower, in lines 0.6 as tall (QA -HintProbe, 0.39.1). So a blank line
@@ -184,6 +192,8 @@ namespace EconomyOverhaul
         private bool exposurePoseKnown;
         private bool visualWaterEnabled = true;
         private string suffix;
+        // Getting wetter at the last condition update (Rules.WettingNow); the blue look outline (WetOutline) follows it.
+        internal bool Wetting { get; private set; }
         private string hintDescription;
         private string hintLookText;
         private int hintPercent = -2, hintCover = -2, hintDamage = -2;
@@ -474,6 +484,8 @@ namespace EconomyOverhaul
             float targetHealth = Settings.WaterEnabled ? state.health : 100;
             if (appearanceTimer >= .35f || visualHealth >= 0 && Math.Abs(visualHealth - targetHealth) >= .1f || visualWaterEnabled != Settings.WaterEnabled)
                 RefreshAppearance();
+            if (!Settings.WaterEnabled || !Placed) Wetting = false;   // held, stored, or water damage off: not getting wetter
+            if (Wetting && item.IsLookedAt()) WetOutline.Want();
             if (!Settings.WaterEnabled) { ResetConditionClock(); return; }
             if (!Placed || GameState.loadingBoatLocalItems || GameState.loadingScenes != 0) { ResetConditionClock(); return; }
             // A rescan after something was set on, lifted off or removed from above also runs while the
@@ -482,7 +494,7 @@ namespace EconomyOverhaul
             if (!Sun.sun || Sun.SunPaused()) { ResetConditionClock(); return; }
             // Immune cargo tracks where it rests too, so cargo under it is rescanned when it is pushed off.
             UpdateExposure();
-            if (Immune.Contains(state.good)) { ResetConditionClock(); return; }
+            if (Immune.Contains(state.good)) { Wetting = false; ResetConditionClock(); return; }
             // Crest's asynchronous height queries must be submitted every frame to
             // receive the previous frame's result; quarter-second polling never settles.
             bool loose = !item.currentActualBoat;
@@ -509,6 +521,7 @@ namespace EconomyOverhaul
             double hour = Sun.sun.localTime;
             bool coverKnown = state.exposure != 0;
             double exposed = coverKnown ? 1 - coveredFraction : 0;
+            Wetting = Rules.WettingNow(damagingWater, rain, coverKnown, exposed);
             double waterDamage = damagingWater ? elapsedHours * Rules.ImmersionPerHour : 0;
             // Stains: open cells get the full rain rate, covered cells none (the history applies the mask).
             double rainDamage = coverKnown && exposed > 0 ? elapsedHours * Rules.RainDamagePerHour(rain, 1) : 0;
@@ -776,6 +789,36 @@ namespace EconomyOverhaul
         internal static float Rain { get { Read(); return rain; } }
         // Within 1 km of the player.
         internal static bool Near(Vector3 p) { Read(); return !hasPlayer || (p - player).sqrMagnitude <= Reach * Reach; }
+    }
+    // The look outline of a crate getting wetter drawn blue (SMALL_REQUESTS_DRAFT.md, request 3). The game draws every looked-at
+    // outline in one colour, slot 1 of the main camera's OutlineEffect (its scene colour, a pale tan); only one item is looked at
+    // at a time, so that colour is set to Rules.WetOutlineColor while the looked-at item is a wet crate (CargoCondition.Want each
+    // frame) and given back its scene colour otherwise, just before the camera draws. Other outlines in that slot at that moment (a
+    // new mission's crates, outlined until first picked up) turn blue with it (the user: "keep the shared colour limit").
+    internal static class WetOutline
+    {
+        private static int wanted = -1;
+        private static cakeslice.OutlineEffect effect;
+        private static Color scene;
+        private static bool blue, hooked;
+        internal static void Want() => wanted = Time.frameCount;
+        internal static void Hook() { if (!hooked) { Camera.onPreCull += PreCull; hooked = true; } }
+        internal static void Unhook() { if (hooked) { Camera.onPreCull -= PreCull; hooked = false; } Restore(); }
+        private static void PreCull(Camera camera)
+        {
+            if (!camera || !camera.CompareTag("MainCamera")) return;
+            var fx = camera.GetComponent<cakeslice.OutlineEffect>(); if (!fx) return;
+            if (fx != effect) { Restore(); effect = fx; }
+            bool on = wanted == Time.frameCount && Settings.WetOutlineEnabled && World.Ready;
+            if (on && !blue) { scene = fx.lineColor1; fx.lineColor1 = Rules.WetOutlineColor; blue = true; }
+            else if (!on && blue) Restore();
+        }
+        // The scene's colour back (the option off, the uninstall, another camera).
+        internal static void Restore()
+        {
+            if (blue && effect) effect.lineColor1 = scene;
+            blue = false;
+        }
     }
     [HarmonyPatch(typeof(BoatDamageWater), "Start")] internal static class WaterRegisterPatch { static void Postfix(BoatDamageWater __instance) => BoatWater.Register(__instance); }
     [HarmonyPatch(typeof(SaveablePrefab), "RegisterToSave")] internal static class CargoRegisterPatch

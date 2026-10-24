@@ -1151,7 +1151,7 @@ namespace EconomyOverhaul
         internal static MoneyQuote Quote(Shopkeeper shop,ShipItem item)
         {
             var m=Market(shop);
-            if(!item.sold&&WoodPlanks.IsBundle(item))return WoodPlanks.BundleQuote(m);
+            if(!item.sold&&(WoodPlanks.IsBundle(item)||WoodPallets.IsPallet(item)))return WoodPlanks.BundleQuote(m,WoodPallets.IsPallet(item));
             int raw=(int)Fields.Call(shop,"GetPrice",item);
             return Fx.Quote(raw,m,Fx.Currency(m),!item.sold,item.sold?CargoCondition.Factor(item):1);
         }
@@ -1178,7 +1178,9 @@ namespace EconomyOverhaul
             var good=item.GetComponent<Good>();int g=good?PrefabsDirectory.ItemToGoodIndex(item.GetComponent<SaveablePrefab>().prefabIndex):-1;
             int purchaseCurrency=-1;double purchasePressure=0;
             bool remembered=!playerBuy&&Fx.PurchasePressure(item,out purchaseCurrency,out purchasePressure);
-            if(playerBuy){Fields.Get<ShopArea>(shop,"shop").itemsForSale.Remove(item);bool bundle=WoodPlanks.IsBundle(item);item.Sell();PlayerGold.currency[currency]-=price;if(g>0)m.PurchaseGood(g);if(bundle)WoodPlanks.BundleSold(m);}
+            // The item's own shop area (Kicia Bay's pallets and pole bundles sell through the furniture stall's keeper from a shop area
+            // of their own, WoodVendors in Item.cs), else the keeper's.
+            if(playerBuy){(Fields.Get<ShopArea>(item,"shopArea")??Fields.Get<ShopArea>(shop,"shop")).itemsForSale.Remove(item);bool bundle=WoodPlanks.IsBundle(item),pallet=WoodPallets.IsPallet(item);item.Sell();PlayerGold.currency[currency]-=price;if(g>0)m.PurchaseGood(g);if(bundle||pallet)WoodPlanks.BundleSold(m,pallet);}
             else{if(g>0)m.SellGood(g);PlayerGold.currency[currency]+=price;item.DestroyItem();}
             if(playerBuy)Fx.Record(currency,quote.Gross,true,TradeSource.Shop);
             else Fx.RecordSale(currency,quote.Gross,TradeSource.Shop,remembered,purchaseCurrency,purchasePressure);

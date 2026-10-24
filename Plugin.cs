@@ -35,10 +35,12 @@ namespace EconomyOverhaul
     [BepInDependency(DangerousWatersCompatibility.Guid, BepInDependency.DependencyFlags.SoftDependency)]
     // Loaded first when present, so its new-game start can wait for the economy (ScrambledSeasCompatibility).
     [BepInDependency(ScrambledSeasCompatibility.Guid, BepInDependency.DependencyFlags.SoftDependency)]
+    // Loaded first when present, so its crew's sales and steward can be hooked (VirtualCrewCompatibility).
+    [BepInDependency(VirtualCrewCompatibility.Guid, BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "1.0.2";
+        public const string Version = "1.1.0";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -59,6 +61,8 @@ namespace EconomyOverhaul
                 catch (Exception e) { Logger.LogWarning("Dangerous Waters plunder compatibility unavailable: " + e.Message); }
                 try { ScrambledSeasCompatibility.Install(harmony); }
                 catch (Exception e) { Logger.LogWarning("Scrambled Seas start compatibility unavailable: " + e.Message); }
+                try { VirtualCrewCompatibility.Install(harmony); }
+                catch (Exception e) { Logger.LogWarning("Virtual Crew compatibility unavailable: " + e.Message); }
                 Logger.LogInfo("EconomyOverhaul " + Version + " loaded; zero starting stock for new games, experimental port economy and capacity-based purchase floors.");
             }
             catch (Exception e)
@@ -74,7 +78,7 @@ namespace EconomyOverhaul
             WoodPlanks.Tick();
             RentalSign.Poll();
             if (!Startup.Running) BottleneckCompatibility.Poll();
-            if (Startup.IsPreparing) Startup.Pump(); else World.Tick();
+            if (Startup.IsPreparing) Startup.Pump(); else { World.Tick(); TradeBook.Watch(); }
             Startup.SaveWhenReady();
             World.SaveRetryTick();
             VisibleTraders.Update();
@@ -89,8 +93,9 @@ namespace EconomyOverhaul
             if (MissionListUI.instance) LedgerUI.Attach(MissionListUI.instance);
             Pledges.RecordBerths();
             foreach (var water in UnityEngine.Object.FindObjectsOfType<BoatDamageWater>()) BoatWater.Register(water);
+            WetOutline.Hook();
         }
-        private void OnDestroy() { Startup.Cancel(); harmony?.UnpatchSelf(); TradeSaleCompatibility.Restore(); }
+        private void OnDestroy() { Startup.Cancel(); harmony?.UnpatchSelf(); TradeSaleCompatibility.Restore(); WetOutline.Unhook(); }
     }
     internal static class Fields
     {
@@ -384,6 +389,9 @@ namespace EconomyOverhaul
         internal static bool TarpWearing => TarpWear?.Value ?? true;
         private static bool tarpWearWas = true;   // the option's value before its last change
         internal static bool WaterHintEnabled => WaterDamageHint?.Value ?? true;
+        // The blue look outline of cargo getting wetter (the user, 2026-10-23: "option to switch off, on by default"; WetOutline).
+        internal static ConfigEntry<bool> WetOutlineOption;
+        internal static bool WetOutlineEnabled => WetOutlineOption?.Value ?? true;
         // Visible traders (the user, 2026-10-18: on by default; off, the traders run exactly as today, unseen).
         internal static ConfigEntry<bool> VisibleTraders;
         internal static bool VisibleTradersEnabled => VisibleTraders?.Value ?? true;
@@ -401,6 +409,8 @@ namespace EconomyOverhaul
             CargoDamageHint = config.Bind("Cargo", "Show cargo damage percentage", true,
                 "Show the damage of fragile cargo (gems, sculptures, marble, a fragile mission's tools), 0% intact to 100% ruined, below its other hint lines. This setting only changes the hint.");
             CargoDamageHint.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshHint(); };
+            WetOutlineOption = config.Bind("Cargo", "Deep blue outline on wet cargo", true,
+                "When you look at cargo that is getting wetter right now (in water aboard or in the sea, or in rain with its top not fully covered), its outline is deep blue instead of the usual colour. Cargo that is already wet but out of the water and the rain shows the usual outline. Hidden when water damage is disabled.");
             // The user, 2026-10-15: on by default; off stops fragile damage and the Fragile mission modifier.
             FragileCargo = config.Bind("Cargo", "Enable fragile cargo", true,
                 "Fragile cargo (gems, sculptures, marble, a fragile mission's tools) is damaged by hull impacts, and fragile missions pay x2 when delivered intact. When off, no mission is fragile: missions already taken lose their fragile x2 for good; saved damage pauses and cargo has full value. Re-enabling resumes the saved damage.");
@@ -485,8 +495,8 @@ namespace EconomyOverhaul
         // The mod's data is stale when the game saved after it without the mod (MIDSAVE_DRAFT.md): the hour stored with the
         // data differs from the save's own. 0: a save from before the hour was stored, never stale.
         public static bool StaleSave(double savedHour, double gameHour) => savedHour > 0 && Math.Abs(savedHour - gameHour) > .01;
-        // The mod's own items (wood plank bundle and plank, canvas pack, wood pole and pole bundle), removed by the uninstall.
-        public static bool ModItem(int prefabIndex) => prefabIndex >= 640 && prefabIndex <= 644;
+        // The mod's own items (wood plank bundle and plank, canvas pack, wood pole and pole bundle, wood pallet), removed by the uninstall.
+        public static bool ModItem(int prefabIndex) => prefabIndex >= 640 && prefabIndex <= 645;
     }
 
     // ---- Save state ----
@@ -583,25 +593,47 @@ namespace EconomyOverhaul
         internal static string SlotJson(string slot) => slot != null && slot.StartsWith(BinaryPrefix, StringComparison.Ordinal) ? Write(Decode(slot)) : slot;
         // BinaryFormatter names each class with its assembly's full name, the version included, and the version changes with each
         // release (EconomyOverhaul.csproj): every mention of this mod's assembly, also inside a generic type's arguments (a
-        // List<MarketState> names MarketState with its assembly), is read as the assembly running now, whatever its version. Other
-        // assemblies (mscorlib) as named, the one loaded first.
+        // List<MarketState> names MarketState with its assembly), is read as the assembly running now, whatever its version. The other
+        // assembly named is mscorlib, the one running. Nothing is loaded or looked up from a save's names (the Thunderstore review of
+        // 2026-10-24: "you should be able to remove the assembly resolving code"): only the types the state's own fields can hold
+        // are bound, any other name refuses the save.
         internal sealed class TypeBinder : System.Runtime.Serialization.SerializationBinder
         {
             internal static readonly TypeBinder Instance = new TypeBinder();
-            private static readonly Assembly Own = typeof(SaveState).Assembly;
-            private static readonly string OwnName = Own.GetName().Name;
+            private static readonly Assembly Own = typeof(SaveState).Assembly, Core = typeof(object).Assembly;
+            private static readonly string OwnName = Own.GetName().Name, CoreName = Core.GetName().Name;
+            // SaveState and every type its fields hold, through arrays and generic arguments: this mod's saved classes, List<>, the
+            // arrays and plain values (a type BinaryFormatter writes without asking the binder is not needed here).
+            internal static readonly HashSet<Type> Allowed = Graph(typeof(SaveState));
             private readonly Dictionary<string, Type> found = new Dictionary<string, Type>();
             public override Type BindToType(string assemblyName, string typeName)
             {
                 string name = typeName + ", " + assemblyName;
                 lock (found)
                 {
-                    if (!found.TryGetValue(name, out var type)) found.Add(name, type = Type.GetType(name, Resolve, null, true));
+                    if (!found.TryGetValue(name, out var type))
+                    {
+                        type = Type.GetType(name, Resolve, null, true);
+                        if (!Allowed.Contains(type)) throw new InvalidDataException("Economic save names a type it may not hold: " + type.FullName);
+                        found.Add(name, type);
+                    }
                     return type;
                 }
             }
-            private static Assembly Resolve(AssemblyName name) => name.Name == OwnName ? Own :
-                AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == name.Name) ?? Assembly.Load(name);
+            private static Assembly Resolve(AssemblyName name) => name.Name == OwnName ? Own : name.Name == CoreName ? Core :
+                throw new InvalidDataException("Economic save names an assembly it may not hold: " + name.Name);
+            private static HashSet<Type> Graph(Type root)
+            {
+                var set = new HashSet<Type>(); var todo = new Stack<Type>(); todo.Push(root);
+                while (todo.Count > 0)
+                {
+                    var t = todo.Pop(); if (!set.Add(t)) continue;
+                    if (t.IsArray) todo.Push(t.GetElementType());
+                    if (t.IsGenericType) foreach (var a in t.GetGenericArguments()) todo.Push(a);
+                    if (t.Assembly == Own) foreach (var f in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)) if (!f.IsNotSerialized) todo.Push(f.FieldType);
+                }
+                return set;
+            }
         }
 
         internal static string Write(SaveState state)
@@ -706,6 +738,9 @@ namespace EconomyOverhaul
             if (result != null && result.tarps == null) result.tarps = new List<TarpState>();   // a 0.8.5 save
             // Demand data from a build before the tavern (stage 3) has no heard list: an empty one, not a refused save.
             if (result?.demand != null && result.demand.heard == null) result.demand.heard = new List<int>();
+            // A fleet short of the table (Al'Ankh's second medium local of 2026-10-24) gets its new traders before the check.
+            int added = Fleet.TopUp(result);
+            if (added > 0) Plugin.Log?.LogInfo("Economic save with " + (result.fleet.Count - added) + " traders: " + added + " added (" + string.Join(", ", result.fleet.Skip(result.fleet.Count - added).Select(b => b.group + " of " + b.home + " at port " + b.origin).ToArray()) + ").");
             Validate(result);
             if (result.version < 6) Share(result);
             // Every trader sails at its group's speed in the fleet table, also in a game saved before the table changed (the
@@ -1177,7 +1212,7 @@ namespace EconomyOverhaul
             Loans.Notify("EconomyOverhaul removed from this game (" + removed + " items). Save, quit, then remove the mod.");
             return removed;
         }
-        // Every item 640-644: the live ones (held, in the inventory, in crates, aboard, ashore, shop stock) and the save records
+        // Every item 640-645: the live ones (held, in the inventory, in crates, aboard, ashore, shop stock) and the save records
         // a far ship keeps instead of live items. The game's load would fail on any of them without the mod.
         internal static int RemoveItems()
         {
@@ -1392,6 +1427,68 @@ namespace EconomyOverhaul
         }
         private static void Begin() => Loans.BeginPlunder();
         private static Exception End(Exception __exception) { Loans.EndPlunder(); return __exception; }
+    }
+    // Virtual Crew (optional; PALLET_JUNK_CREW_DRAFT.md §2 and §4; the user, 2026-10-24: "Crew mod compatibility: when crew sell
+    // respondentia loan cargo, player don't need to pay back loan", then C2 "yes it should repay loan", C3 the cargo's damage, C4
+    // (b)). Its supercargo's sale (SupercargoTradeService.TrySellCargoAtPort) pays the price into the wallet itself and destroys the
+    // crate, which closed a financed crate's loan unpaid. Around it: the loan and the payment wallet noted first, the loan held open
+    // through the sale; sold (true), settled from the wallet's rise as the player's own sale settles it (Loans.SettleCrewSale); not
+    // sold, or thrown, nothing (the crate is still aboard, its loan open). During the sale its price (GetSellPrice) times the
+    // crate's condition (Rules.CrewSalePrice). Its steward draws no water from a financed barrel (IsStewardWaterSource: no).
+    internal static class VirtualCrewCompatibility
+    {
+        internal const string Guid = "com.zorkinian.virtualcrew";
+        private sealed class Sale { internal ShipItem Item; internal CargoState Loan; internal IslandMarket Market; internal int Currency, Before; }
+        private static Sale sale;
+        internal static void Install(Harmony harmony)
+        {
+            Type Find(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name, false)).FirstOrDefault(t => t != null);
+            var trade = Find("SailwindVirtualCrew.SupercargoTradeService"); var manager = Find("SailwindVirtualCrew.VirtualCrewManager");
+            if (trade == null && manager == null)
+            {
+                if (BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(Guid)) Plugin.Log?.LogWarning("Virtual Crew compatibility unavailable: its classes changed.");
+                return;
+            }
+            var sell = trade == null ? null : AccessTools.Method(trade, "TrySellCargoAtPort", new[] { typeof(ShipItem), typeof(IslandMarket), typeof(int) });
+            var price = trade == null ? null : AccessTools.Method(trade, "GetSellPrice", new[] { typeof(IslandMarket), typeof(int), typeof(int) });
+            if (sell == null || sell.ReturnType != typeof(bool) || price == null || price.ReturnType != typeof(int))
+                Plugin.Log?.LogWarning("Virtual Crew sale compatibility unavailable: SupercargoTradeService.TrySellCargoAtPort or GetSellPrice changed.");
+            else
+            {
+                harmony.Patch(sell, prefix: new HarmonyMethod(typeof(VirtualCrewCompatibility), nameof(Begin)), postfix: new HarmonyMethod(typeof(VirtualCrewCompatibility), nameof(Sold)),
+                    finalizer: new HarmonyMethod(typeof(VirtualCrewCompatibility), nameof(End)));
+                harmony.Patch(price, postfix: new HarmonyMethod(typeof(VirtualCrewCompatibility), nameof(Price)));
+                Plugin.Log?.LogInfo("Virtual Crew: the crew's sale of financed cargo repays its loan; their price counts the cargo's damage.");
+            }
+            var water = manager == null ? null : AccessTools.Method(manager, "IsStewardWaterSource");
+            if (water == null || water.ReturnType != typeof(bool) || water.GetParameters().FirstOrDefault()?.ParameterType != typeof(ShipItemBottle))
+                Plugin.Log?.LogWarning("Virtual Crew steward compatibility unavailable: VirtualCrewManager.IsStewardWaterSource changed.");
+            else
+            {
+                harmony.Patch(water, postfix: new HarmonyMethod(typeof(VirtualCrewCompatibility), nameof(Water)));
+                Plugin.Log?.LogInfo("Virtual Crew: the steward draws no water from a financed barrel.");
+            }
+        }
+        private static void Begin(ShipItem item, IslandMarket market)
+        {
+            sale = null;
+            int currency = GameState.currentCurrency;
+            if (!World.Ready || !item || PlayerGold.currency == null || currency < 0 || currency >= PlayerGold.currency.Length) return;
+            sale = new Sale { Item = item, Loan = Loans.Find(item), Market = market, Currency = currency, Before = PlayerGold.currency[currency] };
+            if (sale.Loan != null) Loans.HoldForCrewSale(sale.Loan);
+        }
+        private static void Price(ref int __result)
+        {
+            if (sale != null && sale.Item) __result = Rules.CrewSalePrice(__result, CargoCondition.Factor(sale.Item));
+        }
+        private static void Sold(bool __result)
+        {
+            var s = sale; if (s?.Loan == null || !__result || !World.Ready) return;
+            try { Loans.SettleCrewSale(s.Loan, checked(PlayerGold.currency[s.Currency] - s.Before), s.Currency, s.Market); }
+            catch (Exception e) { Plugin.Log?.LogWarning("Virtual Crew: a financed crate's loan was not settled: " + e.Message); }
+        }
+        private static Exception End(Exception __exception) { sale = null; Loans.HoldForCrewSale(null); return __exception; }
+        private static void Water(ShipItemBottle bottle, ref bool __result) { if (__result && World.Ready && Loans.Find(bottle) != null) __result = false; }
     }
     // Scrambled Seas (optional): with a scramble on, its StartNewGame prefix moves the world and runs its own copy of the
     // game's start routine (MovePlayerToStartPos), skipping the game's. That copy runs on time and only its step that begins

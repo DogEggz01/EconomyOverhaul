@@ -103,6 +103,14 @@ namespace EconomyOverhaul
             (int)Math.Round((float)((float)((float)((float)ShipyardBase(price) * rate) * hullDamage) * capacity) * .1f);
     }
     public struct Settlement { public int Payout, Shortfall; }
+    public static partial class Rules
+    {
+        // Virtual Crew's sale price for a crate or barrel times its condition (CargoCondition.Factor: the water damage, how intact
+        // fragile cargo is), floored as this mod's own sale quote (Fx.Quote) floors it (the user, 2026-10-24, C3: "It should
+        // consider fragile goods cargo damage and Water damage, crew mod let crew take a cut so sold price will be lower, leave it
+        // to that mod"): the rest of the crew's price is theirs.
+        public static int CrewSalePrice(int price, double condition) => price <= 0 ? price : (int)Math.Floor(price * Math.Max(0, Math.Min(1, condition)));
+    }
 
     // ---- Loans ----
     internal static class Loans
@@ -160,12 +168,37 @@ namespace EconomyOverhaul
         // shortfall left the lender's coins at 0 or more), the crate earns reputation in the lending region.
         internal static int SettleSale(ShipItem item, int gross, int currency, IslandMarket market = null)
         {
-            var loan = Find(item); if (loan == null) return gross;
+            var loan = Find(item); return loan == null ? gross : SettleLoan(loan, gross, currency, market);
+        }
+        // One sale's settle, for the shopkeeper, the trade book and Virtual Crew's crew (SettleCrewSale, whose crate is gone by then):
+        // the shortfall from the lender's coins, the reputation earned, the loan closed; returns what the seller keeps. Called before
+        // the sale's coins reach the wallet (the shortfall's penalty reads the wallet).
+        internal static int SettleLoan(CargoState loan, int gross, int currency, IslandMarket market)
+        {
             var result = Rules.Settle((double)loan.principal + loan.interest, gross, Rate(Currency(loan)), Rate(currency));
             Debit(loan.region, result.Shortfall, Currency(loan));
             if (result.Shortfall == 0 || PlayerGold.currency[Currency(loan)] >= 0) Reward(loan, market);
             Close(loan); return result.Payout;
         }
+        // Virtual Crew's sale of a financed crate (VirtualCrewCompatibility; PALLET_JUNK_CREW_DRAFT.md §2, the user's C2 "yes it should
+        // repay loan"): the crew put the whole price, gross, into the payment wallet themselves. It is taken out again, the loan
+        // settled as the player's own sale settles it (SettleLoan), and what the seller keeps put back; the debt part is one negative
+        // line in the day log, so the day's total is what the player kept.
+        internal static void SettleCrewSale(CargoState loan, int gross, int currency, IslandMarket market)
+        {
+            if (loan == null || !loan.loan || gross < 0) return;
+            PlayerGold.currency[currency] = checked(PlayerGold.currency[currency] - gross);
+            int net = SettleLoan(loan, gross, currency, market);
+            PlayerGold.currency[currency] = checked(PlayerGold.currency[currency] + net);
+            int repaid = gross - net;
+            if (repaid <= 0) return;
+            if (DayLogs.instance) DayLogs.instance.dayLogs[currency].LogTransaction(-repaid, TransactionCategory.other);
+            if (MoneyNotification.instance) MoneyNotification.instance.PlayNotif(-repaid, currency);
+        }
+        // The loan of the crate Virtual Crew's crew are selling: their sale destroys the crate, and UnexpectedRemoval leaves this loan
+        // open for SettleCrewSale (as it holds a plundered crate's for Dangerous Waters).
+        private static CargoState crewSale;
+        internal static void HoldForCrewSale(CargoState loan) { crewSale = loan; }
         // A crate earns fractions of a point: they are carried per region while the game runs (a load starts again at 0).
         private static double[] repCarry = new double[4];
         private static SaveState repCarryState;
@@ -213,6 +246,7 @@ namespace EconomyOverhaul
             if (save.GetParentObject() == -2 || save.GetParentObject() == -3) return;
             var loan = Find(item);
             if (plundered != null && loan != null && loan.loan) { plundered.Add(loan); return; }
+            if (loan != null && ReferenceEquals(loan, crewSale)) return;
             Close(loan);
         }
         // Dangerous Waters' boarding party carrying off financed cargo (DangerousWatersCompatibility): what one boarding

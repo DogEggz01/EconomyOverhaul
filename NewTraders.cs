@@ -17,7 +17,7 @@ namespace EconomyOverhaul
         // Trade book. A delivered report unlocks with the player's rep in the delivering boat's home region (the user,
         // 2026-10-14; small locals 3/2/2 in Al'Ankh, 2/2/3 in Emerald and Aestrin, since 2026-10-15; TradeBook.BookGroup):
         // rep 1, three (two in Emerald and Aestrin) of each region's seven small locals ("small") and
-        // Emerald's two FFL small locals; rep 2, two more small locals ("small2"), the medium, the first Aestrin heavy
+        // Emerald's two FFL small locals; rep 2, two more small locals ("small2"), the mediums (Al'Ankh's two since 2026-10-24, M2 (a)), the first Aestrin heavy
         // ("heavy"), the FFL-Emerald shuttle; rep 3, the last two small locals ("small3"), the second heavy ("heavy2"), the regionals and the Happy Bay trader (rep 3 in any
         // region); rep 4, one group of three independents per region (home = the independent's group, 0-2); rep 5, the
         // region's Chronos trader.
@@ -32,6 +32,14 @@ namespace EconomyOverhaul
         // Whether a port releases trader reports to the player at midnight: not where the player has rep 0. Reports are not
         // held back by reputation otherwise (the 0.7.0 waits of 3/2/1 days were removed).
         public static bool BookReleases(int portLevel) => portLevel > 0;
+        // A level up releases the trade-book reports at once instead of at the next midnight (the user, 2026-10-23,
+        // SMALL_REQUESTS_DRAFT.md: "every level up"): whether any account's level is above its last known one.
+        public static bool LevelRose(int[] before, int[] now)
+        {
+            if (before == null || now == null) return false;
+            for (int i = 0; i < Math.Min(before.Length, now.Length); i++) if (now[i] > before[i]) return true;
+            return false;
+        }
         // Whether a report delivered by boat kind f is unlocked whenever one delivered by kind e is (so a newer f replaces an older e).
         public static bool BookCovers(string fg, int fh, string eg, int eh)
         {
@@ -109,12 +117,15 @@ namespace EconomyOverhaul
         // trader 6.5 knots and 7 h since the sail plans (the user, 2026-10-19: "Medium local: 5.5 knots", "make wait stay 5 hour",
         // "Happy bay trader: 6.5 knots, wait 7 hour"; 5 knots and 4 h, 6 knots and 6.5 h before; TRADER_RIGS_DRAFT.md).
         internal static readonly FleetDefinition[] Current = {
+            // Al'Ankh 2 medium locals since 2026-10-24 (the user: "use 2 local medium and 7 local small", in place of the eighth small
+            // local asked the same day; SMALL_REQUESTS_DRAFT.md section 5): 52 traders. A save with 51 gets the second medium at load
+            // (Fleet.TopUp).
             new FleetDefinition("small", 0, 7, 20, 1000, 2.57f, 2.5f),
             new FleetDefinition("small", 1, 7, 20, 1000, 2.57f, 2.5f),
             new FleetDefinition("small", 2, 7, 20, 1000, 2.57f, 2.5f),
             new FleetDefinition("small", 1, 2, 20, 1000, 2.57f, 2.5f, ffl: true),
             new FleetDefinition("heavy", 2, 2, 30, 10000, 2.32f, 24, minimumMass: 220, startPorts: new[] { 19, 28 }),
-            new FleetDefinition("medium", 0, 1, 40, 4000, 2.83f, 5),
+            new FleetDefinition("medium", 0, 2, 40, 4000, 2.83f, 5),
             new FleetDefinition("medium", 1, 1, 40, 4000, 2.83f, 5),
             new FleetDefinition("medium", 2, 1, 40, 4000, 2.83f, 5),
             new FleetDefinition("regional", 0, 3, 40, 10000, 3.60f, 8),
@@ -302,6 +313,32 @@ namespace EconomyOverhaul
                 }
                 World.State.fleet.Add(b);
             }
+        }
+        // A save made with fewer traders than the table (a game of 1.0.2 or older has 1 Al'Ankh medium local, the table 2 since
+        // 2026-10-24): each definition short of its count gets new traders with the next ids, waiting at a port of its network (in
+        // turn), the hold empty, given each network port's own report from the save's markets, as a new game's traders are. Only
+        // while the fleet is short of the table's total (a made-up fleet of that total, as the tests build, is left alone).
+        internal static int TopUp(SaveState s)
+        {
+            if (s?.fleet == null || s.markets == null || s.fleet.Any(b => b?.network == null) || s.fleet.Count >= FleetDefinitions.Total) return 0;
+            int added = 0;
+            foreach (var d in FleetDefinitions.Current)
+            {
+                int have = s.fleet.Count(d.Matches); var network = d.Network();
+                for (; have < d.Count && s.fleet.Count < FleetDefinitions.Total && network.Length > 0; have++, added++)
+                {
+                    var b = new BoatState { id = s.fleet.Count == 0 ? 0 : s.fleet.Max(x => x.id) + 1, group = d.Group, home = d.Home, network = network,
+                        origin = network[have % network.Length], remaining = 1.25 };
+                    d.Apply(b);
+                    foreach (int p in network)
+                    {
+                        var m = s.markets.Find(x => x != null && x.port == p);
+                        var r = m?.reports == null ? null : Report(m.reports, p); if (r != null) PutReport(b.reports, r);
+                    }
+                    s.fleet.Add(b);
+                }
+            }
+            return added;
         }
         private static Port LivePort(int port) => Port.ports != null && port >= 0 && port < Port.ports.Length && Port.ports[port] && Port.ports[port].portIndex == port ? Port.ports[port] : null;
         // A trader's distance: the map's over its stretch (trip times and the route rules keep their vanilla scale).
@@ -865,6 +902,18 @@ namespace EconomyOverhaul
             }
         }
         internal static int[] Reps() => new[] { Reputations.Level(0), Reputations.Level(1), Reputations.Level(2) };
+        // A level up in any region or at Chronos releases at once what midnight would (Rules.LevelRose). Watched each frame, so
+        // every way a level changes counts (missions, loans, other mods, commands). Outside play (a load, the menu) the levels
+        // are only noted, so a load releases nothing.
+        private static int[] levels;
+        internal static void Watch()
+        {
+            if (!World.Ready || Startup.BlocksGameplay) { levels = null; return; }
+            var now = new[] { Reputations.Level(0), Reputations.Level(1), Reputations.Level(2), Reputations.Level(Reputations.Chronos) };
+            bool rose = GameState.playing && !World.Loading && !GameState.currentlyLoading && Rules.LevelRose(levels, now);
+            levels = now;
+            if (rose) { Release(); Plugin.Log?.LogInfo("Reputation level up (" + string.Join(", ", now.Select(x => x.ToString()).ToArray()) + "): trade-book reports released at once."); }
+        }
         // Each port shows, per port, the newest published entry the player has unlocked; nothing new where the player has rep 0.
         internal static void Release()
         {
@@ -957,8 +1006,8 @@ namespace EconomyOverhaul
         internal static void ShowView() { if (swapped && view != null && swapped.knownPrices == native) swapped.knownPrices = view; }
         // After vanilla CloseUI: the player's list stays frozen instead of linked to the port.
         internal static void Closed() { if (World.Ready && !Startup.BlocksGameplay && World.State.playerBook != null && World.State.playerBook.Count > 0) GameState.playerKnownPrices = PlayerArray(Length(GameState.playerKnownPrices)); }
-        internal static void Loaded() { Close(); indexed = null; Closed(); }
-        internal static void Reset() { Close(); indexed = null; index.Clear(); }
+        internal static void Loaded() { Close(); indexed = null; levels = null; Closed(); }
+        internal static void Reset() { Close(); indexed = null; levels = null; index.Clear(); }
     }
     [HarmonyPatch(typeof(EconomyUI), "OpenUI")] internal static class TradeBookOpenPatch
     { [HarmonyPriority(Priority.First)] static void Postfix(EconomyUI __instance) => TradeBook.Open(__instance); }
@@ -1019,13 +1068,14 @@ namespace EconomyOverhaul
         // Copies made at the start, per sail plan (TRADER_RIGS_DRAFT.md, the user, 2026-10-19: "5 local small for each region / 2
         // newly customized local small for each region (included FFL) / 2 regional long range / 1 copy for each customized
         // brig/junk/sanbuq"): the stock Dhow, Cog and Kakam 4 each (5 until 2026-10-22, the user: "reduce all default local small
-        // trader copy by 1"), the stock Sanbuq, Brig and Junk 2 each, the Baghlah and Jong 1; the four small plans 2 each, every
-        // other plan 1 (the two heavies share theirs); 44 in all (47 before, 41 before that, by hull).
+        // trader copy by 1"), the stock Sanbuq, Brig and Junk 2 each, the Baghlah and Jong 1; the four small plans 2 each, Al'Ankh's
+        // medium plan 2 since 2026-10-24 (its two medium locals, the user: "add 1 more copy for local medium"), every other plan 1
+        // (the two heavies share theirs); 45 in all (44 before, 47 before that, 41 before that, by hull).
         public static int TraderPool(string key)
         {
             if (key == null) return 0;
             if (key.StartsWith(StockKey)) { int.TryParse(key.Substring(StockKey.Length), out int hull); return HullClass(hull) == 0 ? 4 : HullClass(hull) == 2 ? 1 : 2; }
-            return key.StartsWith("small-") || key == "ffl-small" ? 2 : 1;
+            return key.StartsWith("small-") || key == "ffl-small" || key == "medium-alankh" ? 2 : 1;
         }
         // A copy's key: its plan, else its hull's stock rig.
         public const string StockKey = "stock-";
@@ -1107,9 +1157,10 @@ namespace EconomyOverhaul
             return pool[Math.Max(0, Math.Min(pool.Count - 1, (int)(roll * pool.Count)))];
         }
         // Which traders carry the user's captured sail plans (TRADER_RIGS_DRAFT.md, "Which traders get a plan", the user's words
-        // there): the Happy Bay trader, the shuttle, each region's medium local, the two heavies (one plan), the FFL small pair (one
-        // plan), the last 2 by id of each region's 7 small locals (smallFromLast 0 and 1: the highest ids), the Chronos trader of
-        // Fort Aestrin and the nine independents, three plans a hull by their rank. null: the hull's stock rig.
+        // there): the Happy Bay trader, the shuttle, each region's medium locals (Al'Ankh's two share theirs), the two heavies (one
+        // plan), the FFL small pair (one plan), the last 2 by id of each region's 7 small locals (smallFromLast 0 and 1: the highest
+        // ids), the Chronos trader of Fort Aestrin and the nine independents, three plans a hull by their rank. null: the hull's
+        // stock rig.
         public static readonly string[] RegionNames = { "alankh", "emerald", "aestrin" };
         public static string TraderPlan(string group, int home, bool ffl, int independentRank, int smallFromLast)
         {
@@ -1136,11 +1187,53 @@ namespace EconomyOverhaul
         // A drawn trader's wait in port counts from when it is moored or anchored (the user's feedback on 0.10.4, V5): until then
         // its wait timer is held. Out of sight the wait runs from the approach point as before.
         public static bool WaitHeld(bool waitingInPort, bool atItsPlace) => waitingInPort && !atItsPlace;
-        // A drawn trader's sails (question 10): the fore-and-aft sails (lateen, gaff, junk) and the jibs out from the centreline to
-        // leeward, 25 degrees (the user, 2026-10-20: "Reduce all fore and aft sail of trader angle to only 25 degree, jib's reduce to
-        // 25 degree too"; 40, and a jib its sheeted-in angle and 20 more, before); the jibs 30 since 1.0.2 (the user, 2026-10-22:
-        // "make all trader's jib angle at 30 instead of current").
-        public const double SailOut = 25, JibOut = 30;
+        // A drawn trader's sails trimmed by the wind it feels (TRADER_TRIM_DRAFT.md, "The self-trim design", approved by the user on
+        // 2026-10-23; it replaces the fixed angles: fore-and-aft sails 25 degrees out and jibs 30, of 2026-10-20 and -22). Angles in
+        // degrees; awa the apparent wind's angle off the bow, 0 dead ahead to 180 dead astern. Fore-and-aft sails (lateens, gaffs,
+        // junk sails) and jibs out to leeward by half the awa (the user's "C: half the AWA"), at least the angle the game lets the sail
+        // be sheeted in to (T2 "as vanilla": a fore-and-aft sail to the centreline, a jib 16), at most 80 (T1 (b): past the sail's
+        // own range where that is smaller).
+        public const double TrimMost = 80;
+        public static double TrimOut(double awa, double sheetedIn) => Clamp(Math.Abs(awa) / 2, sheetedIn, TrimMost);
+        // The game's square junk sails (prefabs 27-29, 100-103: square sails to the game, a SquareAngleMaster's yard) trimmed as
+        // fore-and-aft sails on the traders (the user, 2026-10-24: "Junk sqaure will be trim like fore-and-aft sail for trader";
+        // PALLET_JUNK_CREW_DRAFT.md §1): the yard turned 90 degrees from squared to lie along the centreline, eased out by TrimOut,
+        // sheeted in to 0 (J2: "0, like other fore and aft sail"), posed past its range like the others (J1 (a)), never furled at sea.
+        public static bool JunkSquare(int prefab) => prefab >= 27 && prefab <= 29 || prefab >= 100 && prefab <= 103;
+        // The push onto a sail's own face, as a share of the game's push (WindCloth: the wind x 0.25 x unroll x shadow): the part that
+        // fills a sail the wind meets at `attack` degrees (its sine), at least 0.3 (the user's "Game's fill, min 0.3").
+        public const double PushLeast = .3;
+        public static double PushShare(double attack) => Math.Max(PushLeast, Math.Sin(Clamp(attack, -90, 90) * Math.PI / 180));
+        // Goosewing (T1: "when AWA is 170-190 degree, make it goosewing"), at sea only, with a buffer against small wind changes (the
+        // user: "have buffer so small wind change don't keep fliping sail to other side"; Claude's reading 4): on once the awa has
+        // stayed 170 or more for 7 s, off once it has stayed under 165 for 7 s; heldFor: how long GooseTurns has held.
+        public const double TrimHold = 7, GooseOn = 170, GooseOff = 165;
+        public static bool GooseTurns(bool on, double awa) => on ? Math.Abs(awa) < GooseOff : Math.Abs(awa) >= GooseOn;
+        public static bool GooseHeld(bool on, double awa, double heldFor, bool atSea) => atSea && (GooseTurns(on, awa) && heldFor >= TrimHold ? !on : on);
+        // In the split (reading 1, "Alternate from aft"): the fore-and-aft sails and jibs by their order from aft (0 the aftmost, the
+        // jibs the foremost), the aftmost on the side the sails were on, the next on the other, and so on.
+        public static int GooseSide(int order, int side) => order % 2 == 0 ? side : -side;
+        // Square sails (the user: "Sqaure sail can brace up to 70 degree", "70°, set from AWA 36"; reading 6): the yard braced to
+        // leeward until the wind meets it at 16 degrees (full force by the game's rule, Sail.UpdateWindForceOnSail), 0 (squared) to
+        // 70; the wind meets it at the awa + the brace - 90.
+        public const double BraceMost = 70, SquareSetAt = 36, SquareFurlUnder = 33;
+        public static double SquareBrace(double awa) => Clamp(106 - Math.Abs(awa), 0, BraceMost);
+        public static double SquareAttack(double awa, double brace) => Math.Abs(awa) + brace - 90;
+        // At sea a square sail sets once the awa has stayed 36 or more for 7 s and furls once it has stayed under 33 for 7 s (T5
+        // "held longer"; "hold time change to 7 sec."); off the sea it lies furled (the harbour legs: reading 2, "in harbour leg just
+        // let sqaure sail stay furled, unfurled when at approaching point"); leaving, at the approach point it sets at once if the awa
+        // is 36 or more there (reading 2b).
+        public static bool SquareTurns(bool set, double awa) => set ? Math.Abs(awa) < SquareFurlUnder : Math.Abs(awa) >= SquareSetAt;
+        public static bool SquareSet(bool set, double awa, double heldFor, bool atSea) => atSea && (SquareTurns(set, awa) && heldFor >= TrimHold ? !set : set);
+        public static bool SquareAtApproach(double awa) => Math.Abs(awa) >= SquareSetAt;
+        // The side a sail lies on (T7 "as vanilla", reading 3, the buffer of reading 4). wind: the apparent wind's angle off the bow,
+        // + over the port side (the sails out to starboard: side +1), - over the starboard side; line: the angle the sail lies at
+        // sheeted in (0 a fore-and-aft sail, 16 a jib). It goes over once the wind has come 5 degrees or more onto its own side, past
+        // its line toward the bow and past dead astern toward the stern, and stayed so for 7 s (heldFor: how long SidePast has held).
+        public const double SidePastBy = 5;
+        public static bool SidePast(int side, double wind, double line) { double onItsSide = -side * wind; return side != 0 && onItsSide >= line + SidePastBy && onItsSide <= 180 - SidePastBy; }
+        public static int SailSideHeld(int side, double wind, double line, double heldFor) => SidePast(side, wind, line) && heldFor >= TrimHold ? -side : side;
+        public static int Leeward(double wind) => wind >= 0 ? 1 : -1;
         // The speed rule while visible (the user, 2026-10-18 after 0.10.2, VISIBLE_TRADERS_DRAFT.md's last section; question 12
         // before): today's speed x its strength part x its course part. Strength: 0.75 at wind 7 to 1.25 at wind 21, in a straight
         // line between, held at both ends (the game's own wind numbers, as Windicators' dial shows them: 1.0 at 14). Course, by the
@@ -2170,10 +2263,32 @@ namespace EconomyOverhaul
             fits.TryGetValue(hull, out var list) ? list.FirstOrDefault(f => f.Mesh == mesh && Math.Abs(f.W - w) < .03f && Math.Abs(f.L - l) < .03f) : null;
     }
 
-    internal sealed class SailRig { internal int[] Path; internal Transform T; internal Quaternion Rest, ToStarboard, ToPort; }
+    // A template's sail (TRADER_TRIM_DRAFT.md, the code plan's step 2): its rest pose (as installed: furled in port) and what posing
+    // it at any angle needs. Kind: 0 none (no angle control: it stays at rest), 1 fore-and-aft (lateen, gaff, junk sail), 2 jib,
+    // 3 square. A pose turns it from Base about Axis (its own frame) by Zero + Star x side x the angle out (a square sail: its
+    // brace); Zero its centreline (a square yard squared), Star the turn's sign that puts it out to starboard (the game's force rule
+    // picking leeward, as vt_measure run 2). Closest: the angle the game lets it be sheeted in to. Lo, Hi: its range, in the pose's
+    // angle. Order: its place from aft among the fore-and-aft sails and jibs, the jibs the foremost (the goosewing order; -1 for the
+    // others). Face: its cloth's face in the sail's rotation frame (from the cloth's rest mesh, one side of it), else the game's
+    // force axis (its up; a yard's right). Yard: a square yard, turned about its local z from squared with its force axis its
+    // right: kind 3, or kind 1 for a junk square trimmed as a fore-and-aft sail (Rules.JunkSquare; its Zero the yard along the
+    // centreline, 90 degrees from squared).
+    internal sealed class SailRig
+    {
+        internal int[] Path; internal Transform T; internal Quaternion Rest, Base; internal Vector3 Axis = Vector3.forward, Face = Vector3.up;
+        internal int Kind, Order = -1; internal float Zero, Star = 1, Closest, Lo = -89, Hi = 89; internal bool FaceFromCloth, Yard;
+        internal Quaternion At(int side, float angle) => Kind == 0 ? Rest : Base * Quaternion.AngleAxis(Zero + Star * side * angle, Axis);
+    }
+    // A template's flag (or any cloth the game drives by its WindClothSimple, which a copy does not keep): its place, the game's
+    // multiplier and what the game drives it by (Drive 0: the wind less its ship's velocity, the ship's flags; 1: its sail's
+    // apparent wind, Sail the sail's index in the template; 2: the wind alone). Without it a copy's flag kept the push it had when the
+    // template was taken (vttrue-1: the stock Brig's two flags at (18.29, 0, -4.30) at every wind, 13 to 167 degrees off it; the
+    // user's report of 2026-10-24, "the sail trim didn't follow wind direction", whose picture shows the flag against the sails).
+    internal sealed class FlagRig { internal Transform T; internal int[] Path; internal float Mult = 1; internal int Drive, Sail = -1; }
     internal sealed class HullTemplate
     {
         internal int Hull;
+        internal readonly List<FlagRig> Flags = new List<FlagRig>();
         internal string Plan, Key;   // the sail plan (null: the hull's stock rig) and the pool's key (Rules.TraderKey)
         internal GameObject Root;
         internal int Lanterns;   // the lanterns hung on it (the hull's places, a plan's on its own masts: Rules.LanternsOnMasts)
@@ -2197,6 +2312,8 @@ namespace EconomyOverhaul
         internal ReefEffectAnimUniversal[] Reefs; internal Animator[] ReefAnimators = new Animator[0];
         internal Sail[] Sails;
         internal Transform[] SailT;
+        internal Cloth[] SailCloths; internal Renderer[] SailClothLooks;   // each sail's cloth and its renderer, by SailT's order (PoseSails)
+        internal Cloth[] FlagCloths = new Cloth[0];   // its flags' cloths, by the template's Flags (VisibleTraders.Trim drives them)
         internal Collider[] Colliders;
         // its ropes (the game's RopeEffect, each with its line; drawn by the game while the copy is shown, TraderHulls.ShowRopes)
         internal RopeEffect[] Ropes = new RopeEffect[0];
@@ -2428,7 +2545,7 @@ namespace EconomyOverhaul
         private sealed class SailData
         {
             internal int[] Path; internal string Kind = "none"; internal float Min, Max, Closest, CloseL = float.NaN; internal Vector3 Axis, InitEuler; internal Quaternion InitRot;
-            internal bool Furled; internal Material Unfurled; internal int[] ClothPath;
+            internal bool Furled, Junk; internal Material Unfurled; internal int[] ClothPath;
         }
         // The sails of the game's own ship as installed (vt_dress' ReadSails): each one's control and range.
         private static List<SailData> ReadSails(PurchasableBoat boat, int hull, bool plan)
@@ -2455,7 +2572,7 @@ namespace EconomyOverhaul
                     foreach (var c in j) if (c.side == RopeControllerSailAngleJib.JibWinch.left) d.CloseL = c.closestAngle;
                     d.InitRot = Fields.Get<Quaternion>(j[0].jibAngleMaster, "initialLocalRot");
                 }
-                else if (s.GetComponent<SquareAngleMaster>()) d.Kind = "square";
+                else if (s.GetComponent<SquareAngleMaster>()) { d.Kind = "square"; d.Junk = Rules.JunkSquare(s.prefabIndex) || s.name.IndexOf("square junk", StringComparison.OrdinalIgnoreCase) >= 0; }
                 // a sail furled now (a ship for sale) shows the empty material on its cloth: the copy must keep the real one
                 var reef = s.GetComponent<ReefEffectAnimUniversal>();
                 if (reef && s.cloth && reefFurled != null && (bool)reefFurled.GetValue(reef))
@@ -2467,43 +2584,97 @@ namespace EconomyOverhaul
             return list;
         }
 
-        // The pose rule (the user, question 10): square sails squared; fore-and-aft sails and jibs out from the centreline
-        // (Rules.SailOut 25 and Rules.JibOut 30 degrees: the user, 2026-10-20 and 2026-10-22; 40 and 16 + 20 before), to leeward
-        // by the game's own force rule (vt_measure run 2's PoseSails, as vt_dress).
-        private static Quaternion Pose(Transform t, SailData d, Vector3 fwd, Vector3 right, Vector3 windDir)
+        // A sail's rig (the self-trim, TRADER_TRIM_DRAFT.md; the rules in Rules.TrimOut and on): a fore-and-aft sail turns about its
+        // hinge from the centreline (the turn that lays its force axis, its up, most across the hull: vt_measure run 2's scan), a jib
+        // about its hinge from its rest, a square yard about its local z from squared (the game's own SquareAngleMaster turn); the side
+        // a turn puts it to leeward by the game's force rule with the wind abeam (as vt_dress).
+        private static SailRig Rig(Transform t, SailData d, Vector3 fwd, Vector3 right)
         {
             var keep = t.localRotation;
-            if (d.Kind == "square") { var e = t.localEulerAngles; return Quaternion.Euler(e.x, e.y, 0f); }
-            if (d.Kind != "angle" && d.Kind != "jib") return keep;
-            Func<float, Quaternion> pose;
-            if (d.Kind == "angle") { var cur = t.localEulerAngles; float baseZ = d.InitEuler.sqrMagnitude < 1e-6f ? cur.z : d.InitEuler.z; pose = a => Quaternion.Euler(cur.x, cur.y, baseZ + a); }
-            else { var rest = d.InitRot.x == 0 && d.InitRot.y == 0 && d.InitRot.z == 0 && d.InitRot.w == 0 ? t.localRotation : d.InitRot; pose = a => rest * Quaternion.AngleAxis(a, d.Axis); }
-            float lo = d.Max > d.Min ? d.Min : -89f, hi = d.Max > d.Min ? d.Max : 89f, a0 = 0f, across = -1f;
-            for (float a = lo; a <= hi; a += .5f)
+            var rig = new SailRig { T = t, Rest = keep, Base = keep };
+            if (d.Max > d.Min) { rig.Lo = d.Min; rig.Hi = d.Max; }
+            // a junk square: the fore-and-aft rule from the yard along the centreline, sheeted in to 0 (J2) (Rules.JunkSquare)
+            if (d.Kind == "square") { var e = t.localEulerAngles; rig.Kind = d.Junk ? 1 : 3; rig.Yard = true; rig.Base = Quaternion.Euler(e.x, e.y, 0f); }
+            else if (d.Kind == "angle")
             {
-                t.localRotation = pose(a);
-                var n = t.up; n.y = 0; if (n.magnitude < .3f) continue;
-                float x = Mathf.Abs(Vector3.Dot(n.normalized, right));
-                if (x > across) { across = x; a0 = a; }
+                // Euler(x, y, z + a) = Euler(x, y, z) x a turn of a about the local z
+                var cur = t.localEulerAngles; float baseZ = d.InitEuler.sqrMagnitude < 1e-6f ? cur.z : d.InitEuler.z;
+                rig.Kind = 1; rig.Base = Quaternion.Euler(cur.x, cur.y, baseZ); rig.Closest = Mathf.Abs(d.Closest);
             }
-            float outAngle = (float)(d.Kind == "jib" ? Rules.JibOut : Rules.SailOut);
-            float pick = a0, bestDrive = float.MinValue;
-            foreach (float a in new[] { a0 + outAngle, a0 - outAngle })
+            else if (d.Kind == "jib")
             {
-                t.localRotation = pose(a);
-                var n = t.up; n.y = 0; n = n.normalized; if (Vector3.Dot(n, windDir) < 0) n = -n;
+                rig.Kind = 2; rig.Base = d.InitRot.x == 0 && d.InitRot.y == 0 && d.InitRot.z == 0 && d.InitRot.w == 0 ? keep : d.InitRot; rig.Axis = d.Axis;
+                rig.Closest = float.IsNaN(d.CloseL) ? 16f : Mathf.Abs(d.CloseL);
+            }
+            rig.Face = rig.Yard ? Vector3.right : Vector3.up;
+            if (rig.Kind == 0) return rig;
+            Vector3 Force() => rig.Yard ? t.right : t.up;
+            if (rig.Kind != 3)
+            {
+                // a junk square's centreline is 90 degrees from squared, past a -35..35 yard's range (J1 (a): posed there anyway)
+                float across = -1f, from = rig.Yard ? -90f : rig.Lo, to = rig.Yard ? 90f : rig.Hi;
+                for (float a = from; a <= to; a += .5f)
+                {
+                    t.localRotation = rig.Base * Quaternion.AngleAxis(a, rig.Axis);
+                    var n = Force(); n.y = 0; if (n.magnitude < .3f) continue;
+                    float x = Mathf.Abs(Vector3.Dot(n.normalized, right));
+                    if (x > across) { across = x; rig.Zero = a; }
+                }
+            }
+            float bestDrive = float.MinValue;
+            foreach (float s in new[] { 1f, -1f })
+            {
+                t.localRotation = rig.Base * Quaternion.AngleAxis(rig.Zero + s * 30f, rig.Axis);
+                var n = Force(); n.y = 0; n = n.normalized; if (Vector3.Dot(n, right) < 0) n = -n;   // the wind abeam over the port side
                 float drive = Vector3.Dot(n, fwd);
-                if (drive > bestDrive) { bestDrive = drive; pick = a; }
+                if (drive > bestDrive) { bestDrive = drive; rig.Star = s; }
             }
-            // the angle even past the sail's limit (the user, 2026-10-19: "Go to the angle anyway", "Keep 40°"; clamped to it before):
-            // where the limit is smaller the sail is drawn through what it would meet; the range still picks the side
-            var result = pose(pick);
-            if (pick < lo - .01f || pick > hi + .01f) pastLimit.Add(d.Kind + " " + pick.ToString("F0") + " (limit " + lo.ToString("F0") + ".." + hi.ToString("F0") + ")");
             t.localRotation = keep;
-            return result;
+            // the most each way it is posed out (80 a fore-and-aft sail or jib, a yard 70: the user, T1 (b) and "brace up to 70"),
+            // even past its range (the user, 2026-10-19: "Go to the angle anyway"): where the range is smaller the sail is drawn
+            // through what it would meet (listed in the report)
+            float most = (float)(rig.Kind == 3 ? Rules.BraceMost : Rules.TrimMost);
+            foreach (int side in new[] { 1, -1 })
+            {
+                float a = rig.Zero + rig.Star * side * most;
+                if (a < rig.Lo - .01f || a > rig.Hi + .01f) pastLimit.Add(d.Kind + " " + (side > 0 ? "starboard" : "port") + " " + most.ToString("F0") + " (range " + rig.Lo.ToString("F0") + ".." + rig.Hi.ToString("F0") + " about " + rig.Zero.ToString("F0") + ")");
+            }
+            return rig;
+        }
+        // A sail's face from its cloth's rest mesh (the probe's fix for double-sided meshes, vtsc-2): the triangles facing the way of
+        // the largest one, their summed normal; taken when it is flat enough (its sum at least half their area), turned into the
+        // sail's rotation frame. The mesh's points are in its bind space: to the world through a bone and its bind pose (its root
+        // bone, which the furl does not move; through the renderer's own transform every face came out 90 degrees off, vttrim-1).
+        // The Junk's jib's face lies 66 degrees off its up (vtsc-1).
+        private static void ReadFace(SailRig rig, System.Text.StringBuilder why)
+        {
+            var cl = rig.T.GetComponentInChildren<Cloth>(true); var r = cl ? cl.GetComponent<SkinnedMeshRenderer>() : null; var m = r ? r.sharedMesh : null;
+            string fail = !cl ? "no cloth" : !m ? "no mesh" : !m.isReadable ? "mesh not readable" : null;
+            if (fail == null)
+            {
+                var p = m.vertices; var tris = m.triangles;
+                Vector3 Tri(int i) => Vector3.Cross(p[tris[i + 1]] - p[tris[i]], p[tris[i + 2]] - p[tris[i]]);
+                var refN = Vector3.zero; for (int i = 0; i + 2 < tris.Length; i += 3) { var c = Tri(i); if (c.sqrMagnitude > refN.sqrMagnitude) refN = c; }
+                Vector3 sum = Vector3.zero; float area = 0;
+                for (int i = 0; i + 2 < tris.Length; i += 3) { var c = Tri(i); if (Vector3.Dot(c, refN) > 0) { sum += c; area += c.magnitude; } }
+                float flat = area > 1e-6f ? sum.magnitude / area : 0f;
+                if (flat < .5f) fail = "flat " + flat.ToString("F2");
+                else
+                {
+                    var bones = r.bones; var binds = m.bindposes; int b = r.rootBone ? Array.IndexOf(bones, r.rootBone) : -1;
+                    if (b < 0 || b >= binds.Length) b = binds.Length > 0 && bones.Length > 0 && bones[0] ? 0 : -1;
+                    var toWorld = b >= 0 ? bones[b].localToWorldMatrix * binds[b] : r.transform.localToWorldMatrix;
+                    var world = toWorld.inverse.transpose.MultiplyVector(sum).normalized;
+                    rig.Face = (Quaternion.Inverse(rig.T.rotation) * world).normalized; rig.FaceFromCloth = true;
+                    var axis = rig.Yard ? rig.T.right : rig.T.up;
+                    why.Append(rig.T.name + " " + (Mathf.Acos(Mathf.Min(1f, Mathf.Abs(Vector3.Dot(world, axis)))) * Mathf.Rad2Deg).ToString("F0") + " off its force axis (flat " + flat.ToString("F2") + ", " + (b >= 0 ? "bone " + bones[b].name : "its own transform") + ")");
+                    return;
+                }
+            }
+            why.Append(rig.T.name + " its force axis (" + fail + ")");
         }
 
-        private static readonly List<string> pastLimit = new List<string>();   // the poses past their sail's limit, for the report
+        private static readonly List<string> pastLimit = new List<string>();   // the trim angles past their sail's range, for the report
         // A plan's lantern places on the masts its parts switched on (the game's own masts, BoatRefs.masts: the ones standing, not
         // the stays, bowsprits or topmasts; each axis from the mast's transform, its up kept where it leans under 45 degrees, else
         // upright), by Rules.LanternsOnMasts; the report names each mast and its lantern.
@@ -2547,13 +2718,16 @@ namespace EconomyOverhaul
             // every hull as the game builds it (the Junk with its cabin again since the user's word of 2026-10-19: "i want to add the
             // junk's house cabin back so it looks like default hull"; from 2026-10-18 it was built "(no cabin)")
             string build = plan ?? "stock";
-            // sails: the rest pose as installed (furled in port), the two set poses (the wind over the port side: out to
-            // starboard; over the starboard side: out to port)
+            // sails: the rest pose as installed (furled in port) and what the self-trim needs to pose each at any angle (Rig), its
+            // face (ReadFace) and its place in the goosewing order (from aft, the jibs the foremost)
             Vector3 fwd = copy.transform.forward, right = copy.transform.right; fwd.y = 0; right.y = 0; fwd.Normalize(); right.Normalize();
+            var faces = new System.Text.StringBuilder();
             foreach (var d in sails)
             {
                 var st = FindIndex(copy.transform, d.Path); if (!st) continue;
-                t.Sails.Add(new SailRig { T = st, Rest = st.localRotation, ToStarboard = Pose(st, d, fwd, right, right), ToPort = Pose(st, d, fwd, right, -right) });
+                var rig = Rig(st, d, fwd, right); t.Sails.Add(rig);
+                if (faces.Length > 0) faces.Append(", ");
+                ReadFace(rig, faces);
                 if (d.Furled && d.Unfurled && d.ClothPath != null)
                 {
                     var cloth = FindIndex(copy.transform, d.ClothPath); var r = cloth ? cloth.GetComponent<Renderer>() : null;
@@ -2581,6 +2755,17 @@ namespace EconomyOverhaul
             var playerHullMesh = hullForPlayer ? hullForPlayer.sharedMesh : null;
             int frozenRopes = DropClothRopes(copy);
             var notDrawn = ReefAndAnchorRopes(copy);   // read while the game's rope controllers are still on it
+            // its flags as the game drives them (FlagRig), read before Strip takes their WindClothSimple off; none under a sail (its
+            // cloth is the sail's own WindCloth's)
+            {
+                var sailRoots = copy.GetComponentsInChildren<Sail>(true).Select(s => s.transform).ToArray();
+                foreach (var w in copy.GetComponentsInChildren<WindClothSimple>(true))
+                {
+                    if (!w.GetComponent<Cloth>() || sailRoots.Any(s => w.transform.IsChildOf(s))) continue;
+                    int sail = w.sail ? t.Sails.FindIndex(s => s.T == w.sail.transform) : -1;
+                    t.Flags.Add(new FlagRig { T = w.transform, Mult = w.staticMultiplier, Drive = w.shipRigidbody ? 0 : sail >= 0 ? 1 : 2, Sail = sail });
+                }
+            }
             int removed = Strip(copy);
             int dropped = DropParts(copy);
             int ropeLines = TrimRopes(copy, notDrawn, out int ropesOff, out int reefAnchor);
@@ -2619,6 +2804,12 @@ namespace EconomyOverhaul
             // each sail's place in the template as it is now (dropping parts changes the children's order numbers)
             t.Sails.RemoveAll(s => !s.T);
             foreach (var s in t.Sails) s.Path = IndexPath(s.T, copy.transform);
+            t.Flags.RemoveAll(f => !f.T);
+            foreach (var f in t.Flags) f.Path = IndexPath(f.T, copy.transform);
+            var trimmed = t.Sails.Where(s => s.Kind == 1 || s.Kind == 2).OrderBy(s => s.Kind).ThenBy(s => copy.transform.InverseTransformPoint(s.T.position).z).ToList();
+            for (int i = 0; i < trimmed.Count; i++) trimmed[i].Order = i;
+            string trim = string.Join(", ", t.Sails.Select(s => s.T.name + " " + (s.Kind == 1 ? (s.Yard ? "fore-and-aft (junk square)" : "fore-and-aft") : s.Kind == 2 ? "jib" : s.Kind == 3 ? "square" : "none") +
+                                                               (s.Order >= 0 ? " " + s.Order + ", in to " + s.Closest.ToString("F0") : "")).ToArray());
             foreach (var c in copy.GetComponentsInChildren<Collider>(true)) if (c.CompareTag("Boat")) c.tag = "Untagged";   // question 16: no Boat tag
             // not interpolated: the drawn place is set every frame (VisibleTraders.Place; vt-3: an interpolated body slid up to 135 m
             // during a world shift); the game's continuous modes are not for kinematic bodies (Unity warns once a body, and per copy)
@@ -2654,7 +2845,9 @@ namespace EconomyOverhaul
                        "; " + materials + " materials its own, " + ropes + " mooring parts and " + unbound + " meshes bound outside it taken off, ropes drawn " + ropeLines +
                        " (" + reefAnchor + " reef and anchor ropes and " + ropesOff + " not drawn on it taken off, " + frozenRopes + " cloth ropes as captured taken off), purchase paper " + (paperOff ? "taken off" : "none") +
                        ", player collider " + (forPlayer ? "yes" : "none") + ", lantern " + lanternKind + lanternWhy + "; drawn outside the hull: " + Outside(copy, hull) +
-                       "; posed past the limit: " + (pastLimit.Count > 0 ? string.Join(", ", pastLimit.ToArray()) : "none") + (plan != null ? "; parts unlike the stock rig: " + (partsDiffer.Length > 0 ? partsDiffer : "none") : "");
+                       "; sails trimmed (kind, goosewing order from aft, sheeted in): " + trim + "; their faces: " + faces +
+                       "; trimmed past the range: " + (pastLimit.Count > 0 ? string.Join(", ", pastLimit.ToArray()) : "none") +
+                       "; flags driven: " + (t.Flags.Count > 0 ? string.Join(", ", t.Flags.Select(f => f.T.name + " " + (f.Drive == 0 ? "its apparent wind" : f.Drive == 1 ? "sail " + f.Sail : "the wind") + " x" + f.Mult.ToString("F2")).ToArray()) : "none") + (plan != null ? "; parts unlike the stock rig: " + (partsDiffer.Length > 0 ? partsDiffer : "none") : "");
             return t;
         }
 
@@ -3199,6 +3392,9 @@ namespace EconomyOverhaul
             c.Ropes = go.GetComponentsInChildren<RopeEffect>(true);
             c.SailT = t.Sails.Select(s => FindIndex(go.transform, s.Path)).ToArray();
             c.Sails = c.SailT.Select(s => s ? s.GetComponent<Sail>() : null).ToArray();
+            c.SailCloths = c.SailT.Select(s => s ? s.GetComponentInChildren<Cloth>(true) : null).ToArray();
+            c.SailClothLooks = c.SailCloths.Select(k => k ? k.GetComponent<Renderer>() : null).ToArray();
+            c.FlagCloths = t.Flags.Select(f => { var x = FindIndex(go.transform, f.Path); return x ? x.GetComponent<Cloth>() : null; }).ToArray();
             var helm = go.transform.Find("helmsman");
             if (helm && helmParts.Length > 0) { c.HelmParts = helmParts.Select(p => { var x = helm.Find(p); return x ? x.gameObject : null; }).ToArray(); c.HelmRenderers = c.HelmParts.Select(g => g ? g.GetComponent<Renderer>() : null).ToArray(); }
             if (c.Body) bodies.Add(c.Body);
@@ -3410,14 +3606,22 @@ namespace EconomyOverhaul
                 cl.worldVelocityScale = (float)Rules.ClothWorldScale(c.ClothVelocity[i], k); cl.worldAccelerationScale = (float)Rules.ClothWorldScale(c.ClothAcceleration[i], k);
             }
         }
+        // The sails eased toward their trim (the self-trim, TRADER_TRIM_DRAFT.md): awa the apparent wind's angle off the bow; side 0
+        // every sail at rest (in port), else each sail on its own side (sides, by the template's order; 0 or none: `side`), a
+        // fore-and-aft sail or jib out by Rules.TrimOut (80 in the goosewing band), a square yard braced by Rules.SquareBrace.
+        // holdUnseen: a sail whose cloth is on but drawn by no camera stays as it is, and turns once its cloth is seen again (the
+        // user, 2026-10-23: "Hold trim while unseen"): Unity simulates a cloth only while it is seen, and a sail turned meanwhile
+        // came back with its cloth stretched (probe vttrimunseen, run vttu-1: TRADER_TRIM_DRAFT.md, "Sails turned while out of view").
         // Returns the largest turn left to any sail before this step, in degrees.
-        internal static float PoseSails(TraderCopy c, int side, float blend)
+        internal static float PoseSails(TraderCopy c, int side, float awa, float blend, int[] sides = null, bool holdUnseen = false)
         {
             var rigs = c.Template.Sails; float left = 0;
             for (int i = 0; i < rigs.Count && i < c.SailT.Length; i++)
             {
                 var t = c.SailT[i]; if (!t) continue;
-                var target = side > 0 ? rigs[i].ToStarboard : side < 0 ? rigs[i].ToPort : rigs[i].Rest;
+                if (holdUnseen && c.SailCloths != null && i < c.SailCloths.Length) { var k = c.SailCloths[i]; var r = c.SailClothLooks[i]; if (k && k.enabled && r && r.enabled && !r.isVisible) continue; }
+                var rig = rigs[i]; int s = side == 0 ? 0 : sides != null && i < sides.Length && sides[i] != 0 ? sides[i] : side;
+                var target = s == 0 ? rig.Rest : rig.At(s, (float)(rig.Kind == 3 ? Rules.SquareBrace(awa) : Rules.TrimOut(awa, rig.Closest)));
                 left = Mathf.Max(left, Quaternion.Angle(t.localRotation, target));
                 t.localRotation = blend >= 1 ? target : Quaternion.Slerp(t.localRotation, target, blend);
             }
@@ -3452,6 +3656,14 @@ namespace EconomyOverhaul
             internal float FurledSince = -1; internal bool SailsParked;   // its reef animators culled while furled in port (TraderHulls.ParkSails)
             internal int ShowStep;
             internal Vector3 TargetReal; internal Quaternion TargetRot;
+            // Its sails' self-trim (TRADER_TRIM_DRAFT.md; nothing of it saved, set afresh when it is drawn): the apparent wind (its
+            // wind less its way through the water, world) and its angle off the bow (+ over the port side); Side (above) the side the
+            // sails go to with the wind's buffer (Rules.SailSideHeld, the centreline), SideFor its timer; each sail's own side and
+            // timer (by the template's order); the goosewing split, its timer and the side its aftmost sail keeps; the square sails'
+            // set state at sea, its timer, their own unroll; the phase the trim last saw (the approach point passed).
+            internal Vector3 Apparent; internal float Awa, SideFor; internal int[] SailSides; internal float[] SailSideFor;
+            internal bool Goose; internal float GooseFor; internal int GooseSide;
+            internal bool SquareSet; internal float SquareFor, SquareUnroll; internal Phase TrimPhase;
             // Meeting the player's ships (TRADER_COLLISION_DRAFT.md; nothing of it saved: a load puts each trader as before):
             // Way: its harbour leg's way, 1 the first, 2 the second (part 1). Back: going back along its leg (U falling) to BackTo,
             // Astern: stern first while the water is under 40 m wide (part 4c; it turns round in wider water). HoldAt: waiting on its
@@ -3891,8 +4103,7 @@ namespace EconomyOverhaul
             if (b.destination < 0) v.Settled = true;
             ReadStorms(); TraderHulls.SetLit(copy, Lit(v.Pos));
             SetDeck(v);
-            foreach (var s in copy.Sails) if (s) s.currentUnroll = v.Unroll;
-            TraderHulls.PoseSails(copy, v.Unroll > .5f ? SailSide(v) : 0, 1);
+            Trim(v, v.Unroll > .5f, 0f, 1f, true);
             // at its place now, before its first show step tells its cloth to forget the move (it ran while the copy still lay where
             // it was parked, 2 km down: the deep review of 2026-10-19)
             Place(v);
@@ -4553,20 +4764,96 @@ namespace EconomyOverhaul
                 v.FurledSince = -1;
                 if (v.SailsParked) { TraderHulls.UnparkSails(v.Copy); v.SailsParked = false; }
             }
-            int side = v.Unroll > .02f && moving ? SailSide(v) : v.Unroll > .5f ? v.Side : 0;
-            v.Side = side;
-            TraderHulls.PoseSails(v.Copy, side, 1f - Mathf.Exp(-dt / .8f));
             float clock = fdt > 0 ? dt / fdt : 0f;   // the traders' seconds a real second
-            var through = v.Velocity * (float)Rules.SailingSpeed(1, clock);
-            var wind = new Vector3(WindBlows().x, 0, WindBlows().y) * v.Wind - new Vector3(through.x, 0, through.y);
             TraderHulls.ClothClock(v.Copy, clock);
-            foreach (var s in v.Copy.Sails) if (s) { s.currentUnroll = v.Unroll; s.apparentWind = wind; }
+            Trim(v, moving, dt, clock, false);
         }
-        // +1 the wind over the port side (the sails out to starboard), -1 over the starboard side.
-        private static int SailSide(Visual v)
+
+        // The self-trim (TRADER_TRIM_DRAFT.md, "The self-trim design", approved by the user on 2026-10-23; the rules in Rules.TrimOut
+        // and on): each sail set to the apparent wind, its cloth pushed onto the face it is set to. Under way every sail on its own
+        // side (the game's rule with the wind's buffer), split in the goosewing band at sea; the square sails set and furled at sea
+        // by the awa, furled on the harbour legs; furling in port the sides kept, furled the rest pose. The speed is not touched (T6:
+        // "These sail change is just visual"). snap: drawn just now (no buffer, no ease, the square sails at their state at once).
+        private static void Trim(Visual v, bool moving, float dt, float clock, bool snap)
         {
-            var r = Across(DirOf(v.Yaw));
-            return Vector2.Dot(WindBlows(), r) >= 0 ? 1 : -1;
+            var c = v.Copy; var rigs = c.Template.Sails; int n = c.SailT.Length;
+            var through = v.Velocity * (float)Rules.SailingSpeed(1, clock);
+            var blows = WindBlows();
+            var wind = new Vector3(blows.x, 0, blows.y) * v.Wind - new Vector3(through.x, 0, through.y);
+            v.Apparent = wind;
+            // its angle off the bow, + over the port side (the true wind's way while it has no strength: just drawn)
+            Vector2 f = DirOf(v.Yaw), from = wind.sqrMagnitude > .0001f ? new Vector2(-wind.x, -wind.z) : -blows;
+            if (from.sqrMagnitude > 1e-8f) v.Awa = Vector2.Angle(f, from) * (Vector2.Dot(from, Across(f)) <= 0 ? 1f : -1f);
+            float awa = Mathf.Abs(v.Awa); bool atSea = v.Phase == Phase.Sail;
+            if (v.SailSides == null || v.SailSides.Length != n) { v.SailSides = new int[n]; v.SailSideFor = new float[n]; }
+            int pose;
+            if (moving && (v.Unroll > .02f || snap))
+            {
+                if (v.Side == 0 || snap) { v.Side = Rules.Leeward(v.Awa); v.SideFor = 0; }
+                v.SideFor = Rules.SidePast(v.Side, v.Awa, 0) ? v.SideFor + dt : 0;
+                int was = v.Side; v.Side = Rules.SailSideHeld(v.Side, v.Awa, 0, v.SideFor); if (v.Side != was) v.SideFor = 0;
+                // goosewing at sea only, with its buffer; ended, every sail to leeward at once (at the approach point too)
+                v.GooseFor = Rules.GooseTurns(v.Goose, awa) ? v.GooseFor + dt : 0;
+                bool goose = !snap && Rules.GooseHeld(v.Goose, awa, v.GooseFor, atSea);
+                if (goose != v.Goose)
+                {
+                    v.Goose = goose; v.GooseFor = 0;
+                    if (goose) { v.GooseSide = v.Side; for (int i = 0; i < n && i < rigs.Count; i++) if (rigs[i].Order == 0 && v.SailSides[i] != 0) v.GooseSide = v.SailSides[i]; }
+                    else { v.Side = Rules.Leeward(v.Awa); v.SideFor = 0; for (int i = 0; i < n; i++) { v.SailSides[i] = v.Side; v.SailSideFor[i] = 0; } }
+                }
+                for (int i = 0; i < n && i < rigs.Count; i++)
+                {
+                    var rig = rigs[i];
+                    if (v.Goose && rig.Order >= 0) { v.SailSides[i] = Rules.GooseSide(rig.Order, v.GooseSide); v.SailSideFor[i] = 0; continue; }
+                    if (v.SailSides[i] == 0 || snap) { v.SailSides[i] = Rules.Leeward(v.Awa); v.SailSideFor[i] = 0; }
+                    double line = rig.Kind == 1 || rig.Kind == 2 ? rig.Closest : 0;
+                    v.SailSideFor[i] = Rules.SidePast(v.SailSides[i], v.Awa, line) ? v.SailSideFor[i] + dt : 0;
+                    int s0 = v.SailSides[i]; v.SailSides[i] = Rules.SailSideHeld(s0, v.Awa, line, v.SailSideFor[i]); if (v.SailSides[i] != s0) v.SailSideFor[i] = 0;
+                }
+                pose = v.Side;
+            }
+            else if (v.Unroll > .5f && v.Side != 0) pose = v.Side;   // furling in port: the sides kept
+            else
+            {
+                pose = 0; v.Side = 0; v.Goose = false; v.GooseFor = 0;
+                for (int i = 0; i < n; i++) { v.SailSides[i] = 0; v.SailSideFor[i] = 0; }
+            }
+            // the square sails: at sea set from awa 36 and furled under 33 (7 s held); leaving, set at the approach point at once from
+            // 36; off the sea furled
+            if (snap || (atSea && v.TrimPhase != Phase.Sail)) { v.SquareSet = atSea && Rules.SquareAtApproach(awa); v.SquareFor = 0; }
+            else
+            {
+                v.SquareFor = Rules.SquareTurns(v.SquareSet, awa) ? v.SquareFor + dt : 0;
+                bool set = Rules.SquareSet(v.SquareSet, awa, v.SquareFor, atSea); if (set != v.SquareSet) { v.SquareSet = set; v.SquareFor = 0; }
+            }
+            v.TrimPhase = v.Phase;
+            v.SquareUnroll = snap ? (v.SquareSet ? 1f : 0f) : Mathf.MoveTowards(v.SquareUnroll, v.SquareSet ? 1f : 0f, (float)Rules.FurlRate * dt);
+            TraderHulls.PoseSails(c, pose, awa, snap ? 1f : 1f - Mathf.Exp(-dt / .8f), v.SailSides, !snap);
+            // each cloth pushed onto the face its sail is set to, toward its own side (a square sail's toward the bow), sized as the
+            // part of the game's push that fills a sail the wind meets at that angle (Rules.PushShare); at rest the wind as it is
+            var hull = c.Go.transform; Vector3 hullFwd = hull.forward, hullRight = hull.right;
+            float strength = wind.magnitude; var blow = strength > 1e-4f ? wind / strength : Vector3.zero;
+            for (int i = 0; i < c.Sails.Length && i < rigs.Count; i++)
+            {
+                var s = c.Sails[i]; if (!s) continue;
+                var rig = rigs[i];
+                s.currentUnroll = rig.Kind == 3 ? Mathf.Min(v.Unroll, v.SquareUnroll) : v.Unroll;
+                int side = pose == 0 ? 0 : v.SailSides[i] != 0 ? v.SailSides[i] : pose;
+                if (side == 0 || strength <= 1e-4f || !c.SailT[i]) { s.apparentWind = wind; continue; }
+                var face = c.SailT[i].rotation * rig.Face;
+                if (Vector3.Dot(face, rig.Kind == 3 ? hullFwd : hullRight * side) < 0) face = -face;
+                float attack = Mathf.Asin(Mathf.Clamp(Vector3.Dot(blow, face), -1f, 1f)) * Mathf.Rad2Deg;
+                s.apparentWind = face * (strength * (float)Rules.PushShare(attack));
+            }
+            // its flags as the game's WindClothSimple drives them, by the trader's own wind: its apparent wind (the wind at its place
+            // less its way through the water, as the game takes the wind less the ship's velocity), its sail's push, or the wind
+            var flags = c.Template.Flags; var trueWind = new Vector3(blows.x, 0, blows.y) * v.Wind;
+            for (int i = 0; i < c.FlagCloths.Length && i < flags.Count; i++)
+            {
+                var k = c.FlagCloths[i]; if (!k) continue; var flag = flags[i];
+                var by = flag.Drive == 0 ? wind : flag.Drive == 1 && flag.Sail < c.Sails.Length && c.Sails[flag.Sail] ? c.Sails[flag.Sail].apparentWind : trueWind;
+                k.externalAcceleration = by * flag.Mult;
+            }
         }
 
         // ---- Lanterns: the street lights' hours, or in a storm's rain (the user's feedback on 0.10.4, point 8) ----
