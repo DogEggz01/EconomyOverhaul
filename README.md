@@ -93,7 +93,7 @@
       - Dhow: Topsail gaff sloop.
       - Cog: Caravel.
       - Kakam: Single square longship.
-    - Medium Local trader: Each region 1. Move at 5.5 knots. Stop at port for 5h.
+    - Medium Local trader: Each region 1 (Al'ankh got 2). Move at 5.5 knots. Stop at port for 5h.
       - Sanbuq: Single big lateen
       - Brig: Carrack without jibs and stays
       - Junk: Junk gaff schooner.
@@ -241,7 +241,7 @@
   - Loan principal and interest won't get discount, pay up sucker
 - Liquid cargo (All alcohol and water) also receive water damage, but won't get their price reduce until 100% water damage. When at 100% water damage, liquid cargo lose value.
   - You can still drink 100% water damage alcohol and water, you will be fine.
-- When water level in ship pass 5% of the cargo height, it will count as soaked and start damaging the cargo.
+- When water level in ship pass 15% of the cargo height, it will count as soaked and start damaging the cargo.
   - This means smaller cargo is more easily to get damage, also this means you can avoid this by elevated the cargo.
   - Water level over 5% don't increase damage rate. Soaking damage rate is fixed.
 - After 10% of water damage, your cargo will start having water stain, that's your visual cue that your cargo start decreasing value.
@@ -258,7 +258,8 @@
   - If you are on small ship that don't have many hull structure to provide cover. Put things on top of cargo to cover it also work.
 - The speed that cargo get damage is tied to rain intensity. Inside the storm and at the outskirt of storm will have diffent water damage rate.
 - Water damage from rain and soaked water will stack.
-- Water damage will only count when ship is near you, so you don't need to worry far away cargo on your other ship become wet
+- Water damage will only count when ship is near you, so you don't need to worry far away cargo on your other ship become wet.
+- When cargo is receiving any kind of water damage, it will show blue outline when you look at it.
 ## Fragile Cargo (CAN BE TOGGLE OFF IN CONFIGURATOR)
 <img width="3840" height="2160" alt="20F85B~1" src="https://github.com/user-attachments/assets/880d8be9-2653-4931-a22b-ea287a41f58a" />
 
@@ -330,6 +331,8 @@
 - Under bracing mode, pressing F won't drop the pole, pressing T (throw button) still drop it.
 - If you nailed a pole on another pole, the extra length can be used for push/fend/punt also.
 ## Wood pallet
+<img width="3840" height="2160" alt="2088AB~1" src="https://github.com/user-attachments/assets/9037ba22-7def-4f00-ad57-8f220f9446b4" />
+
 - Sold at Shipyard vendor. This is used to level your cargo so it won't get bilge water damage right away.
 - Price is tied to plank price, which is tied to lumber price.
 - A pallet weight 80 lbs, so there is a trade off if you want to use this.
@@ -376,3 +379,4 @@
 - Tarp Wearing: make tarp wear across 10 days. Default on.
 - Visible Trader: toggle on/off.
 - Uninstall preparation: Click this before you remove this mod mid-save.
+- Blue outline for wet cargo: toggle on/off.
