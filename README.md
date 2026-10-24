@@ -267,13 +267,13 @@
 - Each percent of damage reduce it's value (and rep if it's mission cargo) accordingly. So a 50% damaged cargo is at 50% value and rep reward.
 - Damage cargo cannot be repair, and cargo that reach 0 health will lose all it's value, unlike water damaged cargo.
 - Tools have chance to be spawn as fragile cargo in cargo mission.
-### Wood plank for repairing
+## Wood plank for repairing
 <img width="3840" height="2160" alt="205DBB~1" src="https://github.com/user-attachments/assets/8e809c51-4741-406b-9f1d-6606e0cc2859" />
 
 - Wood plank item is added so you have another way to counter the water damage.
 - You can aquire wood plank in 2 way
   - Unbundle Lumber trade good, which gives you 128 plank.
-  - Buy Wood Plank Bundle from Kicia bay furniture vendor. After unbundle it gives you 8 plank.
+  - Buy Wood Plank Bundle from port with Shipyard. After unbundle it gives you 8 plank. All vendor located near shipyard.
 - To fix the hull, attach the wood plank at any part of the hull, and start hammering it.
 - Each plank need 20s real life time to hammer. If the ship is already caulked with oakum, hammering time reduce by half.
   - A reminder that oakum lose 12% each day, remember to fill it up.
@@ -282,9 +282,18 @@
   - When aquire plank from Wood Plank Bundle, it will be 1.6x the shipyard repair cost.
   - Currently most expansive hull - Jong, need 20 plank to fix 1% damage.
 - Plank fixing fee is calculated with 1x lumber price, so if lumber become more expensive/cheaper, it will change your repairing fee.
+- Plank's price is tied to port's lumber price. So it will be more expansive in GRC, FA and DC.
 - If you remove the plank, it's hammering progress will be reset
 - If the lumber is wet, you will get less plank, depends on how wet it is.
-### Canvas pack for rain shelter
+- You can press H to change plank into placement mode.
+- Under this mode you it will attached one end at where you aimed, scrolling mouse wheel will rotate at the attached point.
+- Under placement mode, you can change size of plank.
+  - Press Q/E to change length, O/L to change width.
+- All wall attachtable item can attach to nailed wood plank, including other plank.
+- If nailed the item on plank, when you pick up theplank it will stay on it.
+- If you didn't nail the item, it will be drop when picked up
+- When there is item nailed on the plank, you cannot change it's size.
+## Canvas pack for rain shelter
 <img width="1536" height="864" alt="image" src="https://github.com/user-attachments/assets/544e796a-4dce-4e3e-b087-f69c2185ec88" />
 
 - Canvas pack now sold at every vendor that also sell oakum
@@ -299,12 +308,12 @@
   - Tarp in Canvas pack won't progress their lifespan, you can keep it forever
 - Tarp you left on other ship will still progress their lifespan, remember to take it down if you want to go sail other ship!
 - You can repair tarp by using another canvas pack. Hold the canvas pack, aim at 1 of the corner and press R.
-### Wood pole
+## Wood pole
 <img width="3840" height="2160" alt="20E978~1" src="https://github.com/user-attachments/assets/76e1bdbb-07ce-415f-9337-56bec8d42296" />
 
-- Sold beside canvas pack, as a 4 poles bundle
+- Sold beside canvas pack, as a 4 poles bundle. Also sold at shipyard vendor beside wood plank.
 - Press Q/E to increase/decrease pole length. It can be attached like lantern hook onto surface.
-- Pole will be attached at where you aim, scrolling mouse wheel will rotate at the attached point.
+- Pole will be attached at where you aim, scrolling mouse wheel will rotate at the attached point. (same like plank)
   - Holding Q while scrolling will rotate left/right instead.
 - After nailed, it can be use to attach tarp (don't have to be attaching, just nailed will do)
 - Wood pole can support tarp after nailed, so you can make tent/bimini like structure
@@ -320,6 +329,16 @@
   - To punt, aim your pole at sea bed and press F like you push the ship.
 - Under bracing mode, pressing F won't drop the pole, pressing T (throw button) still drop it.
 - If you nailed a pole on another pole, the extra length can be used for push/fend/punt also.
+## Wood pallet
+- Sold at Shipyard vendor. This is used to level your cargo so it won't get bilge water damage right away.
+- Price is tied to plank price, which is tied to lumber price.
+- A pallet weight 80 lbs, so there is a trade off if you want to use this.
+- After nailed the wood pallet, you can snap the cargo onto the pallet orderly for easier cargo placement.
+  - If you didn't nail the pallet, you can still drop cargo on it normally.
+- You can put all crate/package on to pallet, aside from huge crate (marble one), barrels, log and lumber.
+- You can only snap crate 1 layer high.
+- After nailed all the snapped crate on pallet, there will be a rope showing up tied the crates with pallet.
+- If you unnail the pallet and pick it up. All the items that is nailed on pallet will be picked up together.
 ## Currency mechanics change
 - Gold lion is now anchored currency. It tied to interal value numbers of items directly. So you can always buy things in same amount of gold lions
 - FX(foreign currency exchange) rate is increase to 5% at rep 0, down 0.5 % per reputation level. Rep 10 will be 0.1% fee.
