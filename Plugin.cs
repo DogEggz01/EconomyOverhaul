@@ -40,7 +40,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "1.1.0";
+        public const string Version = "1.1.1";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -188,7 +188,7 @@ namespace EconomyOverhaul
             foreach (var c in CargoCondition.Active) c.PrepareSave();
             CargoRecords.Prune();
             TradeBook.Collect();
-            State.tarps = Tarps.Records();
+            var tarps = Tarps.Records(); State.tarps = tarps.Where(Tarps.FourSpots).ToList(); State.otherTarps = tarps.Where(t => !Tarps.FourSpots(t)).ToList();
             State.savedHour = CalendarHour;
             StateCodec.Validate(State);
             if (write) GameState.modData[Plugin.Guid] = StateCodec.Encode(State);
@@ -546,6 +546,9 @@ namespace EconomyOverhaul
         public int reportDay;
         // Canvas tarps (after 0.8.5): optional, so a 0.8.5 save without it loads (read back as none).
         [System.Runtime.Serialization.OptionalField] public List<TarpState> tarps = new List<TarpState>();
+        // Tarps of 3 spots or 5 and more (2026-10-26, TARP_SPOTS_DRAFT.md): apart from `tarps`, which an older mod checks for four
+        // spots each (it refuses the whole save on any other); an older mod skips this list.
+        [System.Runtime.Serialization.OptionalField] public List<TarpState> otherTarps = new List<TarpState>();
         // The calendar hour the save was written at (MIDSAVE_DRAFT.md): optional, 0 in older saves (no stale check).
         [System.Runtime.Serialization.OptionalField] public double savedHour;
         // Dynamic demand events (2026-10-16): optional, none in older saves (5 made at the first midnight).
@@ -572,10 +575,18 @@ namespace EconomyOverhaul
         internal const string BinaryPrefix = "EOB7:";
         private static System.Runtime.Serialization.Formatters.Binary.BinaryFormatter Formatter() =>
             new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter { Binder = TypeBinder.Instance };
+        // The buffer made at the last save's size and an eighth more (1 MB at a session's first: the user's saves are about 1 MB),
+        // not grown by doubling from empty: less garbage made in the save's frame, where a collection costs about 30 ms
+        // (SAVE_TRIM_DRAFT.md). The slot is the same text.
+        private static int lastEncoded = 1 << 20;
         internal static string Encode(SaveState state)
         {
             if (state == null || state.version != SaveState.Current) throw new InvalidDataException("Economic state of version " + state?.version + " is not migrated to " + SaveState.Current);
-            using (var stream = new MemoryStream()) { Formatter().Serialize(stream, state); return BinaryPrefix + Convert.ToBase64String(stream.GetBuffer(), 0, (int)stream.Length); }
+            using (var stream = new MemoryStream(lastEncoded + lastEncoded / 8))
+            {
+                Formatter().Serialize(stream, state); lastEncoded = Math.Max(1024, (int)stream.Length);
+                return BinaryPrefix + Convert.ToBase64String(stream.GetBuffer(), 0, (int)stream.Length);
+            }
         }
         // The one entry point for the game's slot: binary from version 7 on, anything else the JSON of a released save (Read). A
         // damaged slot (cut short, a bad character, a class the binder cannot find) throws, and World.Load keeps the save untouched.
@@ -736,6 +747,7 @@ namespace EconomyOverhaul
         private static SaveState Finish(SaveState result)
         {
             if (result != null && result.tarps == null) result.tarps = new List<TarpState>();   // a 0.8.5 save
+            if (result != null && result.otherTarps == null) result.otherTarps = new List<TarpState>();   // a save before 2026-10-26
             // Demand data from a build before the tavern (stage 3) has no heard list: an empty one, not a refused save.
             if (result?.demand != null && result.demand.heard == null) result.demand.heard = new List<int>();
             // A fleet short of the table (Al'Ankh's second medium local of 2026-10-24) gets its new traders before the check.
@@ -773,11 +785,15 @@ namespace EconomyOverhaul
                 s.unrentable != null && s.unrentable.All(i => i > 0) && s.homeLater != null && s.homeLater.All(i => i > 0);
             if (!valid) throw new InvalidDataException("Incomplete or unsupported economic save");
             if (s.fx != null) Fx.Validate(s.fx);
+            // A report is one object shared by many lists (2,838 references to 500 reports, vt-ropes-14): each checked once, its
+            // other references passed (SAVE_TRIM_DRAFT.md). A bad report fails every list holding it, as before.
+            var seen = new HashSet<ReportState>();   // ReportState has no Equals: by reference
+            bool Checked(ReportState r) => r != null && (seen.Contains(r) || Report(r) && seen.Add(r));
             foreach (var market in s.markets)
                 if (market?.lastDeparture != null && (!ValidDeparture(market.lastDeparture) || market.lastDeparture.origin != market.port))
                 { Plugin.Log?.LogWarning("Discarded invalid historical departure report at port " + market.port); market.lastDeparture = null; }
             valid = s.markets.All(m => m != null && PortId(m.port) && Finite(m.bonus) && m.bonus >= 0 && Finite(m.timer) && Finite(m.warehouseTimer) &&
-                m.reports != null && m.reports.All(Report)) && s.markets.Select(m => m.port).Distinct().Count() == s.markets.Count;
+                m.reports != null && m.reports.All(Checked)) && s.markets.Select(m => m.port).Distinct().Count() == s.markets.Count;
             valid &= s.cargo.All(c => c != null && c.id > 0 && c.good >= 1 && c.good <= 64 && c.good != 45 && Finite(c.health) && c.health >= 0 && c.health <= 100 && Finite(c.impact) && c.impact >= 0 && c.impact <= 100 &&
                 Finite(c.fxPressure) && c.fxPressure >= 0 && (c.fxPressure == 0 || c.fxCurrency >= 0 && c.fxCurrency < 3) &&
                 (c.stainHistory == null || c.stainHistory.Length == CargoStainHistory.Bytes) &&
@@ -786,19 +802,19 @@ namespace EconomyOverhaul
             valid &= s.fleet.Count == FleetDefinitions.Total && s.fleet.All(b => b != null && PortId(b.origin) && (b.destination == -1 || PortId(b.destination)) &&
                 b.units > 0 && b.units <= (b.group == "chronos" ? 150 : 120) && b.weight > 0 && b.speed > 0 && Finite(b.speed) && Finite(b.wait) && Finite(b.remaining) && Finite(b.trip) &&
                 b.network != null && b.network.Length > 0 && b.network.All(PortId) && b.goods != null && b.goods.Length <= b.units &&
-                b.goods.All(g => g > 0 && g < 65 && g != 45 && g != 51) && b.reports != null && b.reports.All(Report) && b.lane >= 0 && b.lane < 16 &&
+                b.goods.All(g => g > 0 && g < 65 && g != 45 && g != 51) && b.reports != null && b.reports.All(Checked) && b.lane >= 0 && b.lane < 16 &&
                 FleetDefinitions.KnownGroup(b.group)) && s.fleet.Select(b => b.id).Distinct().Count() == s.fleet.Count;
             valid &= s.missions.All(m => m != null && PortId(m.origin) && PortId(m.destination) && m.creditedDeliveries >= 0 &&
                 m.category >= (int)MissionCategory.None && m.category <= (int)MissionCategory.Luxury && m.modifiers >= 0 && m.modifiers <= 15);
             // 0.7.0 daily reports and trade book.
             bool Entry(BookEntry e) => e != null && PortId(e.port) && Finite(e.seen) && (FleetDefinitions.KnownGroup(e.group) || e.group == "small2" || e.group == "small3" || e.group == "heavy2");
-            valid &= s.markets.All(m => (m.incoming == null || m.incoming.All(Report)) &&
+            valid &= s.markets.All(m => (m.incoming == null || m.incoming.All(Checked)) &&
                 (m.book == null || m.book.All(Entry)) && (m.bookIncoming == null || m.bookIncoming.All(Entry)) &&
                 (m.released == null || m.released.Count <= 128));
             valid &= s.bookSnapshots == null || s.bookSnapshots.All(x => x != null && PortId(x.port) && Finite(x.seen) && x.buy != null && x.buy.Length >= 65 && x.sell != null && x.sell.Length >= 65) &&
                 s.bookSnapshots.Select(x => x.id).Distinct().Count() == s.bookSnapshots.Count && s.bookSnapshots.All(x => x.id > 0 && x.id <= s.bookNextId);
             valid &= s.fleet.All(b => b.book == null || b.book.Count <= 128) && (s.playerBook == null || s.playerBook.Count <= 128);
-            valid &= s.tarps != null && s.tarps.All(Tarps.ValidRecord);
+            valid &= s.tarps != null && s.tarps.All(t => Tarps.ValidRecord(t) && Tarps.FourSpots(t)) && (s.otherTarps == null || s.otherTarps.All(Tarps.ValidRecord));
             valid &= s.demand == null || s.demand.events != null && s.demand.pickedGoods != null && s.demand.pickedPorts != null && s.demand.heard != null &&
                 s.demand.events.All(e => e != null && PortId(e.demand) && PortId(e.producer) && Rules.DemandGood(e.good) && Finite(e.amount) && Finite(e.added));
             if (!valid) throw new InvalidDataException("Economic save records failed integrity checks");

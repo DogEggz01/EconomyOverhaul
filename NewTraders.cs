@@ -1217,7 +1217,13 @@ namespace EconomyOverhaul
         // leeward until the wind meets it at 16 degrees (full force by the game's rule, Sail.UpdateWindForceOnSail), 0 (squared) to
         // 70; the wind meets it at the awa + the brace - 90.
         public const double BraceMost = 70, SquareSetAt = 36, SquareFurlUnder = 33;
-        public static double SquareBrace(double awa) => Clamp(106 - Math.Abs(awa), 0, BraceMost);
+        // A trader whose every sail is a square sail (today the plan small-emerald, a Kakam with one square sail; the user,
+        // 2026-10-26: "keep the square set, can be braced at 80 degree, never furled."): braced to 80 at most, set at sea and on the
+        // harbour legs whatever the awa, and in port too ("no kakam square trader shouldn't furl in port also": VisibleTraders.Sails);
+        // else it sailed upwind with bare masts.
+        public const double AllSquareBraceMost = 80;
+        public static double SquareBraceMost(bool allSquare) => allSquare ? AllSquareBraceMost : BraceMost;
+        public static double SquareBrace(double awa, bool allSquare = false) => Clamp(106 - Math.Abs(awa), 0, SquareBraceMost(allSquare));
         public static double SquareAttack(double awa, double brace) => Math.Abs(awa) + brace - 90;
         // At sea a square sail sets once the awa has stayed 36 or more for 7 s and furls once it has stayed under 33 for 7 s (T5
         // "held longer"; "hold time change to 7 sec."); off the sea it lies furled (the harbour legs: reading 2, "in harbour leg just
@@ -1226,6 +1232,10 @@ namespace EconomyOverhaul
         public static bool SquareTurns(bool set, double awa) => set ? Math.Abs(awa) < SquareFurlUnder : Math.Abs(awa) >= SquareSetAt;
         public static bool SquareSet(bool set, double awa, double heldFor, bool atSea) => atSea && (SquareTurns(set, awa) && heldFor >= TrimHold ? !set : set);
         public static bool SquareAtApproach(double awa) => Math.Abs(awa) >= SquareSetAt;
+        // allSquare: every sail of the trader a square sail (a junk square is a fore-and-aft sail here): never furled, at sea, on the
+        // harbour legs or in port (AllSquareBraceMost)
+        public static bool SquareSet(bool set, double awa, double heldFor, bool atSea, bool allSquare) => allSquare || SquareSet(set, awa, heldFor, atSea);
+        public static bool AllSquare(IEnumerable<int> kinds) => kinds.Any() && kinds.All(k => k == 3);
         // The side a sail lies on (T7 "as vanilla", reading 3, the buffer of reading 4). wind: the apparent wind's angle off the bow,
         // + over the port side (the sails out to starboard: side +1), - over the starboard side; line: the angle the sail lies at
         // sheeted in (0 a fore-and-aft sail, 16 a jib). It goes over once the wind has come 5 degrees or more onto its own side, past
@@ -2293,6 +2303,7 @@ namespace EconomyOverhaul
         internal GameObject Root;
         internal int Lanterns;   // the lanterns hung on it (the hull's places, a plan's on its own masts: Rules.LanternsOnMasts)
         internal readonly List<SailRig> Sails = new List<SailRig>();
+        internal bool AllSquare;   // every sail a square sail (kind 3): set always, at sea, on the harbour legs and in port, braced to 80 (Rules.AllSquare)
         internal bool[] RendererOn;
         internal string Report;
         internal List<int[]> MergedPaths = new List<int[]>();   // the parts drawn as the merged meshes (TraderHulls.MergeStatic)
@@ -2588,7 +2599,7 @@ namespace EconomyOverhaul
         // hinge from the centreline (the turn that lays its force axis, its up, most across the hull: vt_measure run 2's scan), a jib
         // about its hinge from its rest, a square yard about its local z from squared (the game's own SquareAngleMaster turn); the side
         // a turn puts it to leeward by the game's force rule with the wind abeam (as vt_dress).
-        private static SailRig Rig(Transform t, SailData d, Vector3 fwd, Vector3 right)
+        private static SailRig Rig(Transform t, SailData d, Vector3 fwd, Vector3 right, bool allSquare)
         {
             var keep = t.localRotation;
             var rig = new SailRig { T = t, Rest = keep, Base = keep };
@@ -2630,10 +2641,10 @@ namespace EconomyOverhaul
                 if (drive > bestDrive) { bestDrive = drive; rig.Star = s; }
             }
             t.localRotation = keep;
-            // the most each way it is posed out (80 a fore-and-aft sail or jib, a yard 70: the user, T1 (b) and "brace up to 70"),
-            // even past its range (the user, 2026-10-19: "Go to the angle anyway"): where the range is smaller the sail is drawn
-            // through what it would meet (listed in the report)
-            float most = (float)(rig.Kind == 3 ? Rules.BraceMost : Rules.TrimMost);
+            // the most each way it is posed out (80 a fore-and-aft sail or jib, a yard 70: the user, T1 (b) and "brace up to 70"; a
+            // yard 80 on a trader with square sails only, Rules.AllSquareBraceMost), even past its range (the user, 2026-10-19: "Go
+            // to the angle anyway"): where the range is smaller the sail is drawn through what it would meet (listed in the report)
+            float most = (float)(rig.Kind == 3 ? Rules.SquareBraceMost(allSquare) : Rules.TrimMost);
             foreach (int side in new[] { 1, -1 })
             {
                 float a = rig.Zero + rig.Star * side * most;
@@ -2722,10 +2733,12 @@ namespace EconomyOverhaul
             // face (ReadFace) and its place in the goosewing order (from aft, the jibs the foremost)
             Vector3 fwd = copy.transform.forward, right = copy.transform.right; fwd.y = 0; right.y = 0; fwd.Normalize(); right.Normalize();
             var faces = new System.Text.StringBuilder();
+            // square sails only (kind 3 is a square that is not a junk square: Rig)
+            bool allSquare = Rules.AllSquare(sails.Select(d => d.Kind == "square" && !d.Junk ? 3 : 0));
             foreach (var d in sails)
             {
                 var st = FindIndex(copy.transform, d.Path); if (!st) continue;
-                var rig = Rig(st, d, fwd, right); t.Sails.Add(rig);
+                var rig = Rig(st, d, fwd, right, allSquare); t.Sails.Add(rig);
                 if (faces.Length > 0) faces.Append(", ");
                 ReadFace(rig, faces);
                 if (d.Furled && d.Unfurled && d.ClothPath != null)
@@ -2803,6 +2816,7 @@ namespace EconomyOverhaul
             }
             // each sail's place in the template as it is now (dropping parts changes the children's order numbers)
             t.Sails.RemoveAll(s => !s.T);
+            t.AllSquare = Rules.AllSquare(t.Sails.Select(s => s.Kind));
             foreach (var s in t.Sails) s.Path = IndexPath(s.T, copy.transform);
             t.Flags.RemoveAll(f => !f.T);
             foreach (var f in t.Flags) f.Path = IndexPath(f.T, copy.transform);
@@ -2845,7 +2859,7 @@ namespace EconomyOverhaul
                        "; " + materials + " materials its own, " + ropes + " mooring parts and " + unbound + " meshes bound outside it taken off, ropes drawn " + ropeLines +
                        " (" + reefAnchor + " reef and anchor ropes and " + ropesOff + " not drawn on it taken off, " + frozenRopes + " cloth ropes as captured taken off), purchase paper " + (paperOff ? "taken off" : "none") +
                        ", player collider " + (forPlayer ? "yes" : "none") + ", lantern " + lanternKind + lanternWhy + "; drawn outside the hull: " + Outside(copy, hull) +
-                       "; sails trimmed (kind, goosewing order from aft, sheeted in): " + trim + "; their faces: " + faces +
+                       "; sails trimmed (kind, goosewing order from aft, sheeted in): " + trim + (t.AllSquare ? " (square sails only: never furled, in port too, braced to " + Rules.AllSquareBraceMost.ToString("F0") + ")" : "") + "; their faces: " + faces +
                        "; trimmed past the range: " + (pastLimit.Count > 0 ? string.Join(", ", pastLimit.ToArray()) : "none") +
                        "; flags driven: " + (t.Flags.Count > 0 ? string.Join(", ", t.Flags.Select(f => f.T.name + " " + (f.Drive == 0 ? "its apparent wind" : f.Drive == 1 ? "sail " + f.Sail : "the wind") + " x" + f.Mult.ToString("F2")).ToArray()) : "none") + (plan != null ? "; parts unlike the stock rig: " + (partsDiffer.Length > 0 ? partsDiffer : "none") : "");
             return t;
@@ -3621,7 +3635,7 @@ namespace EconomyOverhaul
                 var t = c.SailT[i]; if (!t) continue;
                 if (holdUnseen && c.SailCloths != null && i < c.SailCloths.Length) { var k = c.SailCloths[i]; var r = c.SailClothLooks[i]; if (k && k.enabled && r && r.enabled && !r.isVisible) continue; }
                 var rig = rigs[i]; int s = side == 0 ? 0 : sides != null && i < sides.Length && sides[i] != 0 ? sides[i] : side;
-                var target = s == 0 ? rig.Rest : rig.At(s, (float)(rig.Kind == 3 ? Rules.SquareBrace(awa) : Rules.TrimOut(awa, rig.Closest)));
+                var target = s == 0 ? rig.Rest : rig.At(s, (float)(rig.Kind == 3 ? Rules.SquareBrace(awa, c.Template.AllSquare) : Rules.TrimOut(awa, rig.Closest)));
                 left = Mathf.Max(left, Quaternion.Angle(t.localRotation, target));
                 t.localRotation = blend >= 1 ? target : Quaternion.Slerp(t.localRotation, target, blend);
             }
@@ -4078,7 +4092,7 @@ namespace EconomyOverhaul
             else
             {
                 var h = LaneMap.HarbourOf(b.origin); if (h == null) return;
-                v.Port = b.origin; v.Unroll = 0;
+                v.Port = b.origin; v.Unroll = copy.Template.AllSquare ? 1 : 0;   // square sails only: set in port too
                 // first seen in port it is already in its place: the berth it was let go at in this stay while that is free (Q5),
                 // else a berth while its island is loaded (a load, the player close by), else the anchorage (the draft's question 11
                 // and first step: the berth only where the island is loaded)
@@ -4750,8 +4764,10 @@ namespace EconomyOverhaul
         // game's own speed (the user's report of 2026-10-20: asleep the sails billowed as in a gale and furled at their own pace).
         private static void Sails(Visual v, float dt, float fdt)
         {
-            // (waiting on its harbour leg for its way to clear it furls them too: TRADER_COLLISION_DRAFT.md, part 1)
-            bool moving = v.Phase == Phase.Sail || (v.Phase == Phase.LegOut || v.Phase == Phase.LegIn) && v.HoldAt < 0;
+            // (waiting on its harbour leg for its way to clear it furls them too: TRADER_COLLISION_DRAFT.md, part 1). A trader with
+            // square sails only keeps them set in port and waiting too (the user, 2026-10-26: "no kakam square trader shouldn't furl in
+            // port also"), braced to the wind as under way.
+            bool moving = v.Copy.Template.AllSquare || v.Phase == Phase.Sail || (v.Phase == Phase.LegOut || v.Phase == Phase.LegIn) && v.HoldAt < 0;
             v.Unroll = Mathf.MoveTowards(v.Unroll, moving ? 1f : 0f, (float)Rules.FurlRate * dt);
             // furled in port its reef animators culled, always animating again as it sets out (TraderHulls.ParkSails)
             if (!moving && v.Unroll < .04f)
@@ -4819,12 +4835,13 @@ namespace EconomyOverhaul
                 for (int i = 0; i < n; i++) { v.SailSides[i] = 0; v.SailSideFor[i] = 0; }
             }
             // the square sails: at sea set from awa 36 and furled under 33 (7 s held); leaving, set at the approach point at once from
-            // 36; off the sea furled
-            if (snap || (atSea && v.TrimPhase != Phase.Sail)) { v.SquareSet = atSea && Rules.SquareAtApproach(awa); v.SquareFor = 0; }
+            // 36; off the sea furled. A trader with square sails only: set always, in port too (its v.Unroll kept at 1: Sails)
+            bool allSquare = c.Template.AllSquare;
+            if (snap || (atSea && v.TrimPhase != Phase.Sail)) { v.SquareSet = allSquare || atSea && Rules.SquareAtApproach(awa); v.SquareFor = 0; }
             else
             {
                 v.SquareFor = Rules.SquareTurns(v.SquareSet, awa) ? v.SquareFor + dt : 0;
-                bool set = Rules.SquareSet(v.SquareSet, awa, v.SquareFor, atSea); if (set != v.SquareSet) { v.SquareSet = set; v.SquareFor = 0; }
+                bool set = Rules.SquareSet(v.SquareSet, awa, v.SquareFor, atSea, allSquare); if (set != v.SquareSet) { v.SquareSet = set; v.SquareFor = 0; }
             }
             v.TrimPhase = v.Phase;
             v.SquareUnroll = snap ? (v.SquareSet ? 1f : 0f) : Mathf.MoveTowards(v.SquareUnroll, v.SquareSet ? 1f : 0f, (float)Rules.FurlRate * dt);

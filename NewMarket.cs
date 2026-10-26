@@ -1761,14 +1761,33 @@ namespace EconomyOverhaul
         // the crate rests on the plane through the highest ground under it (an upper face of the ground points' hull with its
         // centre inside), tilted to that plane, if the tilt is within its shape's limit. Tested in game (-SlopeProbe, 10 s of the
         // game's physics): nothing slid below 30°; tall thin cargo tips first, at atan(thickness / height) (rabbit furs 16°,
-        // lumber 8°). The limit keeps TipMargin under that, and under MaxTilt (3°, see RoughPorts).
+        // lumber 8°). The limit keeps TipMargin under that, and under MaxTilt (30°, see RoughPorts).
         // Only at the ports whose warehouses are rough ground (the user, 2026-10-08): Al'Nilem (1) and Mirage Mountain (32) (Dragon Cliffs tried: it lost capacity). Measured
         // with the game's physics (-WarehouseSurvey, 10 s after a full warehouse): there nothing moved at 3°, a 5 cm dip,
         // stacked only on level crates (40 and 20 standard crates; 29 and 12 before). MaxStack (no limit) is for measuring.
+        // A crate already placed takes one on top when its top is within about 11° of level, at the rough ports as at every other
+        // (the user, 2026-10-26: "this 2 should follow other port, 11 degree"; 0.57° before, which stopped 20 of Al'Nilem's 26 open
+        // tops, tilted 1-3° as they settled: `alnilem-stacks-1`).
         internal static readonly HashSet<int> RoughPorts = new HashSet<int> { 1, 32 };
-        internal static float MaxTilt = 3f, TipMargin = 4f, MaxStack = float.PositiveInfinity, MaxDip = .05f;
+        // Areas with no crate, by port, in the market's frame from its origin (x, z): Al'Nilem's grass behind its two buildings, too
+        // hard to see (the user, 2026-10-26: "for al'nhiem, remove the spawn spot on the grassland hide behind the building, those are
+        // too hard to see"; "Magenta area only": `alnilem-grass-zone-proposal.png`): right of the upper building's back wall
+        // (x 7.75) from the gap between the buildings (z 7.75) back, right of the lower building's (x 9.25) beside it (z 1 to 7.75).
+        // The walls from the walk map's roofs (`alnilem-ground-1`). And the gap's grass by the palm from the yard's planks' edge (x 4.6;
+        // the area from 4.75) to the upper building (z 8.75 on): "there is still 2 crate spawning on grassland, beside tree, remove
+        // those" (`alnilem-hidden-1`; from 5.5 a crate took their place at 5.4, `alnilem-hidden-2`).
+        internal static readonly Dictionary<int, Rect[]> Hidden = new Dictionary<int, Rect[]> {
+            { 1, new[] { Rect.MinMaxRect(7.75f, 7.75f, 1000, 1000), Rect.MinMaxRect(4.75f, 8.75f, 1000, 1000), Rect.MinMaxRect(9.25f, 1f, 1000, 7.75f) } } };
+        internal static bool InHidden(IslandMarket market, Vector3 center)
+        {
+            if (!Hidden.TryGetValue(market.GetPortIndex(), out var areas)) return false;
+            var local = Quaternion.Inverse(Frame(market)) * (center - market.transform.position);
+            return areas.Any(a => a.Contains(new Vector2(local.x, local.z)));
+        }
+        // The rough ports' own limits lifted to 30° and a 1 m dip (the user, 2026-10-26: "remove the hardport placement restriction
+        // also"; 3° and 5 cm before), as in the test the user saw (`mirage-free-1`, `alnilem-free-1`: nothing moved by 60 s).
+        internal static float MaxTilt = 30f, TipMargin = 4f, MaxStack = float.PositiveInfinity, MaxDip = 1f;
         private static float FloorNormal => Mathf.Cos(MaxTilt * Mathf.Deg2Rad);
-        private const float LevelTop = .99995f;   // cos 0.57°
         internal static float TiltLimit(Vector3 size) => Mathf.Min(MaxTilt, Mathf.Atan2(Mathf.Min(size.x, size.z), size.y) * Mathf.Rad2Deg - TipMargin);
         // level: the crate stands on a level floor (the test above); only such a crate takes another on top.
         private static bool Rest(ref Vector3 center, ref Quaternion rotation, Vector3 half, HashSet<Collider> own, bool rough, out bool level)
@@ -1785,7 +1804,9 @@ namespace EconomyOverhaul
                 var hit = Physics.RaycastAll(start, Vector3.down, rise * 2, ~0, QueryTriggerInteraction.Collide).Where(h => !Ignored(h.collider, own)).OrderBy(h => h.distance).Select(h => (RaycastHit?)h).FirstOrDefault();
                 if (!hit.HasValue) return false;   // a hole or an overhang under the crate
                 var c = hit.Value.collider;
-                if (Cargo(c) ? !StableCargo(c) : c.attachedRigidbody != null) return false;
+                // A tilted crate rests only on the ground, never on cargo (the user, 2026-10-26: "a tilted crate may rest only on the
+                // ground, never on cargo"; tilted crates on cargo slid with the limits at 30° and 1 m: `EconomyOverhaul_FAILED.md`).
+                if (Cargo(c) || c.attachedRigidbody != null) return false;
                 points.Add(new Vector3(local.x, hit.Value.point.y, local.z));
             }
             if (points.Count < 3) return false;
@@ -1869,6 +1890,142 @@ namespace EconomyOverhaul
                 height=0;return !float.IsNaN(heights[x,z])&&Surface(point,heights[x,z],out height);
             }
         }
+        // Where a player can walk (the user, 2026-10-26: "i only want the position that player can never reach be removed";
+        // PLACEMENT_REACH_DRAFT.md, R1, R2 "1m both"). Floor points on a 0.5 m grid over the warehouse box, rooms included: every
+        // surface down each column a player stands on (not cargo; within 50° of level, the game's slope limit on land: PlayerClimb's
+        // 25° doubled off a boat). From the floor under the market's origin (the game's own drop point) the walk spreads to each of
+        // the eight neighbours whose floor rises or drops 1 m at most and whose line, 1 m over the floors, crosses nothing solid:
+        // surfaces count from either side, cargo, triggers, moving bodies and the player don't. No player size. Under something
+        // lower than 1 m a point's line runs just under it. Built once per market (the scenery doesn't move), kept in its frame.
+        internal sealed class WalkMap
+        {
+            internal const float Cell = .5f, Line = 1f, MaxRise = 1f;
+            internal static readonly float WalkNormal = Mathf.Cos(50 * Mathf.Deg2Rad);
+            internal readonly List<Vector3> Points = new List<Vector3>();   // floor points, in the market's frame from its origin
+            internal readonly List<float> Heights = new List<float>();      // each point's line over its floor (0: no room over it)
+            internal readonly List<bool> Reached = new List<bool>();
+            internal string Sealed;   // why the walk can't start (null: it does)
+            internal int Start = -1, ReachedCount; internal double BuildMs;
+            private readonly Dictionary<long, List<int>> cells = new Dictionary<long, List<int>>();
+            private static readonly RaycastHit[] hits = new RaycastHit[64];
+            private static long Key(int x, int z) => ((long)x << 32) ^ (uint)z;
+            private static bool Solid(Collider c) => !c.isTrigger && !Cargo(c) && !c.attachedRigidbody && !(c is CharacterController);
+            // The nearest solid surface along a ray (null: none).
+            internal static RaycastHit? First(Vector3 from, Vector3 direction, float distance)
+            {
+                int n = Physics.RaycastNonAlloc(from, direction, hits, distance, ~0, QueryTriggerInteraction.Ignore); RaycastHit? best = null;
+                for (int i = 0; i < n; i++) if (Solid(hits[i].collider) && (!best.HasValue || hits[i].distance < best.Value.distance)) best = hits[i];
+                return best;
+            }
+            internal static bool Clear(Vector3 a, Vector3 b) { var d = b - a; float length = d.magnitude; return length < 1e-4f || !First(a, d / length, length).HasValue; }
+            internal Vector3 World(int i, Vector3 origin, Quaternion frame) => origin + frame * Points[i];
+            private WalkMap(string why) { Sealed = why; }
+            internal static WalkMap Failed(string why) => new WalkMap(why);
+            private void Add(int x, int z, float y)
+            {
+                if (!cells.TryGetValue(Key(x, z), out var list)) cells[Key(x, z)] = list = new List<int>();
+                list.Add(Points.Count); Points.Add(new Vector3(x * Cell, y, z * Cell));
+            }
+            internal WalkMap(IslandMarket market, BoxCollider area)
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                var frame = Frame(market); var inverse = Quaternion.Inverse(frame); var origin = market.transform.position;
+                var min = Vector3.zero; var max = Vector3.zero;   // the box, and the origin with it (the walk starts there)
+                for (int i = 0; i < 8; i++) {
+                    var p = inverse * (area.transform.TransformPoint(area.center + Vector3.Scale(area.size * .5f, Corner(i))) - origin);
+                    min = Vector3.Min(min, p); max = Vector3.Max(max, p);
+                }
+                float top = area.bounds.max.y + .1f, bottom = area.bounds.min.y - 1;
+                bool backfaces = Physics.queriesHitBackfaces;
+                try
+                {
+                    // The floors, front faces only (the way the placement finds floor), every one down the column.
+                    Physics.queriesHitBackfaces = false;
+                    for (int x = Mathf.CeilToInt(min.x / Cell); x <= Mathf.FloorToInt(max.x / Cell); x++)
+                        for (int z = Mathf.CeilToInt(min.z / Cell); z <= Mathf.FloorToInt(max.z / Cell); z++) {
+                            var from = origin + frame * new Vector3(x * Cell, 0, z * Cell); from.y = top;
+                            for (int k = 0; k < 16 && from.y > bottom; k++) {
+                                var hit = First(from, Vector3.down, from.y - bottom); if (!hit.HasValue) break;
+                                if (hit.Value.normal.y >= WalkNormal) Add(x, z, hit.Value.point.y - origin.y);
+                                from.y = hit.Value.point.y - .02f;
+                            }
+                        }
+                    // The start: the floor under the market's origin, as the placement's own seed finds it.
+                    var floor = First(origin + Vector3.up * .1f, Vector3.down, Mathf.Max(4, origin.y - area.bounds.min.y + 1));
+                    if (!floor.HasValue || floor.Value.normal.y < WalkNormal) { Sealed = "no floor under the market's origin"; return; }
+                    float startY = floor.Value.point.y - origin.y;
+                    if (cells.TryGetValue(Key(0, 0), out var here)) foreach (int i in here) if (Mathf.Abs(Points[i].y - startY) < .05f) Start = i;
+                    if (Start < 0) { Start = Points.Count; Add(0, 0, startY); }
+                    Physics.queriesHitBackfaces = true;
+                    for (int i = 0; i < Points.Count; i++) {
+                        var up = First(World(i, origin, frame) + Vector3.up * .02f, Vector3.up, Line + .05f);
+                        float h = up.HasValue ? Mathf.Min(Line, up.Value.distance - .03f) : Line;
+                        Heights.Add(h < .1f ? 0 : h); Reached.Add(false);
+                    }
+                    // A start inside a solid: up and the four level ways all meet a surface's back first.
+                    var eye = World(Start, origin, frame) + Vector3.up * Heights[Start]; int backs = 0;
+                    foreach (var way in new[] { Vector3.up, frame * Vector3.right, frame * Vector3.left, frame * Vector3.forward, frame * Vector3.back }) {
+                        var hit = First(eye, way, 200); if (hit.HasValue && Vector3.Dot(hit.Value.normal, way) > 0) backs++;
+                    }
+                    if (Heights[Start] <= 0 || backs == 5) { Sealed = "the start is sealed inside a solid"; return; }
+                    var queue = new Queue<int>(); Reached[Start] = true; queue.Enqueue(Start); ReachedCount = 1;
+                    while (queue.Count > 0) {
+                        int a = queue.Dequeue(); var pa = Points[a]; int ax = Mathf.RoundToInt(pa.x / Cell), az = Mathf.RoundToInt(pa.z / Cell);
+                        var la = World(a, origin, frame) + Vector3.up * Heights[a];
+                        for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) {
+                            if ((dx == 0 && dz == 0) || !cells.TryGetValue(Key(ax + dx, az + dz), out var list)) continue;
+                            foreach (int b in list)
+                                if (!Reached[b] && Heights[b] > 0 && Mathf.Abs(Points[b].y - pa.y) <= MaxRise && Clear(la, World(b, origin, frame) + Vector3.up * Heights[b]))
+                                { Reached[b] = true; ReachedCount++; queue.Enqueue(b); }
+                        }
+                    }
+                    if (ReachedCount < 2) Sealed = "the walk reaches no neighbour of the start";
+                }
+                finally { Physics.queriesHitBackfaces = backfaces; BuildMs = clock.Elapsed.TotalMilliseconds; }
+            }
+            // A floor point (world) the walk reaches: a reached point beside it (its cell or the eight around) that a step of the
+            // walk's own joins to it.
+            internal bool Steps(Vector3 floor, Vector3 origin, Quaternion frame)
+            {
+                var local = Quaternion.Inverse(frame) * (floor - origin); int x = Mathf.RoundToInt(local.x / Cell), z = Mathf.RoundToInt(local.z / Cell);
+                for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) {
+                    if (!cells.TryGetValue(Key(x + dx, z + dz), out var list)) continue;
+                    foreach (int b in list)
+                        if (Reached[b] && Mathf.Abs(Points[b].y - local.y) <= MaxRise && Clear(floor + Vector3.up * Heights[b], World(b, origin, frame) + Vector3.up * Heights[b])) return true;
+                }
+                return false;
+            }
+        }
+        // Each market's walk map, made when its warehouse is first used in a session. A start the walk can't leave keeps today's
+        // placement at that port (logged).
+        internal static readonly Dictionary<IslandMarket, WalkMap> Walks = new Dictionary<IslandMarket, WalkMap>();
+        internal static WalkMap Walk(IslandMarket market)
+        {
+            if (!Walks.TryGetValue(market, out var walk))
+            {
+                string port = "port " + market.GetPortIndex() + (market.GetPort() ? " " + market.GetPort().GetPortName() : "");
+                try { walk = new WalkMap(market, market.GetWarehouseArea().GetComponent<BoxCollider>()); }
+                catch (Exception e) { walk = WalkMap.Failed("the walk map failed: " + e.Message); }
+                Walks[market] = walk;
+                if (walk.Sealed != null) Plugin.Log?.LogWarning("Warehouse walk map, " + port + ": " + walk.Sealed + "; cargo placed as before at this port");
+                else Plugin.Log?.LogInfo("Warehouse walk map, " + port + ": " + walk.ReachedCount + " of " + walk.Points.Count + " floor points reached from the market's origin, made in " + walk.BuildMs.ToString("F0") + " ms");
+            }
+            return walk.Sealed == null ? walk : null;
+        }
+        // A spot is kept when the first solid surface straight under the crate's centre (cargo aside, faces from either side) is a
+        // floor the walk reaches. So stacks rise as high as before over walkable floor; a spot inside a solid (Fey Valley's cliff
+        // over the paving) or up through a floor or a roof into a sealed space is refused.
+        internal static bool Reachable(IslandMarket market, WalkMap walk, Vector3 center)
+        {
+            bool backfaces = Physics.queriesHitBackfaces; Physics.queriesHitBackfaces = true;
+            try
+            {
+                var floor = WalkMap.First(center, Vector3.down, 100);
+                if (!floor.HasValue || Vector3.Dot(floor.Value.normal, Vector3.down) > 0 || floor.Value.normal.y < WalkMap.WalkNormal) return false;
+                return walk.Steps(floor.Value.point, market.transform.position, Frame(market));
+            }
+            finally { Physics.queriesHitBackfaces = backfaces; }
+        }
         // The placement's upright turn. A market standing upright (every port but Serpent Isle) keeps its own turn exactly;
         // Serpent Isle's market (and its warehouse box) is tipped 90° on its side: its most level axis becomes "forward".
         internal static Quaternion Frame(IslandMarket market)
@@ -1927,12 +2084,13 @@ namespace EconomyOverhaul
         // rough: the rough-ground rules above; partial: place what fits (else only a full order is placed).
         private static int Plan(IslandMarket market, List<Good> goods, Quaternion rotation, bool rough, bool partial)
         {
-            float floorNormal = rough ? FloorNormal : .98f, stackTop = rough ? LevelTop : .98f, maxStack = rough ? MaxStack : float.PositiveInfinity;
+            float floorNormal = rough ? FloorNormal : .98f, stackTop = .98f, maxStack = rough ? MaxStack : float.PositiveInfinity;
             var area = market.GetWarehouseArea().GetComponent<BoxCollider>();
             if (!area) throw new InvalidOperationException("Warehouse placement area unavailable");
             Physics.SyncTransforms();
             var own = new HashSet<Collider>(goods.SelectMany(g => g.GetComponentsInChildren<Collider>()));
             var origin = market.transform.position;
+            var walk = Walk(market);   // null: the walk can't start there, placed as before
             // No warehouse floor under the sea (beside Serpent Isle's docks the box takes in the sea bed).
             float sea = Crest.OceanRenderer.Instance ? Crest.OceanRenderer.Instance.transform.position.y : float.NegativeInfinity;
             var bounds = Footprint(goods[0], rotation); var half = bounds.extents;
@@ -2013,6 +2171,7 @@ namespace EconomyOverhaul
                 var extent = Extent(turn, rotation, bounds.size);
                 if (center.y - extent.y - Gap < sea) continue;
                 if (!Inside(area, center, half + Vector3.one * .005f, turn)) continue;
+                if (InHidden(market, center)) continue;
                 bool fits = true;
                 for (int i = 0; i < positions.Count; i++) {
                     var d = inverse * (center - positions[i]); var e = extent + Extent(turns[i], rotation, bounds.size);
@@ -2026,6 +2185,7 @@ namespace EconomyOverhaul
                     fits = false; break;
                 }
                 if (!fits) continue;
+                if (walk != null && !Reachable(market, walk, center)) continue;
                 positions.Add(center); turns.Add(turn);
                 if (positions.Count == goods.Count) break;
                 // Only a level crate takes another on top before it is placed.

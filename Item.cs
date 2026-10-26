@@ -49,6 +49,10 @@ namespace EconomyOverhaul
         public const float PlankLength0 = .872f, PlankWidth0 = .152f, PlankThickness = .045f, PlankMass0 = 9.375f;
         public const float PlankMinLength = .5f, PlankMaxLength = 4, PlankLengthStep = .1f, PlankWidthStep = .25f;
         public struct PlankShape { public int look, length, width; public bool end; }   // length: its code; width: steps from 1.0x
+        // A plank as a vanilla table (PLANK_TABLE_DRAFT.md, the user, 2026-10-26: T1 only nailed, T2 any angle, T3 wall items still
+        // attach): the game's own `allowPlacingItems` on while it is bought, nailed and in placement mode (by one end), and the hand
+        // holds no wall item (a hook, a pole or a plank aimed at it attaches to it instead).
+        public static bool PlankTable(bool sold, bool nailed, bool placement, bool wallItemHeld) => sold && nailed && placement && !wallItemHeld;
         public static float PlankCode(PlankShape s) =>
             Clamp(s.look, 0, PlankLooks - 1) + PlankLooks * (Clamp(s.length, 0, PlankLengthCodes - 1) + PlankLengthCodes * ((Clamp(s.width, PlankMinWidthSteps, PlankMaxWidthSteps) + PlankWidthCodes) % PlankWidthCodes + PlankWidthCodes * (s.end ? 1 : 0)));
         public static PlankShape PlankDecode(double health)
@@ -472,6 +476,13 @@ namespace EconomyOverhaul
         {
             if (!pointer || !IsPlank(held) || !held.sold || held.nailed || !GameState.playing || GameState.inCursorMenu || !PoleBrace.KeyDown()) return;
             SwitchMode(held);
+        }
+        // Each frame after the pointer's (its next aim reads it): every plank a vanilla table or not (Rules.PlankTable). Only the game's
+        // own flag: its aim, "place item", the held item's look and the drop are the game's, as on its tables and wall shelves.
+        internal static void Tables(GoPointer pointer)
+        {
+            var held = pointer ? pointer.GetHeldItem() as ShipItem : null; bool wall = held && held.wallAttachment;
+            foreach (var plank in Live) if (plank) plank.allowPlacingItems = Rules.PlankTable(plank.sold, plank.nailed, Shape(plank).end, wall);
         }
         // H's two modes as the user names them (2026-10-24, word for word: "add notification when change between mode for plank, placement
         // mode (after press H), and repair mode"): repair mode flat (today's, the hull repair's), placement mode by one end.
@@ -1353,6 +1364,31 @@ namespace EconomyOverhaul
             pole.itemRigidbodyC.ForceRigidbodyToWalkCol(); pole.itemRigidbodyC.attached = true;
         }
 
+        // ---- Attached whatever its own length overlaps (the user, 2026-10-26: "poles and planks will be blocked placing by it's own
+        // length, i want to change to ignore that") ----
+        // The game refuses to let go of a held item whose physics copy reaches 6 cm or more into anything solid not tagged Boat
+        // (PickupableItemCollisionChecker; GoPointer.LateUpdate: only the throw key lets go then) and outlines it red while the
+        // pick-up key is held. It tests where the item is held, not where its ghost shows. A held rod's copy is its whole box, from
+        // the spot ahead back through the player (drawn as the staff, its root mesh hidden; the outline still draws that hidden body:
+        // the user's red shape on Dhow_large), so a long one was refused wherever it reached into her structure. Aimed where its green
+        // ghost shows (the game's wall spot, a pole's or a plank's: inRangeOfWall), it attaches there whatever it overlaps and is not
+        // outlined red; a loose drop keeps the game's test (let go inside a wall, its body would be shoved out). Braced, it is no wall item.
+        private static readonly AccessTools.FieldRef<PickupableItemCollisionChecker, ShipItem> checkerItem = AccessTools.FieldRefAccess<PickupableItemCollisionChecker, ShipItem>("item");
+        internal static bool AttachesAnyway(ShipItem item) => item && item.held && item.sold && (IsPole(item) || WoodPlanks.IsPlank(item)) && PoleBrace.Braced != item && inRangeOfWall(item);
+        // After the game's test of the frame (PickupableItemCollisionChecker.Update): not outlined red. Every item's copy runs it each
+        // frame: only one touching something is looked at.
+        internal static void UnblockedLook(PickupableItemCollisionChecker checker)
+        {
+            if (checker.collisions <= 0) return;
+            var item = checkerItem(checker); if (AttachesAnyway(item)) item.enableRedOutline = false;
+        }
+        // Before the game's drop (GoPointer.LateUpdate, after every Update of the frame: the spot is this frame's): let go.
+        internal static void UnblockedDrop(GoPointer pointer)
+        {
+            var item = pointer ? pointer.GetHeldItem() as ShipItem : null;
+            if (AttachesAnyway(item) && item.colChecker) item.colChecker.allowObstructedDropping = true;
+        }
+
         // Picked up: its length and the keys, or that things locked on it fix its length (the user, 2026-10-13).
         internal static string PickupNotice(ShipItem pole) => "Wood pole " + SizeText(pole) + (PoleCarry.Carries(pole) ? " (things on it: size fixed)" : " (Q/E: length, O/L: diameter)");
         internal static void Keys(GoPointer pointer)
@@ -1901,7 +1937,7 @@ namespace EconomyOverhaul
     // length line.
     // After Deft Hands' roll of the held item (its HeldItemRollPatch): the pole's turn in the hand as drawn (WoodPoles.SeeHeld).
     [HarmonyPatch(typeof(GoPointer), "LateUpdate"), HarmonyAfter("com.keevi.defthands")] internal static class PoleKeysPatch
-    { static void Postfix(GoPointer __instance) { if (!WoodPoles.Registered) return; WoodPoles.Keys(__instance); WoodPoles.SeeHeld(__instance); PoleBrace.HoldTilt(); PoleBrace.Highlight(); PoleText.Update(__instance); } }
+    { static void Postfix(GoPointer __instance) { if (!WoodPoles.Registered) return; WoodPoles.Keys(__instance); WoodPlanks.Tables(__instance); WoodPoles.SeeHeld(__instance); PoleBrace.HoldTilt(); PoleBrace.Highlight(); PoleText.Update(__instance); } }
     // Dropped onto a pole aboard a ship: put on her where it was aimed (WoodPoles.OnPoleDrop), after the game's own drop.
     [HarmonyPatch(typeof(ShipItem), "OnDrop")] internal static class PoleDropPatch
     { static void Postfix(ShipItem __instance) { if (WoodPoles.Registered && __instance.wallAttachment) WoodPoles.OnPoleDrop(__instance); } }
@@ -1923,6 +1959,12 @@ namespace EconomyOverhaul
     }
     [HarmonyPatch(typeof(GameInput), "GetScrollAxis")] internal static class PoleLeanWheelPatch
     { static bool Prefix(ref float __result) { if (!WoodPoles.KeepScroll) return true; __result = 0; return false; } }
+    // A held pole or plank aimed where its green ghost shows attaches whatever its own length overlaps (WoodPoles.AttachesAnyway):
+    // not outlined red after the game's test, and let go by the game's drop.
+    [HarmonyPatch(typeof(PickupableItemCollisionChecker), "Update")] internal static class RodUnblockedLookPatch
+    { static void Postfix(PickupableItemCollisionChecker __instance) => WoodPoles.UnblockedLook(__instance); }   // its touch count first: every item's copy runs it
+    [HarmonyPatch(typeof(GoPointer), "LateUpdate")] internal static class RodUnblockedDropPatch
+    { static void Prefix(GoPointer __instance) { if (WoodPoles.Registered || WoodPlanks.Registered) WoodPoles.UnblockedDrop(__instance); } }
     // Looked at: "wood pole" and its length under it.
     [HarmonyPatch(typeof(ShipItem), "UpdateLookText")] internal static class PoleLookTextPatch
     { static void Postfix(ShipItem __instance) { if (WoodPoles.IsPole(__instance)) __instance.description = WoodPoles.SizeText(__instance); else if (WoodPlanks.IsPlank(__instance) && __instance.lookText == "" && !Rules.PlankPlain(WoodPlanks.Shape(__instance))) __instance.description = WoodPlanks.SizeText(__instance); } }
@@ -3019,9 +3061,10 @@ namespace EconomyOverhaul
             internal Vector3 Position => onShip ? frame.TransformPoint(local) : FloatingOriginManager.instance.RealPosToShiftingPos(local);
             internal Quaternion Turn => onShip ? frame.rotation * rotation : rotation;
         }
-        internal const float Reach = 2.55f, Nearest = .1f, MaxSide = 50, MinApart = .3f;
-        internal const string NotFixed = "Tie it to a fixed part", Mixed = "All four corners on one ship, or all on land",
-            TooLong = "Tarp sides are 50 m at most", TooClose = "Too close to another corner", Cleared = "Tarp corners cleared";
+        internal const float Reach = 2.55f, Nearest = .1f, MaxSide = 50, MinApart = .3f, MinArea = .05f;
+        internal const string NotFixed = "Tie it to a fixed part", Mixed = "All tie spots on one ship, or all on land",
+            TooLong = "Tarp sides are 50 m at most", TooClose = "Too close to another tie spot", Cleared = "Tarp tie spots cleared",
+            TooFew = "At least 3 tie spots", InLine = "Tie spots in a line", ConfirmHint = ": E ties the tarp";
         internal static readonly List<Corner> Pending = new List<Corner>();
         internal static ShipItem PendingPack;
 
@@ -3149,8 +3192,9 @@ namespace EconomyOverhaul
             return a + u * s;
         }
 
-        // R on a held pack: ties the corner the crosshair points at; the fourth completes the tarp's corners. Returns the notice
-        // shown (null when none).
+        // R on a held pack: sets the tie spot the crosshair points at, as many as wanted (the user, 2026-10-26: "Make Tarp tying
+        // spot unlimited (but atleast 3), still press R to assign tied spot, and player press E or F to confirm"; E only since: F lets go of the pack; TARP_SPOTS_DRAFT.md).
+        // Returns the notice shown (null when none).
         internal static string Tie(ShipItem pack, Ray eye, Transform frame, Transform walk)
         {
             if (PendingPack != pack) Cancel(false);
@@ -3159,90 +3203,355 @@ namespace EconomyOverhaul
             if (Pending.Count > 0 && (Pending[0].onShip != corner.onShip || Pending[0].frame != corner.frame)) return Mixed;
             var at = corner.Position;
             if (Pending.Any(c => Vector3.Distance(c.Position, at) < MinApart)) return TooClose;
-            // Two corners further apart than two sides can never share a tarp; the fourth corner checks the four sides themselves.
-            if (Pending.Any(c => Vector3.Distance(c.Position, at) > 2 * MaxSide)) return TooLong;
-            if (Pending.Count == 3 && Sides(Pending.Select(c => c.Position).Concat(new[] { at }).ToArray()).Any(s => s > MaxSide)) return TooLong;
             corner.knot = Knot(corner); Pending.Add(corner); PendingPack = pack;
-            if (Pending.Count < 4) return "Corner " + Pending.Count + " of 4";
-            var four = Pending.ToList(); Pending.Clear(); PendingPack = null;
-            return Make(pack, four);
+            return "Tie spot " + Pending.Count + (Pending.Count >= 3 ? ConfirmHint : "");
         }
-        // The fourth corner makes the tarp and uses the pack up: no item stays hanging. A nailed pole under it too tall to hold it
-        // up is named.
+        // E on the held pack: its waiting spots make the tarp, at least 3, its sides 50 m at most and not all in a line (the
+        // spots stay waiting when refused). Returns the notice shown (null when none).
+        internal static string Confirm(ShipItem pack)
+        {
+            if (!pack || PendingPack != pack || Pending.Count == 0) return null;
+            if (Pending.Count < 3) return TooFew;
+            var at = Pending.Select(c => c.Position).ToArray(); var order = Order(at); var outline = order.Select(i => at[i]).ToArray();
+            if (Sides(outline).Any(s => s > MaxSide)) return TooLong;
+            if (Area(outline) < MinArea) return InLine;
+            var spots = order.Select(i => Pending[i]).ToList(); Pending.Clear(); PendingPack = null;
+            return Make(pack, spots);
+        }
+        // The confirmed spots (in the outline's order) make the tarp and use the pack up: no item stays hanging. A nailed pole
+        // under it too tall to hold it up is named.
         internal static List<Corner> LastMade; internal static Tarp LastTarp;
         private static string Make(ShipItem pack, List<Corner> corners)
         {
             foreach (var c in corners) if (c.knot) UnityEngine.Object.Destroy(c.knot);
             LastMade = corners;
-            var order = Order(corners.Select(c => c.Position).ToArray());
             var parent = corners[0].Land ? FloatingOriginManager.instance.transform : corners[0].frame;
-            var locals = order.Select(i => parent.InverseTransformPoint(corners[i].Position)).ToArray();
-            var turns = order.Select(i => Quaternion.Inverse(parent.rotation) * corners[i].Turn).ToArray();
+            var locals = corners.Select(c => parent.InverseTransformPoint(c.Position)).ToArray();
+            var turns = corners.Select(c => Quaternion.Inverse(parent.rotation) * c.Turn).ToArray();
             LastTarp = Build(parent, !corners[0].Land, locals, turns, pack.health);
             var hand = pack.held; if (hand) hand.DropItem();
             pack.DestroyItem();
             return LastTarp && LastTarp.layout.tallTops.Count > 0 ? TooTall : null;
         }
-        // The corners' order around their middle (so the tarp never twists), and the four sides in that order.
+        // The outline's order (the user, 2026-10-26: "In tie order"): the spots as tied when no two sides cross, seen square-on to
+        // their plane; otherwise sorted round their middle in it, so the tarp never twists.
         internal static int[] Order(Vector3[] p)
         {
-            var mid = p.Aggregate(Vector3.zero, (a, b) => a + b) / p.Length;
-            var n = Vector3.Cross(p[1] - p[0], p[2] - p[0]) + Vector3.Cross(p[2] - p[0], p[3] - p[0]); if (n.sqrMagnitude < 1e-8f) n = Vector3.up; if (n.y < 0) n = -n;
-            var axis = Vector3.ProjectOnPlane(p[0] - mid, n).normalized; var other = Vector3.Cross(n, axis);
-            return Enumerable.Range(0, p.Length).OrderBy(i => Mathf.Atan2(Vector3.Dot(p[i] - mid, other), Vector3.Dot(p[i] - mid, axis))).ToArray();
+            var tied = Enumerable.Range(0, p.Length).ToArray(); if (p.Length < 3) return tied;
+            var q = Flat(p, out _);
+            if (Simple(q)) return tied;
+            var mid = q.Aggregate(Vector2.zero, (a, b) => a + b) / q.Length;
+            return tied.OrderBy(i => Mathf.Atan2(q[i].y - mid.y, q[i].x - mid.x)).ToArray();
         }
         internal static Vector3[] Ordered(Vector3[] p) => Order(p).Select(i => p[i]).ToArray();
+        // The spots seen square-on to their plane (from its middle, its first axis along the first spot), and that plane's normal.
+        private static Vector2[] Flat(Vector3[] p, out Vector3 normal)
+        {
+            normal = Fit(p); var mid = p.Aggregate(Vector3.zero, (a, b) => a + b) / p.Length;
+            var axis = Vector3.ProjectOnPlane(p[0] - mid, normal); if (axis.sqrMagnitude < 1e-8f) axis = Vector3.ProjectOnPlane(Vector3.right, normal); if (axis.sqrMagnitude < 1e-8f) axis = Vector3.ProjectOnPlane(Vector3.forward, normal);
+            axis.Normalize(); var other = Vector3.Cross(normal, axis);
+            return p.Select(x => new Vector2(Vector3.Dot(x - mid, axis), Vector3.Dot(x - mid, other))).ToArray();
+        }
+        // The best-fit plane's normal of some points (the plane through them with the least spread off it), turned upward;
+        // straight up when they give none (all in one spot or a line, the normal is any).
+        internal static Vector3 Fit(Vector3[] p)
+        {
+            var mid = p.Aggregate(Vector3.zero, (a, b) => a + b) / p.Length; double xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+            foreach (var v in p) { var r = v - mid; xx += r.x * r.x; xy += r.x * r.y; xz += r.x * r.z; yy += r.y * r.y; yz += r.y * r.z; zz += r.z * r.z; }
+            // The normal from the largest of the three 2 x 2 determinants (a plane fit without an eigen solve).
+            double dx = yy * zz - yz * yz, dy = xx * zz - xz * xz, dz = xx * yy - xy * xy, best = Math.Max(dx, Math.Max(dy, dz));
+            if (best <= 1e-12) return Vector3.up;
+            var n = best == dx ? new Vector3((float)dx, (float)(xz * yz - xy * zz), (float)(xy * yz - xz * yy))
+                : best == dy ? new Vector3((float)(xz * yz - xy * zz), (float)dy, (float)(xy * xz - yz * xx))
+                : new Vector3((float)(xy * yz - xz * yy), (float)(xy * xz - yz * xx), (float)dz);
+            if (n.sqrMagnitude < 1e-20f) return Vector3.up;
+            n.Normalize(); return n.y < 0 ? -n : n;
+        }
+        // An outline whose sides don't cross (sides that only meet at their shared spot are fine).
+        internal static bool Simple(Vector2[] q)
+        {
+            int n = q.Length;
+            for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++)
+            {
+                if (j == i + 1 || i == 0 && j == n - 1) continue;   // neighbours
+                if (Crossing(q[i], q[(i + 1) % n], q[j], q[(j + 1) % n], out _, out _)) return false;
+            }
+            return true;
+        }
+        // The outline's area seen square-on to its plane (m²).
+        internal static float Area(Vector3[] outline) => Mathf.Abs(Area(Flat(outline, out _)));
+        private static float Area(Vector2[] q) { float a = 0; for (int i = 0; i < q.Length; i++) { var u = q[i]; var v = q[(i + 1) % q.Length]; a += u.x * v.y - v.x * u.y; } return a / 2; }
 
         // ---- The tarp ----
-        // Points about every 0.5 m, 8 to 32 along a side; rope cells at most 6 m; cloth laced to the ropes about every 1 m; the
-        // modelled sheet drops 9% of a cell's mean span in its middle; a free point may move at most 16% x 1.41 x its distance
-        // to the nearest laced point (meant as a safety net; measured in game, gravity rests the cloth on it between lacings).
+        // Points about every 0.5 m, 8 to 32 across each way of the outline's box; rope cells at most 6 m; cloth laced to the ropes
+        // about every 1 m; the modelled sheet drops 9% of a cell's mean span in its middle; a free point may move at most 16% x 1.41 x
+        // its distance to the nearest laced point (meant as a safety net; measured in game, gravity rests the cloth on it between
+        // lacings). Between a side's lacings its edge falls inward up to that far, a softly ragged edge by its rope: kept at the
+        // user's word (2026-10-26, "Old side lacing"; laced at every side point for a few hours that day: CANVAS.md, "Shape").
         internal const float Spacing = .5f, CellMax = 6, Lacing = 1, Drop = .09f, Cap = .16f, RopeWidth = .03f;
         internal const int MinPoints = 8, MaxPoints = 32;
         internal sealed class Layout
         {
-            internal int cellsU, cellsV, segU, segV; internal Vector3[] points; internal bool[] pinned; internal float[] cap; internal Vector2[] uv; internal int[] triangles;
+            internal Vector3[] points; internal bool[] pinned; internal float[] cap; internal Vector2[] uv; internal int[] triangles;
             internal List<Vector3[]> ropes = new List<Vector3[]>();
             // The free ends of the poles holding it up, and of those too tall to (Raise), in its frame.
             internal List<Vector3> heldTops = new List<Vector3>(), tallTops = new List<Vector3>();
-            internal int Index(int i, int j) => j * (segU + 1) + i;
-            // The sides along u and v (m).
-            internal float lu, lv;
+            // Its plane: the spots' middle, the axes u (along the longest side) and v, the normal (upward). The outline (the spots
+            // seen square-on, in order) with each spot's height off the plane; every point seen square-on (`flat`, m) and where it
+            // lies (`side`: -1 inside, -2 a spot, else the side it is on); each side's points from its first spot on, with their
+            // share of the way along it (`sides`: the side's first spot first, its last spot not in it).
+            internal Vector3 middle, axisU, axisV, normal; internal Vector2[] outline, flat; internal float[] heights; internal int[] side;
+            internal List<(float f, int k)>[] sides;
+            // The outline's box (m along u and v, from `low`), its rope cells and their size, and the sag in a cell's middle.
+            internal float lu, lv, cu, cv, depth; internal Vector2 low; internal int cellsU, cellsV;
         }
-        // The tarp's layout from its four corners in order (c0-c1 and c3-c2 along u, c0-c3 and c1-c2 along v) and its parent's
-        // down. The sheet is bilinear through the corners: a straight line between matching points of opposite sides lies on it,
-        // so the ropes across follow it whatever the corners' heights. Grid lines fall on every rope. `poles`: the nailed wood
+        // The sheet without poles, kept for a tarp's spots (a pole nailed or a tarp rebuilt plans it again): its points, triangles
+        // and rope lines don't change with the poles under it.
+        private sealed class Sheet
+        {
+            internal Layout shape; internal Vector3[] flats; internal float[] sag; internal bool[] laced; internal List<int[]> ropeLines;
+        }
+        private static readonly Dictionary<string, Sheet> sheets = new Dictionary<string, Sheet>(); private static readonly List<string> sheetsKept = new List<string>();
+
+        // The tarp's layout from its spots in the outline's order (Order) and its parent's down (TARP_SPOTS_DRAFT.md). The sheet runs
+        // through the spots: its height off their plane blended from theirs (mean value coordinates), so each side is the straight
+        // line between its two spots and a flat outline gives a flat sheet. A grid over the outline's box gives the points inside it,
+        // the sides are divided at about the grid's step, and Delaunay triangles join them, each side's pieces kept as edges. Ropes
+        // run along each side and across on grid lines (so no cell exceeds 6 m), each from side to side. `poles`: the nailed wood
         // poles near it (base, free end), in the same frame (Raise).
         internal static Layout Plan(Vector3[] c, Vector3 down, IList<(Vector3 a, Vector3 b)> poles = null)
         {
-            float lu = Mathf.Max(Vector3.Distance(c[0], c[1]), Vector3.Distance(c[3], c[2])), lv = Mathf.Max(Vector3.Distance(c[0], c[3]), Vector3.Distance(c[1], c[2]));
-            int nu = Cells(lu), nv = Cells(lv), mu = PerCell(lu, nu), mv = PerCell(lv, nv);
-            var L = new Layout { cellsU = nu, cellsV = nv, segU = nu * mu, segV = nv * mv, lu = lu, lv = lv };
-            int pu = L.segU + 1, pv = L.segV + 1, count = pu * pv;
-            L.points = new Vector3[count]; L.pinned = new bool[count]; L.cap = new float[count]; L.uv = new Vector2[count];
-            var flats = new Vector3[count]; var sag = new float[count];   // the sheet without its sag, and the sag
-            float depth = Drop * (lu / nu + lv / nv) / 2;
-            int ku = Mathf.Max(1, Mathf.RoundToInt(Lacing / (lu / L.segU))), kv = Mathf.Max(1, Mathf.RoundToInt(Lacing / (lv / L.segV)));
-            Vector3 At(int i, int j) { float u = (float)i / L.segU, v = (float)j / L.segV; return Vector3.Lerp(Vector3.Lerp(c[0], c[1], u), Vector3.Lerp(c[3], c[2], u), v); }
-            for (int j = 0; j < pv; j++) for (int i = 0; i < pu; i++)
-            {
-                int k = L.Index(i, j); float a = (float)(i % mu) / mu, b = (float)(j % mv) / mv;
-                flats[k] = At(i, j); sag[k] = depth * 16 * a * (1 - a) * b * (1 - b); L.points[k] = flats[k] + down * sag[k];
-                bool alongV = i % mu == 0, alongU = j % mv == 0;   // on a rope running along v (constant i) or along u (constant j)
-                L.pinned[k] = alongV && (j % kv == 0 || alongU) || alongU && (i % ku == 0 || alongV);
-                L.uv[k] = StripUV((float)i / L.segU, (float)j / L.segV, lu, lv);
-            }
-            if (poles != null && poles.Count > 0) Raise(L, c, down, depth, flats, sag, poles);
+            var sheet = SheetOf(c, down); var s = sheet.shape; int count = s.flat.Length;
+            var L = new Layout { middle = s.middle, axisU = s.axisU, axisV = s.axisV, normal = s.normal, outline = s.outline, flat = s.flat, heights = s.heights,
+                side = s.side, sides = s.sides, lu = s.lu, lv = s.lv, cu = s.cu, cv = s.cv, depth = s.depth, low = s.low, cellsU = s.cellsU, cellsV = s.cellsV,
+                triangles = s.triangles, uv = s.uv };
+            L.points = new Vector3[count]; L.pinned = (bool[])sheet.laced.Clone(); L.cap = new float[count];
+            for (int k = 0; k < count; k++) L.points[k] = sheet.flats[k] + down * sheet.sag[k];
+            if (poles != null && poles.Count > 0) Raise(L, c, down, sheet.flats, sheet.sag, poles);
             var pins = Enumerable.Range(0, count).Where(k => L.pinned[k]).Select(k => L.points[k]).ToArray();
             for (int k = 0; k < count; k++) L.cap[k] = L.pinned[k] ? 0 : Cap * 1.41f * pins.Min(p => Vector3.Distance(p, L.points[k]));
-            // A rope along each rope line, through its points: one straight piece, or one per straight run where it bends over a pole.
-            for (int i = 0; i <= nu; i++) L.ropes.Add(Rope(L, Enumerable.Range(0, pv).Select(j => L.Index(i * mu, j))));
-            for (int j = 0; j <= nv; j++) L.ropes.Add(Rope(L, Enumerable.Range(0, pu).Select(i => L.Index(i, j * mv))));
-            var t = new List<int>();
-            for (int j = 0; j < L.segV; j++) for (int i = 0; i < L.segU; i++)
-            { int a = L.Index(i, j), b = L.Index(i + 1, j), d = L.Index(i, j + 1), e = L.Index(i + 1, j + 1); t.AddRange(new[] { a, d, b, b, d, e }); }
-            L.triangles = t.ToArray();
+            // A rope along each rope line, through its points: one straight piece, or one per straight run where it bends.
+            foreach (var line in sheet.ropeLines) L.ropes.Add(Rope(L, line));
             return L;
+        }
+        private static Sheet SheetOf(Vector3[] c, Vector3 down)
+        {
+            var key = string.Join(";", c.Select(x => x.x.ToString("F3") + "," + x.y.ToString("F3") + "," + x.z.ToString("F3")).Concat(new[] { down.x.ToString("F4") + "," + down.y.ToString("F4") + "," + down.z.ToString("F4") }).ToArray());
+            if (sheets.TryGetValue(key, out var kept)) return kept;
+            var made = MakeSheet(c, down);
+            sheets[key] = made; sheetsKept.Add(key);
+            if (sheetsKept.Count > 32) { sheets.Remove(sheetsKept[0]); sheetsKept.RemoveAt(0); }
+            return made;
+        }
+        private const int Plain = int.MinValue;
+        private static Sheet MakeSheet(Vector3[] c, Vector3 down)
+        {
+            int n = c.Length; var L = new Layout(); var up = -down.normalized;
+            // Its plane: the outline's own normal (by its area), else the spots' best fit; u along the longest side.
+            var mid = c.Aggregate(Vector3.zero, (a, b) => a + b) / n;
+            var normal = Vector3.zero; for (int k = 0; k < n; k++) normal += Vector3.Cross(c[k] - mid, c[(k + 1) % n] - mid);
+            normal = normal.sqrMagnitude > 1e-10f ? normal.normalized : Fit(c); if (Vector3.Dot(normal, up) < 0) normal = -normal;
+            int longest = Enumerable.Range(0, n).OrderByDescending(k => (c[(k + 1) % n] - c[k]).sqrMagnitude).First();
+            var eu = Vector3.ProjectOnPlane(c[(longest + 1) % n] - c[longest], normal); if (eu.sqrMagnitude < 1e-10f) eu = Vector3.ProjectOnPlane(Vector3.right, normal);
+            eu.Normalize(); var ev = Vector3.Cross(normal, eu);
+            L.middle = mid; L.axisU = eu; L.axisV = ev; L.normal = normal;
+            var q = c.Select(x => new Vector2(Vector3.Dot(x - mid, eu), Vector3.Dot(x - mid, ev))).ToArray(); L.outline = q;
+            L.heights = c.Select(x => Vector3.Dot(x - mid, normal)).ToArray();
+            Vector2 lo = new Vector2(q.Min(p => p.x), q.Min(p => p.y)), hi = new Vector2(q.Max(p => p.x), q.Max(p => p.y)); L.low = lo;
+            float lu = Mathf.Max(hi.x - lo.x, .01f), lv = Mathf.Max(hi.y - lo.y, .01f); L.lu = lu; L.lv = lv;
+            int nu = Cells(lu), nv = Cells(lv), mu = PerCell(lu, nu), mv = PerCell(lv, nv), su = nu * mu, sv = nv * mv; L.cellsU = nu; L.cellsV = nv;
+            float du = lu / su, dv = lv / sv; L.cu = lu / nu; L.cv = lv / nv; L.depth = Drop * (L.cu + L.cv) / 2;
+            int ku = Mathf.Max(1, Mathf.RoundToInt(Lacing / du)), kv = Mathf.Max(1, Mathf.RoundToInt(Lacing / dv));
+
+            var flat = new List<Vector2>(); var where = new List<int>(); var laced = new List<bool>(); var sag = new List<float>();
+            // The ropes across, on the grid's lines every cell (key: i for a line along v, -1 - j for one along u), each with its
+            // points by their place along it.
+            var lines = new Dictionary<int, List<(float at, int k)>>();
+            int Add(Vector2 x, int w, bool lace, float drop) { flat.Add(x); where.Add(w); laced.Add(lace); sag.Add(drop); return flat.Count - 1; }
+            float Along(Vector2 x, int key) => key >= 0 ? x.y : x.x;
+            void OnLine(int key, int k) { if (!lines.TryGetValue(key, out var l)) lines[key] = l = new List<(float at, int k)>(); l.Add((Along(flat[k], key), k)); }
+            for (int k = 0; k < n; k++) Add(q[k], -2, true, 0);   // the spots: points 0 to n - 1, laced
+            L.sides = new List<(float f, int k)>[n];
+            for (int k = 0; k < n; k++)
+            {
+                Vector2 a = q[k], b = q[(k + 1) % n], ab = b - a; float len = Mathf.Max(ab.magnitude, 1e-4f); var dir = ab / len;
+                // Pieces about the grid's step in the side's direction; the ropes across that end on it, laced there.
+                float step = 1 / Mathf.Sqrt(dir.x * dir.x / (du * du) + dir.y * dir.y / (dv * dv)); int m = Mathf.Max(1, Mathf.RoundToInt(len / step));
+                var cross = new List<(float f, int key)>();
+                for (int i = mu; i < su; i += mu)
+                {
+                    float x = lo.x + i * du;
+                    if (Mathf.Abs(a.x - x) < 1e-4f) OnLine(i, k); else if ((a.x - x) * (b.x - x) < 0) cross.Add(((x - a.x) / ab.x, i));
+                }
+                for (int j = mv; j < sv; j += mv)
+                {
+                    float y = lo.y + j * dv;
+                    if (Mathf.Abs(a.y - y) < 1e-4f) OnLine(-1 - j, k); else if ((a.y - y) * (b.y - y) < 0) cross.Add(((y - a.y) / ab.y, -1 - j));
+                }
+                int lace = Mathf.Max(1, Mathf.RoundToInt(Lacing / (len / m)));
+                var at = new List<(float f, int key, bool lace)>();
+                for (int t = 1; t < m; t++) { float f = (float)t / m; if (!cross.Any(x => Mathf.Abs(x.f - f) < .35f / m)) at.Add((f, Plain, t % lace == 0)); }
+                foreach (var x in cross)
+                {
+                    // A rope across that ends next to a spot ends on the spot.
+                    if (x.f < .35f / m) { OnLine(x.key, k); continue; }
+                    if (x.f > 1 - .35f / m) { OnLine(x.key, (k + 1) % n); continue; }
+                    at.Add((x.f, x.key, true));
+                }
+                L.sides[k] = new List<(float f, int k)> { (0, k) };
+                foreach (var x in at.OrderBy(x => x.f))
+                {
+                    int p = Add(Vector2.Lerp(a, b, x.f), k, x.lace, 0); L.sides[k].Add((x.f, p));
+                    if (x.key != Plain) OnLine(x.key, p);
+                }
+            }
+            // Inside: the grid's points clear of each side by half its longest piece, so each piece stays a triangle's edge.
+            var half = Enumerable.Range(0, n).Select(k => .5f * (q[(k + 1) % n] - q[k]).magnitude * Enumerable.Range(0, L.sides[k].Count)
+                .Max(i => (i + 1 < L.sides[k].Count ? L.sides[k][i + 1].f : 1) - L.sides[k][i].f)).ToArray();
+            for (int j = 1; j < sv; j++) for (int i = 1; i < su; i++)
+            {
+                var x = lo + new Vector2(i * du, j * dv);
+                if (!Inside(q, x)) continue;
+                bool clear = true; for (int k = 0; k < n && clear; k++) clear = ToSegment(x, q[k], q[(k + 1) % n]) > half[k] + 1e-4f;
+                if (!clear) continue;
+                bool alongV = i % mu == 0, alongU = j % mv == 0;   // on a rope running along v (constant i) or along u (constant j)
+                int p = Add(x, -1, alongV && (j % kv == 0 || alongU) || alongU && (i % ku == 0 || alongV), SagAt(L, x, (float)(i % mu) / mu, (float)(j % mv) / mv));
+                if (alongV) OnLine(i, p); if (alongU) OnLine(-1 - j, p);
+            }
+            // Triangles. A side's piece that isn't an edge of them is halved (a new plain point on it), up to five times.
+            List<int> tris;
+            for (int pass = 0; ; pass++)
+            {
+                tris = Delaunay(flat, where);
+                var edges = new HashSet<long>(); for (int t = 0; t < tris.Count; t += 3) for (int e = 0; e < 3; e++) edges.Add(EdgeKey(tris[t + e], tris[t + (e + 1) % 3]));
+                bool split = false;
+                for (int k = 0; k < n; k++)
+                {
+                    var s = L.sides[k]; int next = (k + 1) % n;
+                    for (int i = 0; i < s.Count; i++)
+                    {
+                        int a = s[i].k, b = i + 1 < s.Count ? s[i + 1].k : next;
+                        if (edges.Contains(EdgeKey(a, b)) || pass >= 5) continue;
+                        float f = (s[i].f + (i + 1 < s.Count ? s[i + 1].f : 1)) / 2; int p = Add(Vector2.Lerp(q[k], q[next], f), k, false, 0);
+                        s.Insert(i + 1, (f, p)); i++; split = true;
+                    }
+                }
+                if (!split) break;
+            }
+            // Those inside the outline, each turned as the bilinear sheet's were (facing down seen from above).
+            var kept = new List<int>();
+            for (int t = 0; t < tris.Count; t += 3)
+            {
+                int a = tris[t], b = tris[t + 1], d = tris[t + 2]; Vector2 pa = flat[a], pb = flat[b], pd = flat[d];
+                float turn = (pb.x - pa.x) * (pd.y - pa.y) - (pb.y - pa.y) * (pd.x - pa.x);
+                if (Mathf.Abs(turn) < 1e-9f || !Inside(q, (pa + pb + pd) / 3)) continue;
+                if (turn < 0) kept.AddRange(new[] { a, b, d }); else kept.AddRange(new[] { a, d, b });
+            }
+            int count = flat.Count;
+            L.flat = flat.ToArray(); L.side = where.ToArray(); L.triangles = kept.ToArray(); L.uv = new Vector2[count];
+            var sheet = new Sheet { shape = L, flats = new Vector3[count], sag = sag.ToArray(), laced = laced.ToArray(), ropeLines = new List<int[]>() };
+            for (int k = 0; k < count; k++)
+            {
+                sheet.flats[k] = where[k] == -2 ? c[k] : where[k] >= 0 ? Vector3.Lerp(c[where[k]], c[(where[k] + 1) % n], Along2(q, L.flat[k], where[k])) : Surface(L, c, L.flat[k]);
+                L.uv[k] = StripUV((L.flat[k].x - lo.x) / lu, (L.flat[k].y - lo.y) / lv, lu, lv);
+            }
+            // The rope lines: each side from spot to spot, and each line across in its runs inside the outline.
+            for (int k = 0; k < n; k++) sheet.ropeLines.Add(L.sides[k].Select(x => x.k).Concat(new[] { (k + 1) % n }).ToArray());
+            foreach (var line in lines.Values)
+            {
+                var on = line.GroupBy(x => x.k).Select(g => g.First()).OrderBy(x => x.at).ToList(); var run = new List<int>();
+                for (int i = 0; i + 1 < on.Count; i++)
+                {
+                    var middle = (L.flat[on[i].k] + L.flat[on[i + 1].k]) / 2;
+                    if (Inside(q, middle) && Edge(q, middle) > 1e-3f) { if (run.Count == 0) run.Add(on[i].k); run.Add(on[i + 1].k); }
+                    else { if (run.Count > 1) sheet.ropeLines.Add(run.ToArray()); run = new List<int>(); }
+                }
+                if (run.Count > 1) sheet.ropeLines.Add(run.ToArray());
+            }
+            return sheet;
+        }
+        // The sag at a point of the outline (a, b: its share of the way across its rope cell): 9% of a cell's mean span in its
+        // middle, none on the ropes; where a side cuts the cell, fading to none at the side.
+        private static float SagAt(Layout L, Vector2 x, float a, float b)
+        {
+            float cell = Mathf.Min(Mathf.Min(a, 1 - a) * L.cu, Mathf.Min(b, 1 - b) * L.cv);
+            float fade = cell < 1e-6f ? 1 : Mathf.Clamp01(Edge(L.outline, x) / cell);
+            return L.depth * 16 * a * (1 - a) * b * (1 - b) * fade;
+        }
+        private static float SagAt(Layout L, Vector2 x) => SagAt(L, x, Mathf.Repeat((x.x - L.low.x) / L.cu, 1), Mathf.Repeat((x.y - L.low.y) / L.cv, 1));
+        // The sheet over a point seen square-on (inside, the blended height; outside, the nearest side's line).
+        private static Vector3 Surface(Layout L, Vector3[] c, Vector2 x)
+        {
+            var q = L.outline; int n = q.Length;
+            if (Inside(q, x)) return L.middle + L.axisU * x.x + L.axisV * x.y + L.normal * Blend(q, L.heights, x);
+            int s = NearestSide(q, x); return Vector3.Lerp(c[s], c[(s + 1) % n], Along2(q, x, s));
+        }
+        // A height at a point of the outline blended from its spots' (mean value coordinates: on a side, the line between its spots).
+        internal static float Blend(Vector2[] q, float[] h, Vector2 x)
+        {
+            int n = q.Length; var d = new Vector2[n]; var r = new double[n]; var t = new double[n];
+            for (int i = 0; i < n; i++) { d[i] = q[i] - x; r[i] = d[i].magnitude; if (r[i] < 1e-6) return h[i]; }
+            for (int i = 0; i < n; i++)
+            {
+                int j = (i + 1) % n; double cross = (double)d[i].x * d[j].y - (double)d[i].y * d[j].x, dot = (double)d[i].x * d[j].x + (double)d[i].y * d[j].y;
+                if (Math.Abs(cross) < 1e-9 * r[i] * r[j] && dot < 0) return (float)((h[i] * r[j] + h[j] * r[i]) / (r[i] + r[j]));   // on the side
+                t[i] = cross / (r[i] * r[j] + dot);   // tan of half the angle the side spans
+            }
+            double sw = 0, sh = 0;
+            for (int i = 0; i < n; i++) { double w = (t[(i + n - 1) % n] + t[i]) / r[i]; sw += w; sh += w * h[i]; }
+            return Math.Abs(sw) < 1e-12 ? h.Average() : (float)(sh / sw);
+        }
+        // Whether a point is inside the outline (even-odd), its distance to the nearest side, that side, and its share along side k.
+        internal static bool Inside(Vector2[] q, Vector2 x)
+        {
+            bool inside = false;
+            for (int i = 0, j = q.Length - 1; i < q.Length; j = i++)
+                if (q[i].y > x.y != q[j].y > x.y && x.x < (q[j].x - q[i].x) * (x.y - q[i].y) / (q[j].y - q[i].y) + q[i].x) inside = !inside;
+            return inside;
+        }
+        internal static float Edge(Vector2[] q, Vector2 x) { float m = float.MaxValue; for (int k = 0; k < q.Length; k++) m = Mathf.Min(m, ToSegment(x, q[k], q[(k + 1) % q.Length])); return m; }
+        private static int NearestSide(Vector2[] q, Vector2 x) { int s = 0; float best = float.MaxValue; for (int k = 0; k < q.Length; k++) { float d = ToSegment(x, q[k], q[(k + 1) % q.Length]); if (d < best) { best = d; s = k; } } return s; }
+        private static float Along2(Vector2[] q, Vector2 x, int k) { var ab = q[(k + 1) % q.Length] - q[k]; return Mathf.Clamp01(Vector2.Dot(x - q[k], ab) / Mathf.Max(ab.sqrMagnitude, 1e-8f)); }
+        private static float ToSegment(Vector2 x, Vector2 a, Vector2 b) { var ab = b - a; float f = Mathf.Clamp01(Vector2.Dot(x - a, ab) / Mathf.Max(ab.sqrMagnitude, 1e-12f)); return (a + ab * f - x).magnitude; }
+        private static long EdgeKey(int a, int b) => a < b ? (long)a << 32 | (uint)b : (long)b << 32 | (uint)a;
+        // Delaunay triangles over points (Bowyer-Watson, in doubles), as a list of index triples. The points inside (`where` -1: a
+        // grid's, four on one circle) get a fixed jitter of 0.01 mm so no two triangles tie; the outline's own stay on its sides.
+        internal static List<int> Delaunay(IList<Vector2> pts, IList<int> where)
+        {
+            int n = pts.Count; var x = new double[n + 3]; var y = new double[n + 3];
+            double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
+            for (int i = 0; i < n; i++)
+            {
+                bool jitter = where[i] == -1; x[i] = pts[i].x + (jitter ? 1e-5 * Math.Sin(i * 12.9898) : 0); y[i] = pts[i].y + (jitter ? 1e-5 * Math.Sin(i * 78.233) : 0);
+                x0 = Math.Min(x0, x[i]); y0 = Math.Min(y0, y[i]); x1 = Math.Max(x1, x[i]); y1 = Math.Max(y1, y[i]);
+            }
+            double span = Math.Max(x1 - x0, y1 - y0) + 1, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+            x[n] = cx - 20 * span; y[n] = cy - span; x[n + 1] = cx + 20 * span; y[n + 1] = cy - span; x[n + 2] = cx; y[n + 2] = cy + 20 * span;
+            (int a, int b, int c, double ox, double oy, double r2) Circle(int a, int b, int c)
+            {
+                double ax = x[a], ay = y[a], bx = x[b], by = y[b], qx = x[c], qy = y[c], d = 2 * (ax * (by - qy) + bx * (qy - ay) + qx * (ay - by));
+                if (Math.Abs(d) < 1e-18) return (a, b, c, cx, cy, double.MaxValue);
+                double a2 = ax * ax + ay * ay, b2 = bx * bx + by * by, c2 = qx * qx + qy * qy;
+                double ox = (a2 * (by - qy) + b2 * (qy - ay) + c2 * (ay - by)) / d, oy = (a2 * (qx - bx) + b2 * (ax - qx) + c2 * (bx - ax)) / d;
+                return (a, b, c, ox, oy, (ax - ox) * (ax - ox) + (ay - oy) * (ay - oy));
+            }
+            var tri = new List<(int a, int b, int c, double ox, double oy, double r2)> { Circle(n, n + 1, n + 2) };
+            var open = new Dictionary<long, int>(); long M = n + 3;
+            void Count(int a, int b) { long k = a < b ? a * M + b : b * M + a; open[k] = open.TryGetValue(k, out var v) ? v + 1 : 1; }
+            for (int p = 0; p < n; p++)
+            {
+                open.Clear(); var keep = new List<(int a, int b, int c, double ox, double oy, double r2)>(tri.Count + 4);
+                foreach (var t in tri)
+                {
+                    double dx = x[p] - t.ox, dy = y[p] - t.oy;
+                    if (dx * dx + dy * dy < t.r2) { Count(t.a, t.b); Count(t.b, t.c); Count(t.c, t.a); } else keep.Add(t);
+                }
+                foreach (var e in open) if (e.Value == 1) keep.Add(Circle((int)(e.Key / M), (int)(e.Key % M), p));
+                tri = keep;
+            }
+            var list = new List<int>(tri.Count * 3);
+            foreach (var t in tri) if (t.a < n && t.b < n && t.c < n) { list.Add(t.a); list.Add(t.b); list.Add(t.c); }
+            return list;
         }
         // A rope line's points, leaving out those where it runs straight on (its two ends kept).
         private static Vector3[] Rope(Layout L, IEnumerable<int> line)
@@ -3252,111 +3561,92 @@ namespace EconomyOverhaul
             kept.Add(p[p.Count - 1]); return kept.ToArray();
         }
         // Nailed wood poles hold it up (user, 2026-10-12), the whole pole wherever it is under the canvas: a standing pole by its
-        // top, a lying or leaning one along its length (a ridge). Each pole is taken as points every 10 cm. A point touches the
-        // canvas inside the four sides, or up to 15 cm outside one (under its rope), when it is no lower than the canvas can hang
-        // there (its sag and its cap; at a side, no lower than its rope). Within 0.5 m of a side it holds that side up: the side's
-        // rope runs from its corners over the pole, over its point farthest out toward the side there (a standing pole's top, a lying
-        // pole's end), so none of it is left outside the canvas. A pole that crosses a side seen from above holds that side up
-        // where it crosses it (the user's picture, 2026-10-12: the edge was pulled in along the pole): the rope stays on the
-        // side's line and rests on the pole's highest point within 5 cm of it, and the pole's points near that side hold the
-        // canvas as further in. Further in it lifts the canvas with the sides staying. No slope over 45 degrees (the user's
-        // limit): a point lifts the canvas over the plain sheet by at most its distance to the corners and to the sides that
-        // stay (not a side the pole holds up where it crosses it, nor at a side its own); a pole with any point higher holds
-        // nothing (tallTops). The canvas rests on the pole (the sheet's point nearest each touching point fixed 7 cm over its
-        // line, the highest first) and runs in straight slopes down to the sides (the highest where several meet); its sag fades
-        // to nothing at a pole, and the ropes across rise with it.
+        // top, a lying or leaning one along its length (a ridge). Each pole is taken as points every 10 cm. Seen square-on to the
+        // tarp (from above for a level one; any number of sides, TARP_SPOTS_DRAFT.md), a point touches the canvas inside its outline,
+        // or up to 15 cm outside a side (under its rope), when it is no lower than the canvas can hang there (its sag and its cap;
+        // at a side, no lower than its rope). Within 0.5 m of a side it holds that side up: the side's rope runs from its spots over
+        // the pole, over its point farthest out toward the side there (a standing pole's top, a lying pole's end), so none of it is
+        // left outside the canvas. A pole that crosses a side holds that side up where it crosses it (the user's picture,
+        // 2026-10-12: the edge was pulled in along the pole): the rope stays on the side's line and rests on the pole's highest point
+        // within 5 cm of it, and the pole's points near that side hold the canvas as further in. Further in it lifts the canvas with
+        // the sides staying. No slope over 45 degrees (the user's limit): a point lifts the canvas over the plain sheet by at most its
+        // distance to the spots and to the sides that stay (not a side the pole holds up where it crosses it, nor at a side its own);
+        // a pole with any point higher holds nothing (tallTops). The canvas rests on the pole (the sheet's point nearest each touching
+        // point fixed 7 cm over its line, the highest first) and runs in straight slopes down to the outline (the highest where
+        // several meet); its sag fades to nothing at a pole, and the ropes across rise with it. Heights are along the tarp's normal.
         internal const float EdgeBand = .5f, EdgeOutside = .15f, PoleCap = .07f, PoleStep = .1f, RopeOn = .05f;   // the canvas 7 cm over a pole's line: 3 cm over its top, room for the cloth beside it to dip
-        private static void Raise(Layout L, Vector3[] c, Vector3 down, float depth, Vector3[] flats, float[] sag, IList<(Vector3 a, Vector3 b)> poles)
+        private static void Raise(Layout L, Vector3[] c, Vector3 down, Vector3[] flats, float[] sag, IList<(Vector3 a, Vector3 b)> poles)
         {
-            var up = -down.normalized; var e1 = Vector3.ProjectOnPlane(c[1] - c[0], up).normalized; var e2 = Vector3.Cross(up, e1);
-            Vector2 P2(Vector3 x) => new Vector2(Vector3.Dot(x, e1), Vector3.Dot(x, e2));   // seen from above
-            var q = c.Select(P2).ToArray();
-            Vector2 B(float u, float v) => Vector2.LerpUnclamped(Vector2.LerpUnclamped(q[0], q[1], u), Vector2.LerpUnclamped(q[3], q[2], u), v);
-            Vector3 At(float u, float v) => Vector3.Lerp(Vector3.Lerp(c[0], c[1], u), Vector3.Lerp(c[3], c[2], u), v);
-            float ToSide(Vector2 x, Vector2 a, Vector2 b) { var ab = b - a; float f = Mathf.Clamp01(Vector2.Dot(x - a, ab) / Mathf.Max(ab.sqrMagnitude, 1e-8f)); return (a + ab * f - x).magnitude; }
-            float[] ToSides(Vector2 x) => new[] { ToSide(x, q[0], q[1]), ToSide(x, q[1], q[2]), ToSide(x, q[2], q[3]), ToSide(x, q[3], q[0]) };
-            // The sheet's point a touching point fixes: the nearest, never a corner; inside, never one on a side.
-            int Vertex(float u, float v, int side)
-            {
-                int i = Mathf.RoundToInt(u * L.segU), j = Mathf.RoundToInt(v * L.segV);
-                if (side != 1 && side != 3) i = Mathf.Clamp(i, 1, L.segU - 1);
-                if (side != 0 && side != 2) j = Mathf.Clamp(j, 1, L.segV - 1);
-                return L.Index(i, j);
-            }
-            // A point a pole holds up on a side, kept off its corners as Vertex keeps the fixed points: at a corner's (u, v) it
-            // lifted the corner itself off its knot (a pole up to 15 cm outside a corner; the review of 2026-10-18, Claude's fix).
-            float Off(float x, int seg) => seg < 2 ? x : Mathf.Clamp(x, 1f / seg, 1 - 1f / seg);
-            (float u, float v) OnSide(float u, float v, int side) => side == 0 || side == 2 ? (Off(u, L.segU), v) : (u, Off(v, L.segV));
+            var up = L.normal; var q = L.outline; int n = q.Length;
+            Vector2 P2(Vector3 x) => new Vector2(Vector3.Dot(x - L.middle, L.axisU), Vector3.Dot(x - L.middle, L.axisV));
+            Vector2 OnLine(int k, float f) => Vector2.LerpUnclamped(q[k], q[(k + 1) % n], f);
+            float[] ToSides(Vector2 x) => Enumerable.Range(0, n).Select(k => ToSegment(x, q[k], q[(k + 1) % n])).ToArray();
+            // A side's point a pole holds it up at, kept off its spots (at a spot's place it lifted the spot itself off its knot; the
+            // review of 2026-10-18, Claude's fix), and the sheet's point it fixes there: the side's nearest, never a spot.
+            float Off(int k, float f) { int m = L.sides[k].Count; return m < 2 ? f : Mathf.Clamp(f, 1f / m, 1 - 1f / m); }
+            int OnSideVertex(int k, float f) { var s = L.sides[k]; int best = -1; float d = float.MaxValue; for (int i = 1; i < s.Count; i++) if (Mathf.Abs(s[i].f - f) < d) { d = Mathf.Abs(s[i].f - f); best = s[i].k; } return best; }
+            // The sheet's point nearest a spot: of all, or of those inside.
+            int NearestPoint(Vector2 x, bool inside) { int best = -1; float d = float.MaxValue; for (int k = 0; k < L.flat.Length; k++) if ((!inside || L.side[k] == -1) && (L.flat[k] - x).sqrMagnitude < d) { d = (L.flat[k] - x).sqrMagnitude; best = k; } return best; }
             var laced = Enumerable.Range(0, L.points.Length).Where(k => L.pinned[k]).Select(k => L.points[k]).ToArray();
-            // Sides: 0 c0-c1 (v 0), 1 c1-c2 (u 1), 2 c2-c3 (v 1), 3 c3-c0 (u 0); -1 inside.
-            var held = new List<(float u, float v, float h, Vector3 at, int side)>();   // every touching point: it lifts the canvas around it
+            var held = new List<(Vector2 x, float h, Vector3 at, int side)>();   // every touching point (-1 inside): it lifts the canvas around it
             var fixes = new List<(float h, Vector3 at, int k, bool end)>();   // the sheet's points fixed on the poles (end: at a pole's end)
             foreach (var pole in poles)
             {
-                var points = new List<(float u, float v, float h, Vector3 at, int side)>(); var pins = new List<(float h, Vector3 at, int k, bool end)>(); bool steep = false;
+                var points = new List<(Vector2 x, float h, Vector3 at, int side)>(); var pins = new List<(float h, Vector3 at, int k, bool end)>(); bool steep = false;
                 // The sides it crosses, no lower than their rope: the rope rests on its highest point within 5 cm of the side's line,
                 // kept on that line (a standing pole leaning over a side: its top; a lying one: where it crosses).
-                var raised = new bool[4];
-                for (int k = 0; k < 4; k++)
+                var raised = new bool[n];
+                for (int k = 0; k < n; k++)
                 {
-                    Vector2 a2 = P2(pole.a), r = P2(pole.b) - a2, s = q[(k + 1) % 4] - q[k];
-                    if (!Crossing(a2, a2 + r, q[k], q[(k + 1) % 4], out float t, out _)) continue;
+                    Vector2 a2 = P2(pole.a), r = P2(pole.b) - a2, s = q[(k + 1) % n] - q[k];
+                    if (!Crossing(a2, a2 + r, q[k], q[(k + 1) % n], out float t, out _)) continue;
                     float slope = Mathf.Abs(r.x * s.y - r.y * s.x) / s.magnitude, dt = slope > 1e-6f ? RopeOn / slope : 1;   // its distance from the line grows by `slope` along it
                     float t0 = Mathf.Clamp01(t - dt), t1 = Mathf.Clamp01(t + dt);
                     var p = Vector3.Lerp(pole.a, pole.b, Vector3.Dot(pole.b - pole.a, up) >= 0 ? t1 : t0);
-                    float f = Mathf.Clamp01(Vector2.Dot(P2(p) - q[k], s) / s.sqrMagnitude);
-                    float su = k == 0 ? f : k == 1 ? 1 : k == 2 ? 1 - f : 0, sv = k == 0 ? 0 : k == 1 ? f : k == 2 ? 1 : 1 - f;
-                    float lift = Vector3.Dot(p - At(su, sv), up);
+                    float f = Along2(q, P2(p), k); var line = Vector3.Lerp(c[k], c[(k + 1) % n], f);
+                    float lift = Vector3.Dot(p - line, up);
                     if (lift < 0) continue;   // under the side's rope (a rope never hangs)
-                    raised[k] = true; var on = At(su, sv) + up * lift; var (hu, hv) = OnSide(su, sv, k);
-                    points.Add((hu, hv, lift + PoleCap, on, k)); pins.Add((lift + PoleCap, on, Vertex(su, sv, k), false));
+                    raised[k] = true; var on = line + up * lift;
+                    points.Add((OnLine(k, Off(k, f)), lift + PoleCap, on, k));
+                    int v = OnSideVertex(k, f); if (v >= 0) pins.Add((lift + PoleCap, on, v, false));
                 }
-                // How high a point may lift the canvas (45 degrees): its distance to the corners and to the sides that stay; `own` left out.
-                float Room(Vector2 x, float[] to, int own) { float m = q.Min(z => (z - x).magnitude); for (int k = 0; k < 4; k++) if (k != own && !raised[k]) m = Mathf.Min(m, to[k]); return m; }
+                // How high a point may lift the canvas (45 degrees): its distance to the spots and to the sides that stay; `own` left out.
+                float Room(Vector2 x, float[] to, int own) { float m = q.Min(z => (z - x).magnitude); for (int k = 0; k < n; k++) if (k != own && !raised[k]) m = Mathf.Min(m, to[k]); return m; }
                 foreach (var z in points) { var x = P2(z.at); if (z.h - PoleCap > Room(x, ToSides(x), z.side)) steep = true; }
-                var byEdge = new List<(float u, float v, float h, Vector3 at, int side, float outward, bool end)>();   // near a side it does not cross
-                int n = Mathf.Max(1, Mathf.CeilToInt(Vector3.Distance(pole.a, pole.b) / PoleStep));
-                for (int st = 0; st <= n; st++)
+                var byEdge = new List<(float h, Vector3 at, int k, float outward, bool end)>();   // near a side it does not cross
+                int steps = Mathf.Max(1, Mathf.CeilToInt(Vector3.Distance(pole.a, pole.b) / PoleStep));
+                for (int st = 0; st <= steps; st++)
                 {
-                    bool end = st == 0 || st == n;
-                    // Where this point is on the sheet (u, v), seen from above (Newton's method on the bilinear sheet).
-                    var p = Vector3.Lerp(pole.a, pole.b, (float)st / n); var x = P2(p); float u = .5f, v = .5f;
-                    for (int it = 0; it < 20; it++)
-                    {
-                        var r = x - B(u, v); var du = Vector2.LerpUnclamped(q[1] - q[0], q[2] - q[3], v); var dv = Vector2.LerpUnclamped(q[3], q[2], u) - Vector2.LerpUnclamped(q[0], q[1], u);
-                        float det = du.x * dv.y - du.y * dv.x; if (Mathf.Abs(det) < 1e-8f) break;
-                        u += (r.x * dv.y - r.y * dv.x) / det; v += (du.x * r.y - du.y * r.x) / det;
-                    }
-                    if (float.IsNaN(u) || float.IsNaN(v)) continue;
-                    var to = ToSides(x);
-                    int side = 0; for (int k = 1; k < 4; k++) if (to[k] < to[side]) side = k;
-                    bool inside = u >= 0 && u <= 1 && v >= 0 && v <= 1;
+                    bool end = st == 0 || st == steps;
+                    var p = Vector3.Lerp(pole.a, pole.b, (float)st / steps); var x = P2(p);
+                    var to = ToSides(x); int side = 0; for (int k = 1; k < n; k++) if (to[k] < to[side]) side = k;
+                    bool inside = Inside(q, x);
                     if (!inside && to[side] > EdgeOutside) continue;   // beside it
-                    float cu = Mathf.Clamp01(u), cv = Mathf.Clamp01(v), fa = cu * L.cellsU % 1, fb = cv * L.cellsV % 1, sagHere = depth * 16 * fa * (1 - fa) * fb * (1 - fb);
-                    float lift = Vector3.Dot(p - At(cu, cv), up);
-                    var model = At(cu, cv) - up * sagHere; float hang = Cap * 1.41f * laced.Min(z => Vector3.Distance(z, model));
+                    var spot = inside ? x : OnLine(side, Along2(q, x, side));   // outside: its nearest spot on its nearest side
+                    var sheet = Surface(L, c, spot); float sagHere = SagAt(L, spot), lift = Vector3.Dot(p - sheet, up);
+                    var model = sheet + down * sagHere; float hang = Cap * 1.41f * laced.Min(z => Vector3.Distance(z, model));
                     if (lift + PoleCap < -sagHere - hang) continue;   // under the canvas, not touching it
                     if (raised[side] && to[side] < EdgeBand)
                     {
-                        // By a side it holds up where it crosses it: inside, on the canvas as further in, never fixing that side's own
+                        // By a side it holds up where it crosses it: inside, on the canvas as further in, never fixing a side's own
                         // points (the crossing does); outside, past the crossing.
                         if (!inside) continue;
                         if (lift > Room(x, to, -1)) steep = true;
-                        points.Add((cu, cv, lift + PoleCap, p, -1));
-                        int i = Mathf.RoundToInt(cu * L.segU), j = Mathf.RoundToInt(cv * L.segV);
-                        if (!(side == 0 && j == 0 || side == 1 && i == L.segU || side == 2 && j == L.segV || side == 3 && i == 0)) pins.Add((lift + PoleCap, p, Vertex(cu, cv, -1), end));
+                        points.Add((x, lift + PoleCap, p, -1));
+                        int any = NearestPoint(x, false), v = NearestPoint(x, true);
+                        if (any >= 0 && L.side[any] == -1 && v >= 0) pins.Add((lift + PoleCap, p, v, end));
                         continue;
                     }
-                    if (inside && to[side] >= EdgeBand) { if (lift > Room(x, to, -1)) steep = true; points.Add((cu, cv, lift + PoleCap, p, -1)); pins.Add((lift + PoleCap, p, Vertex(cu, cv, -1), end)); continue; }
+                    if (inside && to[side] >= EdgeBand) { if (lift > Room(x, to, -1)) steep = true; points.Add((x, lift + PoleCap, p, -1)); int v = NearestPoint(x, true); if (v >= 0) pins.Add((lift + PoleCap, p, v, end)); continue; }
                     if (lift < 0) continue;   // under the side's rope (a rope never hangs)
                     if (lift > Room(x, to, side)) steep = true;
-                    if (side == 0) cv = 0; else if (side == 1) cu = 1; else if (side == 2) cv = 1; else cu = 0;
-                    (cu, cv) = OnSide(cu, cv, side);
-                    points.Add((cu, cv, lift + PoleCap, p, side)); byEdge.Add((cu, cv, lift + PoleCap, p, side, inside ? -to[side] : to[side], end));
+                    float fo = Off(side, Along2(q, x, side));
+                    points.Add((OnLine(side, fo), lift + PoleCap, p, side));
+                    int w = OnSideVertex(side, fo); if (w >= 0) byEdge.Add((lift + PoleCap, p, w, inside ? -to[side] : to[side], end));
                 }
-                // Near a side it does not cross, each of the side's points it holds up rests on the pole's point farthest out toward the side's
-                // line (of those within 10 cm of it, the highest).
-                foreach (var g in byEdge.GroupBy(z => Vertex(z.u, z.v, z.side)))
+                // Near a side it does not cross, each of the side's points it holds up rests on the pole's point farthest out toward the
+                // side's line (of those within 10 cm of it, the highest).
+                foreach (var g in byEdge.GroupBy(z => z.k))
                 {
                     float most = g.Max(z => z.outward);
                     var on = g.Where(z => z.outward >= most - PoleStep).OrderByDescending(z => z.h).ThenByDescending(z => z.outward).First();
@@ -3369,31 +3659,44 @@ namespace EconomyOverhaul
             if (held.Count == 0) return;
             for (int k = 0; k < L.points.Length; k++)
             {
-                float u = (float)(k % (L.segU + 1)) / L.segU, v = (float)(k / (L.segU + 1)) / L.segV, lift = 0, near = 0;
+                var x = L.flat[k]; float lift = 0, near = 0;
                 foreach (var h in held)
                 {
                     if (h.h <= 0) continue;
-                    // How far on from the point through this one the sheet's edge is (in u, v); its share of the lift falls in a
-                    // straight line from 1 at the point to 0 at the edge (at a side, along it to its corners).
-                    float du = u - h.u, dv = v - h.v, reach = float.MaxValue;
-                    if (du > 1e-6f) reach = Mathf.Min(reach, (1 - h.u) / du); else if (du < -1e-6f) reach = Mathf.Min(reach, h.u / -du);
-                    if (dv > 1e-6f) reach = Mathf.Min(reach, (1 - h.v) / dv); else if (dv < -1e-6f) reach = Mathf.Min(reach, h.v / -dv);
-                    float share = reach == float.MaxValue ? 1 : Mathf.Clamp01(1 - 1 / reach);
+                    // How far on from the touching point through this one the outline is; its share of the lift falls in a straight
+                    // line from 1 at the touching point to 0 at the outline (at a side, along it to its spots).
+                    var d = x - h.x; float dist = d.magnitude, share;
+                    if (dist < 1e-5f) share = 1;
+                    else { float exit = Exit(q, h.x, d / dist); share = exit < 1e-5f ? 0 : Mathf.Clamp01(1 - dist / exit); }
                     lift = Mathf.Max(lift, h.h * share); near = Mathf.Max(near, share);
                 }
-                L.points[k] = flats[k] + up * lift - up * sag[k] * (1 - near);
+                L.points[k] = flats[k] + up * lift + down * sag[k] * (1 - near);
             }
-            // Each touching point fixes the sheet's point nearest it (never a corner; inside, never one on a side), the highest first;
+            // Each touching point fixes the sheet's point nearest it (never a spot; inside, never one on a side), the highest first;
             // heights within 1 cm a tie, a pole's end first, then the one nearest the sheet point's spot (Rules.TarpClaim, B-B2).
             foreach (var g in fixes.GroupBy(x => x.k))
             {
-                var by = g.ToList(); var spot = P2(flats[g.Key]);
+                var by = g.ToList(); var spot = L.flat[g.Key];
                 int w = Rules.TarpClaim(by.Select(x => (x.h, x.end, (P2(x.at) - spot).magnitude)).ToList());
                 if (w < 0) continue;
                 L.points[g.Key] = by[w].at + up * PoleCap; L.pinned[g.Key] = true;
             }
         }
-        // Where segment a-b crosses segment c-d seen from above: t along a-b, f along c-d (parallel: none; a standing pole seen
+        // How far a ray from o along dir (seen square-on) runs before it meets the outline (past 0.1 mm; a side it runs along is
+        // not met, its end spot is).
+        private static float Exit(Vector2[] q, Vector2 o, Vector2 dir)
+        {
+            float best = float.MaxValue;
+            for (int k = 0; k < q.Length; k++)
+            {
+                Vector2 a = q[k], s = q[(k + 1) % q.Length] - a, w = a - o; float den = dir.x * s.y - dir.y * s.x;
+                if (Mathf.Abs(den) < 1e-6f * s.magnitude) continue;
+                float t = (w.x * s.y - w.y * s.x) / den, f = (w.x * dir.y - w.y * dir.x) / den;
+                if (t > 1e-4f && f >= -1e-5f && f <= 1 + 1e-5f) best = Mathf.Min(best, t);
+            }
+            return best == float.MaxValue ? 0 : best;
+        }
+        // Where segment a-b crosses segment c-d seen square-on: t along a-b, f along c-d (parallel: none; a standing pole seen
         // from above is a point).
         private static bool Crossing(Vector2 a, Vector2 b, Vector2 c, Vector2 d, out float t, out float f)
         {
@@ -3402,11 +3705,11 @@ namespace EconomyOverhaul
             t = (w.x * s.y - w.y * s.x) / den; f = (w.x * r.y - w.y * r.x) / den;
             return t >= 0 && t <= 1 && f >= 0 && f <= 1;
         }
-        // The canvas strip stretched once over the sheet (a, b: 0-1 along its u and v sides), its long side (the texture's v)
-        // along the tarp's longer side.
+        // The canvas strip stretched once over the outline's box (a, b: 0-1 along its u and v), its long side (the texture's v)
+        // along the box's longer side.
         internal static Vector2 StripUV(float a, float b, float lu, float lv) => lu > lv ? new Vector2(b, a) : new Vector2(a, b);
-        private static int Cells(float length) => Mathf.Max(1, Mathf.CeilToInt(length / CellMax - 1e-4f));
-        private static int PerCell(float length, int cells) => Mathf.Clamp(Mathf.RoundToInt(length / Spacing / cells), Mathf.CeilToInt((MinPoints - 1) / (float)cells), (MaxPoints - 1) / cells);
+        private static int Cells(float length) => Mathf.Clamp(Mathf.CeilToInt(length / CellMax - 1e-4f), 1, MaxPoints - 1);
+        private static int PerCell(float length, int cells) => Mathf.Clamp(Mathf.RoundToInt(length / Spacing / cells), Mathf.CeilToInt((MinPoints - 1) / (float)cells), Mathf.Max(1, (MaxPoints - 1) / cells));
 
         // The tarp as the game's cloth roofs are made: a Unity Cloth with the small Dhow roof's settings and gravity, driven by
         // the game's WindClothSimple (on a ship her apparent wind, wind minus her speed; on land the plain wind), its free points
@@ -3418,13 +3721,13 @@ namespace EconomyOverhaul
             var root = new GameObject("canvas tarp"); root.transform.SetParent(parent, false);
             // In the place of a tarp it replaces (a world shift moves a land tarp itself, not the shifting world).
             if (placedLike) { root.transform.localPosition = placedLike.localPosition; root.transform.localRotation = placedLike.localRotation; }
-            var tarp = root.AddComponent<Tarp>(); tarp.onShip = onShip; tarp.corners = corners; tarp.turns = turns;
+            var tarp = root.AddComponent<Tarp>(); Tarp.Made.Add(tarp); tarp.onShip = onShip; tarp.corners = corners; tarp.turns = turns;
             tarp.startHealth = Mathf.Clamp(float.IsNaN(health) ? FullHealth : health, 0, FullHealth); tarp.startClock = Now; tarp.torn = tarp.startHealth <= 0;
             // Torn: its holes in its own texture (the whole cloth, mapped once over the sheet).
             bool cutout = tarp.torn && FindTornShader();
             // Nailed wood poles under it hold it up (Raise); `leaving`: one about to be removed.
             var layout = Plan(corners, parent.InverseTransformDirection(Vector3.down), PoleLines(root.transform, onShip, corners, leaving)); tarp.layout = layout;
-            if (cutout) for (int k = 0; k < layout.uv.Length; k++) layout.uv[k] = new Vector2((float)(k % (layout.segU + 1)) / layout.segU, (float)(k / (layout.segU + 1)) / layout.segV);
+            if (cutout) { layout.uv = new Vector2[layout.flat.Length]; for (int k = 0; k < layout.uv.Length; k++) layout.uv[k] = new Vector2((layout.flat[k].x - layout.low.x) / layout.lu, (layout.flat[k].y - layout.low.y) / layout.lv); }
             var sheet = new GameObject("canvas"); sheet.transform.SetParent(root.transform, false);
             var mesh = new Mesh { name = "canvas tarp" };
             mesh.vertices = layout.points; mesh.uv = layout.uv; mesh.triangles = layout.triangles; mesh.RecalculateNormals(); mesh.RecalculateBounds();
@@ -3448,8 +3751,8 @@ namespace EconomyOverhaul
                 line.startWidth = line.endWidth = RopeWidth; line.sharedMaterial = RopeMaterial; line.textureMode = LineTextureMode.Tile;
                 var rope = o.AddComponent<RopeEffect>(); rope.attachment = end.transform; rope.ropeWidth = RopeWidth; rope.currentRopeLength = 0;
             }
-            tarp.knots = new GameObject[4];
-            for (int i = 0; i < 4; i++)
+            tarp.knots = new GameObject[corners.Length];
+            for (int i = 0; i < corners.Length; i++)
             {
                 // The game's mooring knot, 0.15 m (user, 2026-10-06). The button's own object keeps the knot's mesh unseen (the
                 // game's outline is made from it) and a child draws it; PackLook points the outline at the child.
@@ -3582,25 +3885,31 @@ namespace EconomyOverhaul
             // A hole's outline (m from its middle) at angle a.
             internal static float Outline((Vector2 at, float r, float p1, float p2, float p3) h, float a) => h.r * (1 + .3f * Mathf.Sin(3 * a + h.p1) + .18f * Mathf.Sin(5 * a + h.p2) + .1f * Mathf.Sin(9 * a + h.p3));
         }
-        internal static Tears PlanTears(float lu, float lv, float[] sides)
+        // Any number of sides (TARP_SPOTS_DRAFT.md): in the outline's box (lu x lv), the holes and rips only inside the outline with
+        // the same clearance from its sides (on a rectangle the same as before), their number by its area.
+        internal static Tears PlanTears(Layout L, float[] sides)
         {
+            float lu = L.lu, lv = L.lv;
             var T = new Tears { rnd = new System.Random(Rules.TearSeed(sides)) }; var rnd = T.rnd; float R() => (float)rnd.NextDouble();
-            float area = lu * lv, grow = Mathf.Clamp(Mathf.Sqrt(area) / 3.5f, 1, 1.5f);
+            float Room(Vector2 p) { var x = p + L.low; return Inside(L.outline, x) ? Edge(L.outline, x) : -1; }   // how far inside (m)
+            float area = Mathf.Abs(Area(L.outline)), grow = Mathf.Clamp(Mathf.Sqrt(area) / 3.5f, 1, 1.5f);
             for (int n = Mathf.Clamp(Mathf.RoundToInt(area / 3), 2, 12); n > 0; n--)
             {
                 float r = Mathf.Clamp((.15f + .15f * R()) * grow, .02f, (Mathf.Min(lu, lv) / 2 - .15f) / 2.1f), clear = 2.1f * r + .15f;
                 float U(float side) => side > 2 * clear ? Mathf.Clamp(side * (.2f + .6f * R()), clear, side - clear) : side / 2;
-                var at = new Vector2(U(lu), U(lv));
-                for (int tries = 1; tries < 8 && T.holes.Any(o => (o.at - at).magnitude < 1.3f * (o.r + r)); tries++) at = new Vector2(U(lu), U(lv));
+                // Clear of the sides as far as the box allows (a narrow tarp's hole in its middle, as before).
+                var at = new Vector2(U(lu), U(lv)); float need = Mathf.Min(clear, Mathf.Min(lu, lv) / 2) - 1e-4f;
+                for (int tries = 1; tries < 8 && (Room(at) < need || T.holes.Any(o => (o.at - at).magnitude < 1.3f * (o.r + r))); tries++) at = new Vector2(U(lu), U(lv));
+                if (Room(at) < need) continue;   // no room inside the outline for it
                 T.holes.Add((at, r, 6.283f * R(), 6.283f * R(), 6.283f * R()));
             }
-            for (int n = rnd.Next(3); n > 0; n--)
+            for (int n = T.holes.Count > 0 ? rnd.Next(3) : 0; n > 0; n--)
             {
                 var p = T.holes[rnd.Next(T.holes.Count)].at; float dir = 6.283f * R(); var line = new List<Vector2> { p };
                 for (int s = 2 + rnd.Next(2); s > 0; s--)
                 {
                     dir += (R() - .5f) * 1.2f; var next = p + new Vector2(Mathf.Cos(dir), Mathf.Sin(dir)) * (.12f + .08f * R());
-                    if (next.x < .25f || next.x > lu - .25f || next.y < .25f || next.y > lv - .25f) break;
+                    if (Room(next) < .25f) break;
                     line.Add(p = next);
                 }
                 if (line.Count > 1) T.rips.Add(line.ToArray());
@@ -3616,6 +3925,7 @@ namespace EconomyOverhaul
         internal const string TornShaderName = "Ciconia Studio/Double Sided/Transparent/Diffuse Bump Cutout";
         internal const float TornPixelsPerMetre = 128; internal const int TornTextureMax = 1024;
         internal static Shader TornShader; private static Material tornKeeper;   // the keeper keeps the shader loaded
+        internal const int RoofQueue = 2000;   // the game's roof cloth's render queue (dhow small cloth paint, measured 2026-10-26)
         internal static bool FindTornShader()
         {
             if (TornShader) return true;
@@ -3625,6 +3935,11 @@ namespace EconomyOverhaul
             // Matte, as cloth (user, 2026-10-06): the shader's defaults shine (glossiness 0.5, white specular 0.2); tarps (whole
             // and torn) are made from this material.
             tornKeeper.SetFloat("_Glossiness", 0); tornKeeper.SetFloat("_SpecularIntensity", 0); tornKeeper.SetColor("_SpecColor", Color.black);
+            // Drawn with the game's opaque things, as its roof cloth is (queue 2000), not at the shader's own 2450: a ship's bow
+            // mask ("mask_splash", shader Masked/Mask, queue 2010, depth only; it keeps spray out of her bow) hid every part of a
+            // tarp drawn after it and hanging below its top, a hole showing her deck (the user's report, 2026-10-26, the medi
+            // small; run tentandplank_runs/holes-8; CANVAS.md, "Cloth").
+            tornKeeper.renderQueue = RoofQueue;
             Plugin.Log?.LogInfo("Canvas: torn tarps show their holes with " + TornShaderName + ".");
             return true;
         }
@@ -3715,7 +4030,7 @@ namespace EconomyOverhaul
             finally { RenderTexture.active = was; RenderTexture.ReleaseTemporary(rt); UnityEngine.Object.Destroy(read); }
             var px = new Color32[w * h];
             for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { var c = turned ? strip[x * bw + y] : strip[y * w + x]; c.a = 255; px[y * w + x] = c; }
-            var T = PlanTears(lu, lv, sides); var rnd = T.rnd; float R() => (float)rnd.NextDouble();
+            var T = PlanTears(L, sides); var rnd = T.rnd; float R() => (float)rnd.NextDouble();
             float mx = lu / w, my = lv / h; int salt = rnd.Next();
             // A pixel's own grain (0-1), from its place and the tarp's seed.
             float Grain(int x, int y) { unchecked { uint k = (uint)(x * 73856093 ^ y * 19349663 ^ salt); k ^= k >> 13; k *= 0x5bd1e995; k ^= k >> 15; return (k & 0xffffff) / 16777216f; } }
@@ -3760,10 +4075,11 @@ namespace EconomyOverhaul
             }
             for (int n = rnd.Next(4); n > 0; n--)
             {
-                // A small nick at an edge (2-4 cm), away from the corners.
-                int side = rnd.Next(4); float length = side < 2 ? lu : lv, along = .2f + (length - .4f) * R(), r = .02f + .02f * R();
+                // A small nick at a side (2-4 cm), away from its spots.
+                int side = rnd.Next(L.outline.Length); Vector2 a = L.outline[side] - L.low, ab = L.outline[(side + 1) % L.outline.Length] - L.outline[side];
+                float length = ab.magnitude, along = .2f + (length - .4f) * R(), r = .02f + .02f * R();
                 if (length < .6f) continue;
-                var c = side == 0 ? new Vector2(along, 0) : side == 1 ? new Vector2(along, lv) : side == 2 ? new Vector2(0, along) : new Vector2(lu, along);
+                var c = a + ab / length * along;
                 foreach (var (x, y, p) in Box(c - Vector2.one * r * 1.2f, c + Vector2.one * r * 1.2f)) if ((p - c).magnitude < r * (.8f + .4f * Grain(x, y))) px[y * w + x].a = 0;
             }
             tex.SetPixels32(px); tex.Apply(true);
@@ -3998,8 +4314,9 @@ namespace EconomyOverhaul
             // Also the tarps rebuilt after a load under a ship the game had already switched off far away
             // (BoatHorizonPerformanceSwitcher deactivates her): no Awake yet, so not in Tarp.All, and once dropped from this
             // list they were lost at the next save (Claude's fix, 2026-10-17). Only inactive ones: a tarp just replaced or untied
-            // is still active until the frame ends.
-            var tarps = Tarp.All.Concat(Resources.FindObjectsOfTypeAll<Tarp>().Where(x => x && x.gameObject.scene.IsValid() && !x.gameObject.activeInHierarchy)).Where(x => x).Distinct();
+            // is still active until the frame ends. Found in Tarp.Made, every tarp built (the destroyed ones dropped here).
+            Tarp.Made.RemoveAll(x => !x);
+            var tarps = Tarp.All.Concat(Tarp.Made.Where(x => x.gameObject.scene.IsValid() && !x.gameObject.activeInHierarchy)).Where(x => x).Distinct();
             foreach (var t in tarps)
             {
                 var parent = t ? t.transform.parent : null; if (!parent || t.corners == null) continue;
@@ -4021,8 +4338,10 @@ namespace EconomyOverhaul
         // The nearest T on t or above it, switched off or not (GetComponentInParent skips objects switched off, as the game
         // switches off ships far away).
         internal static T Up<T>(Transform t) where T : Component { for (; t; t = t.parent) { var c = t.GetComponent<T>(); if (c) return c; } return null; }
-        internal static bool ValidRecord(TarpState s) => s != null && s.ship >= -1 && s.corners != null && s.corners.Length == 12 && s.turns != null && s.turns.Length == 16 &&
-            s.corners.Concat(s.turns).Concat(new[] { s.wear }).All(x => !float.IsNaN(x) && !float.IsInfinity(x));
+        // A record of 3 spots or more (four in `tarps`, as before; any other number in `otherTarps`, which an older mod skips).
+        internal static bool ValidRecord(TarpState s) => s != null && s.ship >= -1 && s.corners != null && s.corners.Length >= 9 && s.corners.Length % 3 == 0 &&
+            s.turns != null && s.turns.Length == s.corners.Length / 3 * 4 && s.corners.Concat(s.turns).Concat(new[] { s.wear }).All(x => !float.IsNaN(x) && !float.IsInfinity(x));
+        internal static bool FourSpots(TarpState s) => s != null && s.corners != null && s.corners.Length == 12;
         // Her boarding frame: the parent of her boarding trigger that names her walk copy, the player-sized one first.
         internal static Transform FrameOf(PurchasableBoat ship)
         {
@@ -4042,7 +4361,7 @@ namespace EconomyOverhaul
         // is dropped (it leaves the save at the next save).
         internal static void Loaded()
         {
-            var saved = World.State.tarps; if (saved == null || saved.Count == 0 || !Plugin.Instance) return;
+            var saved = (World.State.tarps ?? new List<TarpState>()).Concat(World.State.otherTarps ?? new List<TarpState>()).ToList(); if (saved.Count == 0 || !Plugin.Instance) return;
             waiting = saved.ToList(); Plugin.Instance.StartCoroutine(Rebuild(waiting));
         }
         private static System.Collections.IEnumerator Rebuild(List<TarpState> saved)
@@ -4052,8 +4371,9 @@ namespace EconomyOverhaul
             if (waiting != saved) yield break;   // another load or a new game meanwhile
             foreach (var s in saved)
             {
-                var at = Enumerable.Range(0, 4).Select(i => new Vector3(s.corners[3 * i], s.corners[3 * i + 1], s.corners[3 * i + 2])).ToArray();
-                var turn = Enumerable.Range(0, 4).Select(i => new Quaternion(s.turns[4 * i], s.turns[4 * i + 1], s.turns[4 * i + 2], s.turns[4 * i + 3])).ToArray();
+                int spots = s.corners.Length / 3;
+                var at = Enumerable.Range(0, spots).Select(i => new Vector3(s.corners[3 * i], s.corners[3 * i + 1], s.corners[3 * i + 2])).ToArray();
+                var turn = Enumerable.Range(0, spots).Select(i => new Quaternion(s.turns[4 * i], s.turns[4 * i + 1], s.turns[4 * i + 2], s.turns[4 * i + 3])).ToArray();
                 float health = FullHealth - Mathf.Clamp(s.wear, 0, FullHealth);   // a record without wear reads as new
                 try
                 {
@@ -4159,7 +4479,8 @@ namespace EconomyOverhaul
                 return ropeMaterial ? ropeMaterial : ClothMaterial;
             }
         }
-        internal static float[] Sides(Vector3[] p) { var o = Ordered(p); return Enumerable.Range(0, 4).Select(i => Vector3.Distance(o[i], o[(i + 1) % 4])).ToArray(); }
+        // The sides of an outline in its order (a tarp's spots are kept in that order).
+        internal static float[] Sides(Vector3[] o) => Enumerable.Range(0, o.Length).Select(i => Vector3.Distance(o[i], o[(i + 1) % o.Length])).ToArray();
         internal static void Cancel(bool notify)
         {
             bool any = Pending.Count > 0;
@@ -4179,6 +4500,10 @@ namespace EconomyOverhaul
             if (!HoldingPack) { ShowGhost(null); return; }
             // On a knot R repairs rather than ties: no ghost of a corner there.
             if (PointedKnot(pointer)) { ShowGhost(null); return; }
+            // E ties the waiting spots (the user, 2026-10-26: "player press E or F to confirm"; then F dropped, "which button will drop
+            // canvas pack? drop that one as confirmation button": F is the game's own pick-up key, which lets go of the pack).
+            if (Pending.Count > 0 && PendingPack == pack && GameState.playing && !GameState.inCursorMenu && Input.GetKeyDown(KeyCode.E))
+            { var notice = Confirm(pack); if (notice != null) Loans.Notify(notice); if (!pack) { ShowGhost(null); return; } }
             Aboard(out var frame, out var walk);
             ShowGhost(Find(new Ray(pointer.transform.position, pointer.transform.forward), frame, walk, pack, out _));
         }
@@ -4271,6 +4596,9 @@ namespace EconomyOverhaul
     internal sealed class Tarp : MonoBehaviour
     {
         internal static readonly List<Tarp> All = new List<Tarp>();
+        // Every tarp Tarps.Build made, also one under a ship switched off far away that never woke (not in All, and no OnDestroy
+        // when it goes): Records reads it instead of searching every loaded object (3 ms a search, twice a save; SAVE_TRIM_DRAFT.md).
+        internal static readonly List<Tarp> Made = new List<Tarp>();
         internal bool onShip; internal Vector3[] corners; internal Quaternion[] turns; internal Tarps.Layout layout; internal Cloth cloth; internal GameObject[] knots;
         // Wear: its health when tied (or loaded) and the game's clock then; torn at 0. Worked out from the clock, so a tarp on a
         // ship switched off far away wears too (it tears once she is back).
@@ -4384,8 +4712,9 @@ namespace EconomyOverhaul
         }
     }
 
-    // A tied tarp: its ship's save index (Pledges.Index) or -1 on land, and its four corners in order (x, y, z each) with their
-    // knots' turns (x, y, z, w each): in the ship's boarding frame, or real world positions and world turns on land.
+    // A tied tarp: its ship's save index (Pledges.Index) or -1 on land, and its tie spots in the outline's order (x, y, z each; four
+    // until 2026-10-26, 3 or more since) with their knots' turns (x, y, z, w each): in the ship's boarding frame, or real world
+    // positions and world turns on land.
     [Serializable] public sealed class TarpState
     {
         public int ship = -1;
