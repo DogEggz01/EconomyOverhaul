@@ -300,9 +300,10 @@
 - Canvas pack now sold at every vendor that also sell oakum
 - When holding the pack, you can aim at ship's fixed surface and line(shroud/stay), or any item you hammered on board, it will show green shadow as tying spot.
 - Press R to set the tying spot of the tarp(minimum 3), then press E to make the tarp.
-  - If you misclick, drop the pack will reset the spots.
-  - All tying spots need to be either on land or on ship.
-  - If you unnailed the item that is tied to tarp, it will drop and goes back to canvas pack.
+- Order of assigning spot matter, rope will be run through according to your order, this is made so you can make irregular shape.
+- If you misclick, drop the pack will reset the spots.
+- All tying spots need to be either on land or on ship.
+- If you unnailed the item that is tied to tarp, it will drop and goes back to canvas pack.
 - To take off the tarp, go to one of the corner and press R. You will get the canvas pack back.
 - Tarp will act like full cover, protecting it from rain, but also prevent it from drying. Partial cover/drying work like before.
 - Tarp have 10 in game days lifespan, it will become darker overtime, on 10th day, it will be torn and stop provide cover.
