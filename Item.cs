@@ -22,6 +22,8 @@ namespace EconomyOverhaul
             double planks = boatPrice > 0 && lumberValue > 0 ? boatPrice * 3.5 * .01 * capacity * .1 / (lumberValue / 128) : capacity / 120;
             return double.IsNaN(planks) || planks < 1.5 ? 1 : (int)Math.Min(1000000, Math.Round(planks, MidpointRounding.AwayFromZero));
         }
+        // The setting "Planks needed: Fixed 0.5% per plank" (the user, 2026-10-27): every ship, 2 planks for 1%.
+        public const int FixedPlanksPerPercent = 2;
         // A caulked hull halves plank hammering: its oakum covers 1% of the hull's capacity, or all of the remaining damage
         // when less than 1% is left (oakum never exceeds damage x capacity). Vanilla oakum cannot fill the last 0.01, so
         // that shortfall is tolerated.
@@ -291,7 +293,8 @@ namespace EconomyOverhaul
     internal static class WoodPlanks
     {
         internal const int BundleIndex = 640, PlankIndex = 641, LumberIndex = 217, PaintingIndex = 120, LumberGood = 47, KiciaScene = 27;
-        internal const float PlankSeconds = 20, SwingSpeed = 275;   // vanilla nailing swings at 550 degrees per second
+        internal const float SwingSpeed = 275;   // vanilla nailing swings at 550 degrees per second
+        internal static float PlankSeconds => Settings.HammerSeconds;   // uncaulked; 20 until 2026-10-27, now the user's setting
         internal const float BundleLumber = 1f / 16;   // a bundle holds 1/16 of a lumber's wood
         internal const float SurfaceTolerance = .01f;   // a hull plank's back face lies on the boat within 1 cm
         // Plank looks: 0-7 are the halves of the bundle's 4 boards, 8-23 the pieces of the lumber's top layer
@@ -732,6 +735,7 @@ namespace EconomyOverhaul
         }
         internal static int PlanksPerPercent(BoatDamage damage)
         {
+            if (Settings.FixedPlanks) return Rules.FixedPlanksPerPercent;
             var boat = damage.GetComponent<PurchasableBoat>();
             return Rules.PlanksPerPercent(boat ? boat.price : 0, damage.waterUnitsCapacity, LumberValue);
         }
@@ -757,7 +761,7 @@ namespace EconomyOverhaul
             job.frame = Time.frameCount;
             return false;
         }
-        // OnAltHeld: 20 s per plank (10 s when caulked); each finished plank restores 1/N of 1% hull.
+        // OnAltHeld: the setting's seconds per plank (half when caulked; 0 at once); each finished plank restores 1/N of 1% hull.
         internal static bool HammerHeld(ShipItemHammer hammer)
         {
             if (job == null || job.hammer != hammer) return true;
@@ -766,7 +770,8 @@ namespace EconomyOverhaul
             job.frame = Time.frameCount;
             float capacity = Mathf.Max(0, hull.waterUnitsCapacity);
             bool caulked = Rules.Caulked(hull.oakum, hull.hullDamage, capacity);
-            float done = Progress(job.plank) + Time.deltaTime / (caulked ? PlankSeconds / 2 : PlankSeconds);
+            float seconds = caulked ? PlankSeconds / 2 : PlankSeconds;
+            float done = seconds > 0 ? Progress(job.plank) + Time.deltaTime / seconds : 1;
             // The native nailing swing at half speed: animation only.
             if (hammer.heldRotationOffset < -95f) { job.back = true; if (UISoundPlayer.instance) UISoundPlayer.instance.PlayUISound(UISounds.winchClick, 1f, .7f); }
             if (hammer.heldRotationOffset > -35f) job.back = false;
@@ -3801,7 +3806,7 @@ namespace EconomyOverhaul
             var body = pole.itemRigidbodyC.transform;
             if (corners != null)
             {
-                var colliders = body.GetComponentsInChildren<Collider>(true).Where(x => x && !x.isTrigger).ToArray();
+                var colliders = body.GetComponentsInChildren<Collider>(true).Where(Solid).ToArray();
                 foreach (var k in corners)
                 {
                     var p = root.TransformPoint(k); if (onShip) p = walk.TransformPoint(frame.InverseTransformPoint(p));
@@ -4160,13 +4165,20 @@ namespace EconomyOverhaul
             if (health > 0 && Plugin.Instance) Plugin.Instance.StartCoroutine(Give(at, turn, frame, hand ? pointer : null, health));
         }
         // Un-nailing an item a corner is tied to unties that tarp (user, 2026-10-10): its pack drops under that corner, as a
-        // click on a knot does (a torn tarp gives none). "Tied to it": the knot within 5 cm of the item's physics copy (on her
-        // walk copy), found from geometry, so it holds after a load too. Corners still waiting on it are cleared.
-        internal const float OnItem = .05f;
+        // click on a knot does (a torn tarp gives none). "Tied to it" (TiedTo): the item's physics copy (on her walk copy) lies
+        // just behind the knot, found from geometry, so it holds after a load too. Corners still waiting on it are cleared.
+        internal const float OnItem = .05f, Behind = .01f, OnEdge = .003f;
+        // A knot faces into the part it was tied to (Find turns it so, and its turn is saved), so that part lies right behind it:
+        // a ray from 5 cm in front of the knot to 1 cm past it meets the collider. A corner tied to the deck beside the item faces
+        // into the deck and misses it (the user, 2026-10-27: "i want to make closed by unlock never drop the tarp"); 1 cm, not
+        // more, so a knot on a thin plank lying on the item misses the item under the plank. Or the knot within 3 mm of it: one
+        // tied on the item's edge, nudged off it by a load.
+        private static bool TiedTo(Collider c, Vector3 knot, Vector3 facing) =>
+            c.Raycast(new Ray(knot - facing * OnItem, facing), out _, OnItem + Behind) || (Closest(c, knot) - knot).sqrMagnitude <= OnEdge * OnEdge;
         internal static int UntieFrom(ShipItem item)
         {
             if (!item || !item.itemRigidbodyC) return 0;
-            var colliders = item.itemRigidbodyC.GetComponentsInChildren<Collider>(true).Where(c => c && !c.isTrigger).ToArray();
+            var colliders = item.itemRigidbodyC.GetComponentsInChildren<Collider>(true).Where(Solid).ToArray();
             if (colliders.Length == 0) return 0;
             if (Pending.Any(c => c.part && colliders.Contains(c.part))) Cancel(true);
             int untied = 0;
@@ -4179,14 +4191,20 @@ namespace EconomyOverhaul
                 for (int i = 0; i < tarp.knots.Length; i++)
                 {
                     if (!tarp.knots[i]) continue;
-                    var at = tarp.knots[i].transform.position; var p = tarp.onShip ? walk.TransformPoint(frame.InverseTransformPoint(at)) : at;
-                    if (!colliders.Any(c => (Closest(c, p) - p).sqrMagnitude <= OnItem * OnItem)) continue;
+                    var knot = tarp.knots[i].transform;
+                    var p = tarp.onShip ? walk.TransformPoint(frame.InverseTransformPoint(knot.position)) : knot.position;
+                    var facing = tarp.onShip ? walk.TransformDirection(frame.InverseTransformDirection(knot.forward)) : knot.forward;
+                    if (!colliders.Any(c => TiedTo(c, p, facing))) continue;
                     Plugin.Log?.LogInfo("Canvas tarp untied: " + item.name + " was un-nailed or removed under corner " + i + ".");
                     Untie(tarp, i, null, item); untied++; break;
                 }
             }
             return untied;
         }
+        // A collider with a shape the game can measure: on, on an active object, solid, and a mesh collider with a mesh. One without
+        // a shape answers ClosestPoint with the point itself, so it would touch every knot: Kemy's Furniture's desks, table, divider and
+        // shelf carry a MeshCollider with no mesh, which the game copies onto their physics copies (an un-nailed desk untied every tarp).
+        internal static bool Solid(Collider c) => c && c.enabled && c.gameObject.activeInHierarchy && !c.isTrigger && !(c is MeshCollider m && !m.sharedMesh);
         // The game answers ClosestPoint only for primitives and convex meshes; a concave mesh uses its bounds.
         private static Vector3 Closest(Collider c, Vector3 p) => c is MeshCollider m && !m.convex ? c.bounds.ClosestPoint(p) : c.ClosestPoint(p);
         // The deck or ground under a corner knot, found from just off the part it is tied to (the knot faces into it).

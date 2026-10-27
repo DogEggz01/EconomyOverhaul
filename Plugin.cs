@@ -40,7 +40,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "1.1.1";
+        public const string Version = "1.1.2";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -385,6 +385,20 @@ namespace EconomyOverhaul
         internal static bool CoverHintEnabled => CoverHint?.Value ?? false;
         internal static bool CargoDamageHintEnabled => CargoDamageHint?.Value ?? true;
         internal static ConfigEntry<KeyboardShortcut> BraceKey;   // a shortcut: the configurator sets it by a key press (the user, 2026-10-13)
+        // Hull repair with wood planks (the user, 2026-10-27): "Hammering time: a slider ... set time to 0-20s, 1s per step, this is
+        // uncaulked time" (a caulked hull half, as before), "default still 20s"; "Plank needed: 2 buttons, 1 is current (name Fixing fee
+        // equivalent), another is Fixed 0.5% per plank" (the caulking rules the same in both).
+        internal enum PlankCount { FeeEquivalent, FixedHalfPercent }
+        internal static ConfigEntry<int> HammerTime;
+        internal static ConfigEntry<PlankCount> PlanksNeeded;
+        internal static float HammerSeconds => HammerTime?.Value ?? 20;
+        internal static bool FixedPlanks => PlanksNeeded != null && PlanksNeeded.Value == PlankCount.FixedHalfPercent;
+        private static readonly string[] PlankCountNames = { "Fixing fee equivalent", "Fixed 0.5% per plank" };
+        private static void PlankCountButtons(ConfigEntryBase entry)
+        {
+            int was = (int)PlanksNeeded.Value, now = GUILayout.Toolbar(was, PlankCountNames, GUILayout.ExpandWidth(true));
+            if (now != was) PlanksNeeded.Value = (PlankCount)now;
+        }
         internal static bool WaterEnabled => WaterDamage?.Value ?? true;
         internal static bool TarpWearing => TarpWear?.Value ?? true;
         private static bool tarpWearWas = true;   // the option's value before its last change
@@ -417,6 +431,12 @@ namespace EconomyOverhaul
             FragileCargo.SettingChanged += (s,e) => { Missions.DropFragile(); foreach(var c in CargoCondition.Active) { c.RefreshHint(); c.RefreshAppearance(); } };
             BraceKey = config.Bind("Wood pole", "Brace key", new KeyboardShortcut(KeyCode.H),
                 "While holding a wood pole, this key braces it (held at your side, pointing forward: with the pick-up key held (the left mouse by default) it pushes boats, docks or the sea bed) or holds it loosely again.");
+            HammerTime = config.Bind("Wood plank", "Hammering time", 20, new ConfigDescription(
+                "Seconds of hammering for one wood plank to repair a damaged hull (0: at once). Half this when the hull is caulked with oakum.",
+                new AcceptableValueRange<int>(0, 20)));
+            PlanksNeeded = config.Bind("Wood plank", "Planks needed", PlankCount.FeeEquivalent, new ConfigDescription(
+                "Fixing fee equivalent: the planks a ship needs for 1% of its hull cost about what the shipyard charges to repair it (more planks for a bigger, dearer ship). Fixed 0.5% per plank: every plank repairs 0.5% of any ship's hull (2 planks for 1%).",
+                null, new ConfigurationManagerAttributes { CustomDrawer = PlankCountButtons }));
             // "Braced pole hand force" and "Braced pole collision" were removed (the user, 2026-10-13: a braced pole has no collision);
             // a config file from 0.9.5 keeps their lines, unused.
             TarpWear = config.Bind("Canvas", "Tarp wearing", true,
