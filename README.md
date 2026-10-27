@@ -13,7 +13,8 @@
   - Tradebook QoL change: allow bulk trading, loading into/selling from cart service
   - Ship renting, Cargo loaning and Ship/house loaning system, replace the not-working vanilla reputation price discount.
   - Water damage and Fragile goods system, provide more decision for cargo placement and shipment.
-  - Wood plank for repairing boat on voyage, canvas tarp for covering goods from rain, wood poles for tying canvas or fending your ship to help you deal with water damage and fragile goods.
+  - Canvas tarp for covering goods from rain, wood poles for tying canvas or fending your ship to help you deal with water damage and fragile goods.
+  - Wood plank for repairing boat on voyage, Wood pallet to help you level your cargo from bilge water and for easier cargo storage
   - Reputation plays a bigger role, it will affect price availability, interest rate and credit limit and currency exchange rate.
   - Currency exchange rate now affect by actual import/export between region, instead of random flucutation. Weaker currency need to pay more to buy same goods.
 ## Install and uninstall
