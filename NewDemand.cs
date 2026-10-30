@@ -171,14 +171,14 @@ namespace EconomyOverhaul
         internal static Action<BoatState, int> OnDepart;
         // The event a trader that can't serve from here sails to fetch: one it knows whose producing port it can reach from here and
         // whose demanding port it can reach from there, with more need than the informed holds already heading to that producer
-        // can carry; the most needed first. canSail(from, to): the trader's own route rule.
-        internal static DemandEvent Fetch(BoatState b, Func<int, int, bool> canSail)
+        // can carry; the most needed first. canSail(event, from, to): the trader's own route rule for a trip toward that event.
+        internal static DemandEvent Fetch(BoatState b, Func<DemandEvent, int, int, bool> canSail)
         {
             if (b.knownEvents == null || b.knownEvents.Count == 0) return null;
             DemandEvent best = null; int most = 0;
             foreach (var e in Active)
             {
-                if (!b.knownEvents.Contains(e.id) || e.producer == b.origin || !canSail(b.origin, e.producer) || !canSail(e.producer, e.demand)) continue;
+                if (!b.knownEvents.Contains(e.id) || e.producer == b.origin || !canSail(e, b.origin, e.producer) || !canSail(e, e.producer, e.demand)) continue;
                 var m = World.Market(e.demand); if (!m) continue;
                 int need = Rules.DemandNeed(m.currentSupply[e.good], InFlight(b, e.demand, e.good), Economy.Cap(e.demand));
                 int heading = World.State.fleet.Where(o => o != b && o.destination == e.producer && o.knownEvents != null && o.knownEvents.Contains(e.id)).Sum(o => o.units);
@@ -187,14 +187,14 @@ namespace EconomyOverhaul
             return best;
         }
         // The event an informed trader at this port serves first: one whose good it can buy here and whose demanding port it
-        // may sail to, with need left; the most needed first.
-        internal static DemandEvent Serve(BoatState b, IslandMarket origin, Func<int, bool> route, out int need)
+        // may sail to, with need left; the most needed first. route(event): whether it may sail from here to that event's demanding port.
+        internal static DemandEvent Serve(BoatState b, IslandMarket origin, Func<DemandEvent, bool> route, out int need)
         {
             need = 0; DemandEvent best = null;
             if (b.knownEvents == null || b.knownEvents.Count == 0) return null;
             foreach (var e in Active)
             {
-                if (!b.knownEvents.Contains(e.id) || e.demand == b.origin || !origin.HasGood(e.good) || !route(e.demand)) continue;
+                if (!b.knownEvents.Contains(e.id) || e.demand == b.origin || !origin.HasGood(e.good) || !route(e)) continue;
                 var m = World.Market(e.demand); if (!m) continue;
                 int n = Rules.DemandNeed(m.currentSupply[e.good], InFlight(b, e.demand, e.good), Economy.Cap(e.demand));
                 if (n > need) { need = n; best = e; }

@@ -1516,6 +1516,8 @@ namespace EconomyOverhaul
         private static void Price(ref int __result)
         {
             if (sale != null && sale.Item) __result = Rules.CrewSalePrice(__result, CargoCondition.Factor(sale.Item));
+            // Its own sale doesn't ask the market's IsGoodValid: a barrel out of the trade (opened ruined) fetches a shopkeeper's 25.
+            if (sale != null && sale.Item && CargoCondition.OutOfTrade(sale.Item)) __result = Rules.OpenedBarrelPrice;
         }
         private static void Sold(bool __result)
         {

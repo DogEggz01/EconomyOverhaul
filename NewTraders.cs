@@ -56,7 +56,10 @@ namespace EconomyOverhaul
         public static bool RumorAccepted(int drink) => drink >= 2 && drink <= 13 && drink != 9;
         public static bool RumorBoatType(int drink) => drink >= 2 && drink <= 8;
         public static bool RumorLoadSize(int drink) => drink >= 2 && drink <= 4;
-        public static bool ValidRoute(string group, int origin, int destination, int home, int originRegion, int destinationRegion, double distance)
+        // forEvent: a trip toward a dynamic demand event the trader knows (to its producer, or with its good to its demanding port);
+        // eventRegion: the region both of that event's ports are in, -1 when they are in two regions.
+        public static bool ValidRoute(string group, int origin, int destination, int home, int originRegion, int destinationRegion, double distance,
+            bool forEvent = false, int eventRegion = -1)
         {
             if (origin == destination || destination == 7 || destination == 33) return false;
             if (group == "chronos") return (origin == 21 && destination == home) || (origin == home && destination == 21);
@@ -68,6 +71,9 @@ namespace EconomyOverhaul
             // This also filters the empty nearest-port fallback before it is chosen.
             if (group == "heavy")
                 return origin == 19 || origin == 26 || origin == 28 || destination == 19 || destination == 26 || destination == 28;
+            // An event's trips at any range (the user, 2026-10-30, EVENT_REACH_WATER_DRAFT.md, "E1: yes", "E2: yes"): an independent
+            // anywhere; a regional only for an event whose two ports are both in its home region, to a port there (inside it too).
+            if (forEvent && (group == "independent" || group == "regional" && eventRegion == home && destinationRegion == home)) return true;
             if (group == "regional" || group == "independent")
                 return distance > 140 && (group == "independent" || (originRegion == home) != (destinationRegion == home));
             if (group == "shuttle") return (origin >= 22 && origin <= 25) != (destination >= 22 && destination <= 25);
@@ -135,9 +141,10 @@ namespace EconomyOverhaul
             new FleetDefinition("independent", -1, 9, 70, 10000, 4.12f, 12),
             new FleetDefinition("shuttle", 1, 1, 40, 5000, 3.09f, 6.5f),
             new FleetDefinition("happy", 2, 1, 40, 5000, 3.34f, 7, startPort: 20),
-            new FleetDefinition("chronos", 0, 1, 130, 13000, 4.37f, 24),
-            new FleetDefinition("chronos", 9, 1, 130, 13000, 4.37f, 24),
-            new FleetDefinition("chronos", 15, 1, 130, 13000, 4.37f, 24)
+            // Chronos traders wait 48 h since 2026-10-30 (the user: "Change chronos trader waiting time to 48 hours"; 24 before).
+            new FleetDefinition("chronos", 0, 1, 130, 13000, 4.37f, 48),
+            new FleetDefinition("chronos", 9, 1, 130, 13000, 4.37f, 48),
+            new FleetDefinition("chronos", 15, 1, 130, 13000, 4.37f, 48)
         };
         internal static int Total => Current.Sum(d => d.Count);
         internal static FleetDefinition For(BoatState b) => Current.First(d => d.Matches(b));
@@ -544,26 +551,31 @@ namespace EconomyOverhaul
             var factors = PlanningCurrency();
             bool knowsLast = Rules.KnowsLastDeparture(UnityEngine.Random.value);
             Demand.Learn(b, b.origin); Demand.LearnFromReports(b);
-            // A trip this trader may sail: the destination in its network, its route rule from that origin.
-            bool CanSail(int from, int to) => from != to && LivePort(from) && LivePort(to) && World.Market(to) && Supply.Contains(to) && b.network.Contains(to) &&
-                Rules.ValidRoute(b.group, from, to, b.home, (int)LivePort(from).region, (int)LivePort(to).region, Distance(from, to));
-            var serve = Demand.Serve(b, m, p => CanSail(b.origin, p), out int need);
+            // A trip this trader may sail: the destination in its network, its route rule from that origin (for a trip toward an event
+            // it knows, the event's rule: Rules.ValidRoute's forEvent).
+            int EventRegion(DemandEvent e) { var demanding = LivePort(e.demand); var maker = LivePort(e.producer); return demanding && maker && demanding.region == maker.region ? (int)demanding.region : -1; }
+            bool CanSail(int from, int to, DemandEvent e = null) => from != to && LivePort(from) && LivePort(to) && World.Market(to) && Supply.Contains(to) && b.network.Contains(to) &&
+                Rules.ValidRoute(b.group, from, to, b.home, (int)LivePort(from).region, (int)LivePort(to).region, Distance(from, to), e != null, e != null ? EventRegion(e) : -1);
+            var serve = Demand.Serve(b, m, e => CanSail(b.origin, e.demand, e), out int need);
             // Not able to serve from here: an event it knows whose two ports it can both reach sends it to the producer (the user,
             // 2026-10-16), carrying whatever profits on the way.
-            var fetch = serve == null ? Demand.Fetch(b, CanSail) : null;
+            var fetch = serve == null ? Demand.Fetch(b, (e, from, to) => CanSail(from, to, e)) : null;
             Candidate served = null, fetched = null;
             foreach (int p in b.network)
             {
                 var destination = LivePort(p); var destinationMarket = World.Market(p);
                 if (!destination || !destinationMarket || !Supply.Contains(p)) continue;
                 double distance = Distance(b.origin, p);
-                if (!Rules.ValidRoute(b.group, b.origin, p, b.home, (int)m.GetPort().region, (int)destination.region, distance)) continue;
-                if (distance < closestDistance) { closest = p; closestDistance = distance; }
+                // A port the trader may sail to only for the event it serves or fetches for is planned for that event alone: never the
+                // best trade or the closest port otherwise.
+                bool normal = Rules.ValidRoute(b.group, b.origin, p, b.home, (int)m.GetPort().region, (int)destination.region, distance);
+                if (!normal && !(serve != null && p == serve.demand) && !(fetch != null && p == fetch.producer)) continue;
+                if (normal && distance < closestDistance) { closest = p; closestDistance = distance; }
                 bool serving = serve != null && p == serve.demand;
                 var candidate = PlanWithCurrency(b, p, buys, factors, knowsLast, serving ? serve.good : 0, serving ? need : 0);
                 if (serving && candidate.goods.Contains(serve.good)) served = candidate;
                 if (fetch != null && p == fetch.producer) fetched = candidate;
-                if (candidate.cost > 0 && candidate.profit > 0 && (best == null || candidate.profit / candidate.cost > best.profit / best.cost)) best = candidate;
+                if (normal && candidate.cost > 0 && candidate.profit > 0 && (best == null || candidate.profit / candidate.cost > best.profit / best.cost)) best = candidate;
                 yield return null;
             }
             if (served != null) best = served;   // an informed trader serves the dynamic demand event first
