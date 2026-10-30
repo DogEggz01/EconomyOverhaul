@@ -39,6 +39,19 @@ namespace EconomyOverhaul
         // The reputation level a category needs (also the game's due-day tier, Port.GetDueDay), and its factors (gold and
         // reputation revised by the user, 2026-10-15). An old record (None) gets the game's reputation.
         public static int CategoryRep(MissionCategory c) => c == MissionCategory.Industrial ? 1 : c == MissionCategory.Luxury ? 2 : 0;
+        // A good's own gate, over its category's: the dearest Luxury missions later (the user, 2026-10-30, MISSION_GATES_DRAFT.md:
+        // "make silver, marble, blue tobacco, sculptures unlock at rep 3. Gem at rep 4, Gold at rep 5"). Every gate of 2 or more
+        // gets the same due days in the game (Port.GetDueDay), so theirs stay Luxury's ("keep their mission due day same").
+        public static int GoodRep(int good)
+        {
+            switch (good)
+            {
+                case 34: case 41: case 55: case 56: return 3;   // sculptures, blue tobacco, marble, silver
+                case 20: return 4;                               // gems
+                case 22: return 5;                               // gold
+                default: return CategoryRep(Category(good));
+            }
+        }
         public static float CategoryGold(MissionCategory c) =>
             c == MissionCategory.Staple ? 1.1f : c == MissionCategory.ConsumerGoods ? 1.25f : c == MissionCategory.Industrial ? 1.5f : c == MissionCategory.Luxury ? 2 : 1;
         public static float CategoryReputation(MissionCategory c) =>
@@ -461,7 +474,7 @@ namespace EconomyOverhaul
         }
         internal static MissionCategory Category(Mission m) =>
             m?.goodPrefab == null || Postal(m) ? MissionCategory.None : Rules.Category(PrefabsDirectory.ItemToGoodIndex(m.goodPrefab.GetComponent<SaveablePrefab>().prefabIndex));
-        // Each good prefab's reputation gate from its category (the game reads it only for missions: the warehouse fill, the
+        // Each good prefab's reputation gate (Rules.GoodRep: its category's, or its own) (the game reads it only for missions: the warehouse fill, the
         // generation and Port.GetDueDay). Mail (51) is left to the game and Postal Expansion.
         private static PrefabsDirectory gated;   // Economy.Configure runs each frame: write the gates once per directory
         internal static void ApplyRepGates()
@@ -472,7 +485,7 @@ namespace EconomyOverhaul
             {
                 var c = Rules.Category(g); if (c == MissionCategory.None) continue;
                 var item = PrefabsDirectory.instance.GetGood(g); var good = item ? item.GetComponent<Good>() : null;
-                if (good) good.requiredRepLevel = Rules.CategoryRep(c);
+                if (good) good.requiredRepLevel = Rules.GoodRep(g);
             }
         }
         // Whether a mission counts as a world one for capacity (the World tab, distance 140+): an accepted one's record, an offer's tab.

@@ -111,8 +111,9 @@ namespace EconomyOverhaul
     }
     internal static class FleetDefinitions
     {
-        // Speeds are m/s, converted from the approved knots and rounded to two decimals. The small locals 5 knots and the heavy
-        // ones 4.5 since the user's buff of 2026-10-18 (4.5 and 4 before; VISIBLE_TRADERS_DRAFT.md, its last section); a save's
+        // Speeds are m/s, converted from the approved knots and rounded to two decimals. The small locals 5 knots since the
+        // user's buff of 2026-10-18 (4.5 before; VISIBLE_TRADERS_DRAFT.md, its last section), the heavy ones 4 knots again since
+        // 2026-10-30 (the user: "reduce heavy ship weight by 0.5 knots", HEAVY_CARGO_DRAFT.md; 4.5 from 2026-10-18); a save's
         // traders take these speeds and waits when it loads (StateCodec.Read). The medium locals 5.5 knots and 5 h, the Happy Bay
         // trader 6.5 knots and 7 h since the sail plans (the user, 2026-10-19: "Medium local: 5.5 knots", "make wait stay 5 hour",
         // "Happy bay trader: 6.5 knots, wait 7 hour"; 5 knots and 4 h, 6 knots and 6.5 h before; TRADER_RIGS_DRAFT.md).
@@ -124,7 +125,7 @@ namespace EconomyOverhaul
             new FleetDefinition("small", 1, 7, 20, 1000, 2.57f, 2.5f),
             new FleetDefinition("small", 2, 7, 20, 1000, 2.57f, 2.5f),
             new FleetDefinition("small", 1, 2, 20, 1000, 2.57f, 2.5f, ffl: true),
-            new FleetDefinition("heavy", 2, 2, 30, 10000, 2.32f, 24, minimumMass: 220, startPorts: new[] { 19, 28 }),
+            new FleetDefinition("heavy", 2, 2, 30, 10000, 2.06f, 24, minimumMass: 220, startPorts: new[] { 19, 28 }),
             new FleetDefinition("medium", 0, 2, 40, 4000, 2.83f, 5),
             new FleetDefinition("medium", 1, 1, 40, 4000, 2.83f, 5),
             new FleetDefinition("medium", 2, 1, 40, 4000, 2.83f, 5),
