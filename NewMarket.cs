@@ -1579,7 +1579,7 @@ namespace EconomyOverhaul
         {
             var q=BulkTrade.Quote(ui,action,count);button.unclickable=!q.Valid;button.description=q.Breakdown();
             string name=action.ToString()+(count>1?" "+count:"");
-            string label=!q.Valid ? name+" unavailable" : name+" ("+(action==TradeAction.Sell?q.NetPayout:q.Total).ToString("N0")+")";
+            string label=!q.Valid ? (action==TradeAction.Loan&&q.Error==LoanGate.RepReason ? LoanGate.RepButton : name+" unavailable") : name+" ("+(action==TradeAction.Sell?q.NetPayout:q.Total).ToString("N0")+")";
             if(q.Valid&&q.Carrier)label+="\nCart: "+q.CartCharge.ToString("N0")+" "+PlayerGold.GetCurrencyName(q.CartCurrency);
             if(button==loan){loanText.characterSize=loanTextSize*(q.Carrier ? .78f : 1);loanText.text=label;return;}
             var native=(EconomyUIButton)button;native.SetButtonText(label);

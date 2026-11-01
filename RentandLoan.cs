@@ -452,8 +452,11 @@ namespace EconomyOverhaul
         {
             if (Paused) return "Loans paused: " + Days(PauseDays) + " left (a ship sank)";
             var block = Default(region); if (block != null) return "No loans while your " + PlayerGold.GetCurrencyName(block.currency) + " are negative";
-            return Reputations.Level(region) < 1 ? "Requires reputation level 1" : null;
+            return Reputations.Level(region) < 1 ? RepReason : null;
         }
+        // Below reputation 1 the trade book shows these in its place (the user, 2026-11-01, TUTORIAL_UI_DRAFT.md U1): the Loan
+        // button's label, and the line under it (where the interest rate shows from level 1).
+        internal const string RepReason = "Requires reputation level 1", RepButton = "Require reputation 1", RepLine = "Interest repaid when sold cargo";
         // The same, short enough for the ledger tables.
         internal static string Status(int region)
         {
@@ -1799,7 +1802,9 @@ namespace EconomyOverhaul
             var font = Fields.Get<TextMesh>(ui, "textBuyPrice").font;
             loan = BookUI.Button(root.transform, source, font, "Loan", -nativeBuy.center.x, loanY, nativeBuy.size.x, nativeBuy.size.z,
                 () => BulkTrade.Execute(ui, TradeAction.Loan, BulkTrade.Quantity(loan)), new Color(.38f, .8f, 1), out loanText, true);
-            info = BookUI.Text(root.transform, font, "", .449f, .080f, .013f, .24f, TextAnchor.LowerRight); info.lineSpacing = 1.05f;
+            // Right end .42, clear of the Loan plate's left tip as seen from the eye (the user, 2026-11-01). At .449 the tip covered
+            // their ends: the plate stands off the page, so from the eye its tip shows left of where it lies in the page's plane (tut-12).
+            info = BookUI.Text(root.transform, font, "", .42f, .080f, .013f, .24f, TextAnchor.LowerRight); info.lineSpacing = 1.05f;
             warningLabel = BookUI.Text(root.transform, font, "", .205f, .043f, .012f, .20f, TextAnchor.UpperLeft, Color.red);
             warning = BookUI.Text(root.transform, font, "", .205f, .027f, .012f, .20f, TextAnchor.UpperLeft, Color.black);
             walletLabel = BookUI.Text(root.transform, font, "", .205f, .008f, .012f, .20f, TextAnchor.UpperLeft, Color.red);
@@ -1847,8 +1852,8 @@ namespace EconomyOverhaul
             bool can = quote.Valid; string reason = quote.Error;
             int payment = Fx.Currency(m);
             info.text = "Respondentia loan\nCredit: " + BookUI.Credit(Loans.Available(r), payment) + " / " + BookUI.Credit(Loans.Limit(r), payment) + " " + PlayerGold.GetCurrencyName(payment) +
-                "\n" + (can ? "Interest rate: " + (Rules.Interest(Reputations.Level(r)) * 100).ToString("0") + "%" : reason);
-            bankLabel.text = "Bankruptcy (" + BookUI.RegionName(r) + ")";
+                "\n" + (can ? "Interest rate: " + (Rules.Interest(Reputations.Level(r)) * 100).ToString("0") + "%" : reason == LoanGate.RepReason ? LoanGate.RepLine : reason);
+            bankLabel.text = "Declare bankruptcy (" + BookUI.RegionName(r) + ")";
             var rental = Rentals.Current; bool lender = rental != null && Bottomry.On(rental.ship).Any(l => l.region == r);
             // Two lines (three with a rental); while asking, the question and the short form.
             consequence.text = Loans.BankruptcyRefusal(r) ?? (bankrupt.Asking
@@ -1919,7 +1924,7 @@ namespace EconomyOverhaul
             var p = page.transform;
             BuildLeft(p, font, regionFonts, strip, native, "Respondentia", "Bottomry >", () => Turn(true), regionActions, regionPlates,
                 "Available Regional Credit", "Available\ncredit", "Credit\nlimit", creditAvailable, creditLimits, creditStatus);
-            allBankrupt = new BankruptcyPrompt(p, native, font, "Bankruptcy (All regions)", -.065f, -.024f, .33f, .032f, () => -1, Refresh, out _);
+            allBankrupt = new BankruptcyPrompt(p, native, font, "Declare bankruptcy (All regions)", -.065f, -.024f, .33f, .032f, () => -1, Refresh, out _);
             allConsequence = BookUI.Text(p, font, "", -.065f, -.041f, .012f, .36f, TextAnchor.UpperCenter, BookUI.Warning);
             title = BookUI.Text(p, font, "", .235f, .395f, .025f, .35f);
             BookUI.Text(p, font, "Respondentia Loan", .235f, .361f, .025f, .35f);
@@ -2996,4 +3001,245 @@ namespace EconomyOverhaul
             Loans.Notify(RentalYard.Notice); __instance.CancelOrder(); return false;
         }
     }
+
+    // ---- The loan tutorials (the user, 2026-11-01, TUTORIAL_UI_DRAFT.md §4.3 and §5) ----
+    // The trade office's man (the port dude) speaks once ever of each loan, in the shape of the game's QuestDude dialogue (a line, one
+    // reply button, a click shows the next line). QuestDude itself lives only on one far island (level32, the hideout), so the
+    // dialogue is the tavern's own speech UI (its bubble and its reply button, the same parts; tutm-1), copied from the first rumour
+    // NPC that wakes and put over the port dude where the tavern puts it over its NPC, turned to the view as the tavern turns it.
+    // Lines wrapped at QuestDude's 45; a longer line makes the bubble bigger, the font kept (the user's rule for the traders' bubble).
+    // Shown when the player walks into the port dude's own trigger (his 1.5 m sphere; the 4 m one on his animation rig is not it),
+    // gone when the player walks out of it (a tutorial not finished starts again at the next visit). Seen once its last line shows.
+    internal sealed class LoanTutorial : MonoBehaviour
+    {
+        internal enum Kind { None, Respondentia, Bottomry }
+        internal const int WrapWidth = 45;
+        internal static readonly string[][] Lines = {
+            new[] {
+                "Well met, Captain! You have found your footing in these waters, and the Trade Office has taken note. Now that there is trust between us, this house is pleased to extend you Respondentia credit.",
+                "A loan upon your cargo, sir. We grant you a line of credit, and within it you may take goods from our warehouses without paying a gold down. The interest falls due when you sell those goods. To begin, the premium stands at 70%.",
+                "Not to a trader of your connections! Find the better market and the margin will bear it. Think on the turnover: the more you sell, the more you earn. As our trust grows, we shall lower the premium and raise your credit.",
+                "Open the trade book: the Loan is now at your disposal. Your credit and debts stand entered in your log book. Now, shall we draw up your first consignment?" },
+            new[] {
+                "My compliments, Captain! A second ship to your name, I hear: you are rising in the world. Yet a fleet devours coin, and your purse must feel the strain. This house may be of service.",
+                "We offer Bottomry: pledge us your ship as surety, and we lend you twice the ship's value in coin. And should a promising trader like you acquire a property in port, we would gladly take that in mortgage too, on the same terms. Our assessors are the fairest on any coast. The terms are posted at this exchange box.",
+                "At any exchange box in the region that lent it, and not a penny beyond the interest. For your ease you may settle at another region's box, or even from your log book, but a remote settlement carries a fee, dearer by the book. You understand.",
+                "I hope it never comes to that! But each day past due, the interest rises. Ten days past due and we must seize the ship, set its value against the debt, and take what remains from your purse. We would, of course, see you safely conveyed to your other vessel." } };
+        internal static readonly string[][] Replies = {
+            new[] { "Respondentia? Please elaborate.", "70%? This is outrageous!", "Very well. Where may I draw on it?", "Let's take a look" },
+            new[] { "Go on, I am all ears.", "Hmm... and how is the debt repaid?", "And should I default?", "Very well... let us see the terms." } };
+
+        // ---- The tavern's speech UI, taken once ----
+        private static GameObject template; private static Vector3 atPos, atScale; private static Quaternion atTurn;
+        internal static bool HasTemplate => template;
+        internal static void TakeTemplate(TavernRumorsDude dude)
+        {
+            if (template || !dude || !dude.speechUI || !dude.text || !dude.drinkButton || !dude.drinkButton.transform.IsChildOf(dude.speechUI.transform)) return;
+            var holder = new GameObject("EconomyOverhaul tutorial dialogue"); holder.SetActive(false); DontDestroyOnLoad(holder);
+            var su = dude.speechUI.transform; atPos = su.localPosition; atTurn = su.localRotation; atScale = su.localScale;
+            template = Instantiate(dude.speechUI, holder.transform, false); template.name = "loan tutorial speech ui";
+            Plugin.Log?.LogInfo("Loan tutorials: the dialogue taken from the tavern of port " + dude.portIndex + ".");
+        }
+
+        // ---- Which tutorial a port dude gives now ----
+        internal static bool HasBox(PortDude dude) => dude && dude.GetComponentsInChildren<CurrencyExchangeUIButton>(true).Any(b => Fields.Get<object>(b, "function").ToString() == "openUI");
+        internal static Kind Due(PortDude dude)
+        {
+            if (!World.Ready || World.SaveBlocked || Startup.BlocksGameplay || Uninstall.Prepared || !dude) return Kind.None;
+            var port = dude.GetPort(); if (!port) return Kind.None;
+            var s = World.State;
+            if (!s.tutorialRespondentia && Reputations.Level(Reputations.Account(port)) >= 1) return Kind.Respondentia;   // T1
+            if (!s.tutorialBottomry && HasBox(dude) && Pledges.OwnShips().Count() >= 2) return Kind.Bottomry;              // T4, the box only
+            return Kind.None;
+        }
+        // The reach (the user, 2026-11-01: "let player able to trigger it when player is nearby the other side of table", then
+        // "increase the trigger 0.5m more", "don't make expection for smaller dude, all 3.5"): a sphere of 3.5 m at every port dude,
+        // centred as his own, on a child with its own kinematic Rigidbody so its events don't reach PortDude.OnTriggerEnter (his
+        // cargo delivery; a kinematic Rigidbody is on him). The tables' far sides lie 1.5-2.5 m from him (TUTORIAL_UI_DRAFT.md §10).
+        internal const float ReachMetres = 3.5f;
+        internal static void AddReach(PortDude dude)
+        {
+            var own = dude ? dude.GetComponent<SphereCollider>() : null; if (!own || dude.GetComponentInChildren<LoanTutorialReach>(true)) return;
+            var go = new GameObject("loan tutorial reach"); go.layer = dude.gameObject.layer; go.transform.SetParent(dude.transform, false);
+            go.transform.localPosition = own.center;
+            var body = go.AddComponent<Rigidbody>(); body.isKinematic = true; body.useGravity = false;
+            var sphere = go.AddComponent<SphereCollider>(); sphere.isTrigger = true; sphere.radius = ReachMetres / Mathf.Max(go.transform.lossyScale.x, .01f);
+            go.AddComponent<LoanTutorialReach>().dude = dude;
+        }
+        internal static SphereCollider Reach(PortDude dude) { var r = dude ? dude.GetComponentInChildren<LoanTutorialReach>(true) : null; return r ? r.GetComponent<SphereCollider>() : null; }
+        // Whether the player's collider reaches into the tutorial's reach.
+        internal static bool Inside(PortDude dude, Collider other)
+        {
+            var own = Reach(dude); if (!own || !other) return false;
+            var centre = own.transform.TransformPoint(own.center); float radius = own.radius * own.transform.lossyScale.x;
+            return (other.bounds.ClosestPoint(centre) - centre).magnitude <= radius + .05f;
+        }
+        internal static void Entered(PortDude dude, Collider other)
+        {
+            if (!other || !other.CompareTag("Player") || !Inside(dude, other)) return;
+            var kind = Due(dude); if (kind == Kind.None) return;
+            if (!template) { Plugin.Log?.LogInfo("Loan tutorials: " + kind + " due, no tavern dialogue taken yet; shown at a later visit."); return; }
+            var t = dude.GetComponent<LoanTutorial>(); if (!t) t = dude.gameObject.AddComponent<LoanTutorial>(); t.dude = dude;
+            if (t.kind == Kind.None) t.Begin(kind);
+        }
+        internal static void Left(PortDude dude, Collider other)
+        {
+            var t = dude ? dude.GetComponent<LoanTutorial>() : null;
+            if (t && other && other.CompareTag("Player") && !Inside(dude, other)) t.Close();
+        }
+
+        // ---- One port dude's dialogue ----
+        internal PortDude dude; internal Kind kind; internal int line;
+        private GameObject ui; private TextMesh npcText, buttonText; private Transform bubble, bubbleGfx, buttonGfx;
+        private Vector3 bubbleAt, bubbleScale, buttonScale; private float baseW, baseH, margin, buttonW;
+        internal bool Showing => ui && ui.activeSelf && kind != Kind.None;
+        internal string Text => npcText ? npcText.text : null;
+        internal string Reply => buttonText ? buttonText.text : null;
+        private void Build()
+        {
+            if (ui) return;
+            ui = Instantiate(template, transform, false); ui.name = "loan tutorial";
+            ui.transform.localPosition = atPos; ui.transform.localRotation = atTurn; ui.transform.localScale = atScale;
+            var hook = ui.GetComponentInChildren<GPButtonInterface>(true);
+            buttonGfx = hook ? hook.transform : null;
+            var texts = ui.GetComponentsInChildren<TextMesh>(true);
+            buttonText = buttonGfx ? texts.FirstOrDefault(t => t.transform.parent == buttonGfx.parent) : null;
+            npcText = texts.FirstOrDefault(t => t != buttonText);
+            bubble = npcText ? npcText.transform.parent : null;
+            bubbleGfx = bubble ? bubble.GetComponentsInChildren<MeshRenderer>(true).Where(r => !r.GetComponent<TextMesh>()).Select(r => r.transform).FirstOrDefault() : null;
+            if (hook) { hook.gameObject.AddComponent<LoanTutorialButton>().owner = this; hook.onActivateInterface = hook.gameObject; }
+            if (buttonGfx) buttonGfx.parent.gameObject.SetActive(true);
+            if (bubble) bubbleAt = bubble.localPosition;
+            if (bubbleGfx) { bubbleScale = bubbleGfx.localScale; baseW = Across(bubbleGfx, Vector3.right) * 2; baseH = Across(bubbleGfx, Vector3.up) * 2; }
+            if (buttonGfx) { buttonScale = buttonGfx.localScale; buttonW = Across(buttonGfx, Vector3.right) * 2; }
+            // the bubble's room above and below its text, from the tavern's own two rows
+            margin = npcText ? Mathf.Max(.05f, baseH - Size(npcText, npcText.text).y) : .2f;
+        }
+        // A part's half size along one of its own axes, in the speech UI's units (the bubble mesh is 2 x 2).
+        private float Across(Transform part, Vector3 axis) => ui.transform.InverseTransformVector(part.TransformVector(axis)).magnitude;
+        // A text's width and height in the speech UI's units: the font's own advances and line height at its size, a TextMesh
+        // drawing characterSize / 10 of a unit a font pixel (TraderBubble.TextMetres).
+        private Vector2 Size(TextMesh tm, string text)
+        {
+            var font = tm.font; if (!font || string.IsNullOrEmpty(text)) return Vector2.zero;
+            int size = tm.fontSize > 0 ? tm.fontSize : font.fontSize;
+            font.RequestCharactersInTexture(text, size, tm.fontStyle);
+            float widest = 0; var rows = text.Split('\n');
+            foreach (var row in rows) { float w = 0; foreach (char ch in row) if (font.GetCharacterInfo(ch, out var ci, size, tm.fontStyle)) w += ci.advance; widest = Mathf.Max(widest, w); }
+            float unit = tm.characterSize * .1f * Across(tm.transform, Vector3.right);
+            float lineH = font.lineHeight * (float)size / Mathf.Max(1, font.fontSize) * tm.lineSpacing;
+            return new Vector2(widest * unit, rows.Length * lineH * unit);
+        }
+        internal void Begin(Kind k)
+        {
+            Build(); if (!npcText || !buttonText) { Plugin.Log?.LogWarning("Loan tutorials: the copied dialogue lacks its texts."); return; }
+            kind = k; line = 0; Place(); ui.SetActive(true); Say();
+            if (UISoundPlayer.instance) UISoundPlayer.instance.PlayUISound(UISounds.smallPop, .75f, 1f);
+            Plugin.Log?.LogInfo("Loan tutorials: " + k + " at " + (dude.GetPort() ? dude.GetPort().GetPortName() : name) + ".");
+        }
+        // Over the table toward the player (§10): on the level line from him to the player, 1.5 m short of the player (never behind
+        // him, at most 1.6 m out), at the heights the tavern gives it. The game's pointer reaches 1.8 m (GoPointer.DoRaycast); at him
+        // the reply was 2.2-3.9 m from a player across the table (tutdude), and the mission book's anchor lies up to 1.2 m aside. The
+        // speech layout holds its reply about 0.6 m before its centre: 0.9 m short put the reply 0.3 m from the eye (tut-19).
+        private void Place()
+        {
+            var player = Refs.charController ? Refs.charController.transform.position : transform.position + transform.forward;
+            var flat = Vector3.ProjectOnPlane(player - transform.position, transform.up); float d = flat.magnitude;
+            var at = transform.position + (d > .01f ? flat / d : transform.forward) * Mathf.Clamp(d - 1.5f, 0f, 1.6f);
+            var local = transform.InverseTransformPoint(at);
+            ui.transform.localPosition = placed = new Vector3(local.x, atPos.y, local.z);
+        }
+        // Kept out of walls and ceilings (the user, 2026-11-01: "at some port the dialogue spawn clipping into bulding"): turned to
+        // the eye, the bubble's and the reply's own boxes are tested against solid colliders; where one meets a solid the dialogue
+        // moves to the nearest clear place up to 1 m across the view and 0.4 m down (0.1 m steps), else it stays where placed
+        // (clipped). Down too: at most ports the longest line's bubble met the office's roof or upper floor (tutdude dude-3); 0.4 m
+        // down keeps the reply over the tables. Run for each line, as the bubble grows with its text.
+        private Vector3 placed; internal float shift, drop; internal bool clipped; internal string blocker;
+        private static readonly Vector2[] Moves = Enumerable.Range(-10, 21).SelectMany(x => Enumerable.Range(0, 5).Select(y => new Vector2(x * .1f, -y * .1f)))
+            .OrderBy(v => v.sqrMagnitude).ThenBy(v => -v.y).ToArray();
+        private void Clear()
+        {
+            ui.transform.localPosition = placed; shift = drop = 0; clipped = false; blocker = null;
+            var facing = Quaternion.LookRotation(ui.transform.position - Eye(), transform.up);
+            ui.transform.rotation = facing;
+            Vector3 start = ui.transform.position, across = facing * Vector3.right, up = transform.up;
+            foreach (var move in Moves)
+            {
+                ui.transform.position = start + across * move.x + up * move.y;
+                if (!Blocked()) { shift = move.x; drop = -move.y; return; }
+            }
+            ui.transform.position = start; clipped = true;
+        }
+        private Vector3 Eye()
+        {
+            var cam = Camera.main; var player = Refs.charController ? Refs.charController.transform.position : transform.position + transform.forward * 2f;
+            return cam && (cam.transform.position - player).magnitude < 2.5f ? cam.transform.position : player + transform.up * 1.5f;
+        }
+        internal bool Blocked()
+        {
+            foreach (var part in new[] { bubbleGfx, buttonGfx })
+            {
+                var mesh = part ? part.GetComponent<MeshFilter>() : null; if (!mesh || !mesh.sharedMesh) continue;
+                var b = mesh.sharedMesh.bounds; var s = Vector3.Scale(b.extents, part.lossyScale);
+                var half = new Vector3(Mathf.Max(Mathf.Abs(s.x), .03f), Mathf.Max(Mathf.Abs(s.y), .03f), Mathf.Max(Mathf.Abs(s.z), .03f));
+                foreach (var c in Physics.OverlapBox(part.TransformPoint(b.center), half, part.rotation, ~0, QueryTriggerInteraction.Ignore))
+                    if (!c.transform.IsChildOf(transform) && !(c.attachedRigidbody && !c.attachedRigidbody.isKinematic) && !c.CompareTag("Player") &&
+                        !(Refs.charController && c.transform.IsChildOf(Refs.charController.transform))) { if (blocker == null) blocker = c.name + " (" + part.name + ")"; return true; }
+            }
+            return false;
+        }
+        private void Say()
+        {
+            var lines = Lines[(int)kind - 1];
+            npcText.text = Rules.Wrap(lines[line], WrapWidth); buttonText.text = Replies[(int)kind - 1][line];
+            Fit(); Clear();
+            if (line == lines.Length - 1)   // seen once its last line shows (T5)
+            { if (kind == Kind.Respondentia) World.State.tutorialRespondentia = true; else World.State.tutorialBottomry = true; }
+        }
+        // The bubble as big as its text needs (never smaller than the tavern's), its lower edge kept above the reply; the reply's
+        // plate as wide as its label.
+        private void Fit()
+        {
+            if (bubbleGfx && baseW > 0 && baseH > 0)
+            {
+                var need = Size(npcText, npcText.text);
+                float w = Mathf.Max(baseW, need.x / .85f), h = Mathf.Max(baseH, need.y + margin);
+                bubbleGfx.localScale = new Vector3(bubbleScale.x * w / baseW, bubbleScale.y * h / baseH, bubbleScale.z);
+                bubble.localPosition = bubbleAt + Vector3.up * (h - baseH) / 2f;
+            }
+            if (buttonGfx && buttonW > 0)
+            {
+                float w = Mathf.Max(buttonW, Size(buttonText, buttonText.text).x / .85f);
+                buttonGfx.localScale = new Vector3(buttonScale.x * w / buttonW, buttonScale.y, buttonScale.z);
+            }
+        }
+        // The reply: the next line; the last closes the dialogue (T2, T3: nothing opens).
+        internal void Click()
+        {
+            if (kind == Kind.None) return;
+            if (UISoundPlayer.instance) UISoundPlayer.instance.PlayUISound(UISounds.smallPop, .75f, 1f);
+            if (line >= Lines[(int)kind - 1].Length - 1) { Close(); return; }
+            if (Juicebox.juice) Juicebox.juice.TweenScale(ui, atScale * .9f, .1f, JuiceboxTween.bounceInOut, true);
+            line++; Say();
+        }
+        internal void Close() { kind = Kind.None; line = 0; if (ui) ui.SetActive(false); }
+        private void Update() { if (ui && ui.activeSelf && Refs.observerMirror) ui.transform.rotation = Refs.observerMirror.transform.rotation; }
+    }
+    // The reply's own target (GPButtonInterface): the click goes to the tutorial, as the demand talk's button does.
+    internal sealed class LoanTutorialButton : MonoBehaviour, IGPButton
+    {
+        internal LoanTutorial owner;
+        public void Activate() { if (owner) owner.Click(); }
+    }
+    [HarmonyPatch(typeof(TavernRumorsDude), "Awake")] internal static class LoanTutorialTemplatePatch
+    { static void Postfix(TavernRumorsDude __instance) { try { LoanTutorial.TakeTemplate(__instance); } catch (Exception e) { Plugin.Log?.LogWarning("Loan tutorials: the tavern dialogue not taken: " + e.Message); } } }
+    // The tutorial's own reach beside the port dude (LoanTutorial.AddReach): walking in opens a tutorial due, walking out closes it.
+    internal sealed class LoanTutorialReach : MonoBehaviour
+    {
+        internal PortDude dude;
+        private void OnTriggerEnter(Collider other) { try { LoanTutorial.Entered(dude, other); } catch (Exception e) { Plugin.Log?.LogWarning("Loan tutorials: " + e.Message); } }
+        private void OnTriggerExit(Collider other) { try { LoanTutorial.Left(dude, other); } catch (Exception e) { Plugin.Log?.LogWarning("Loan tutorials: " + e.Message); } }
+    }
+    [HarmonyPatch(typeof(PortDude), "Awake")] internal static class LoanTutorialReachPatch
+    { static void Postfix(PortDude __instance) { try { LoanTutorial.AddReach(__instance); } catch (Exception e) { Plugin.Log?.LogWarning("Loan tutorials: the reach not added: " + e.Message); } } }
 }

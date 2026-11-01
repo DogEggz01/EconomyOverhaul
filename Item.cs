@@ -870,7 +870,7 @@ namespace EconomyOverhaul
     }
 
     [HarmonyPatch(typeof(PrefabsDirectory), "Start")] internal static class PlankRegistrationPatch
-    { static void Prefix(PrefabsDirectory __instance) { WoodPlanks.Register(__instance); Tarps.Register(__instance); WoodPoles.Register(__instance); WoodPallets.Register(__instance); } }
+    { static void Prefix(PrefabsDirectory __instance) { WoodPlanks.Register(__instance); Tarps.Register(__instance); WoodPoles.Register(__instance); WoodPallets.Register(__instance); CargoManual.Register(__instance); } }
     [HarmonyPatch(typeof(ShopArea), "Awake")] internal static class PlankStockPatch
     { static void Postfix(ShopArea __instance) { WoodPlanks.AddStock(__instance); Tarps.AddStock(__instance); WoodVendors.Build(__instance); } }
     [HarmonyPatch(typeof(GoPointerButton), "OnAltActivate", new[] { typeof(GoPointer) })] internal static class UnbundlePatch
@@ -4741,4 +4741,193 @@ namespace EconomyOverhaul
         // The health it has lost (0 new, 100 torn): a record without it reads as new.
         [System.Runtime.Serialization.OptionalField] public float wear;
     }
+
+    // ---- The Cargo Damage Manual (prefab 646) and a new game's starting items (the user, 2026-11-01, TUTORIAL_UI_DRAFT.md §4.2) ----
+    // A copy of the game's manual scroll (prefab 91) with its own pages: the user's text (§8, word for word) drawn in the game's
+    // book font, black ink on a clear page, as the vanilla manual pages are (tutm-1: their pages are 2048 x 2048 textures of ink and
+    // pictures over the scroll's parchment mesh). Its amount is 3 (the navigation manual's, so the game's OnLoad finds pages and
+    // does not count it as the tutorial scroll); a postfix on OnLoad then puts our pages, name and value on it.
+    internal static class CargoManual
+    {
+        internal const int ManualIndex = 646, ScrollIndex = 91, Value = 30, PageSize = 2048;
+        internal const string Name = "Cargo Damage Manual";
+        internal static readonly string[][] Pages = {
+            new[] { "Water Damage",
+                "Rain wets cargo tops unless a roof, deck or canvas covers them. Bilge or sea water wets crates at about 14% of their height. Shallower water does nothing.",
+                "Check “Water Damage: N%” when pointing at crates. Crates keep full price through 10% water damage. Higher damage lowers it. Above 80% is permanent ruin.",
+                "Wet crates dry only uncovered, out of rain and water. They dry to 20% at best, or 50% for luxury-priced goods." },
+            new[] { "Fragile Cargo",
+                "Gems, sculptures and marble are always fragile. Tools are fragile only when a mission marks them FRAGILE.",
+                "These goods take no water damage. Hard hull impacts damage every fragile crate aboard the ship you sail. Slow down near rocks, piers and ships. Come alongside gently.",
+                "Check “Cargo Damage: N%” when pointing at crates. Damage lowers the price and cannot be repaired.",
+                "A FRAGILE mission pays double gold only at 0% Cargo Damage. Damaged cargo pays much less. Ruined cargo also costs reputation in both mission regions." },
+            new[] { "Canvas",
+                "You spawn with an old pack that only has 2 days lifetime.",
+                "Hold it. Aim at a rail, mast or nailed-down item. Press R for each tie spot. Set at least 3, then press E to set up the tarp. Dropping it first clears the spots.",
+                "Canvas blocks rain and prevents drying. Bilge water still reaches cargo.",
+                "Click a knot to recover the pack. To repair tarp, hold a new pack, aim at a knot and press R. This consumes the new pack.",
+                "Buy packs where oakum is sold." } };
+        internal static GameObject Template;
+        internal static bool Registered => Template;
+        internal static bool Is(ShipItem item) => Registered && item && WoodPlanks.Index(item) == ManualIndex;
+        private static Texture[] drawn;
+
+        internal static void Register(PrefabsDirectory directory)
+        {
+            if (Registered || !directory || directory.directory == null) return;
+            var dir = directory.directory;
+            if (dir.Length > ManualIndex && dir[ManualIndex]) { Plugin.Log?.LogError("Prefab slot 646 is used by another mod; the Cargo Damage Manual is disabled."); return; }
+            if (dir.Length <= ScrollIndex || !dir[ScrollIndex] || !dir[ScrollIndex].GetComponent<ShipItemScroll>()) { Plugin.Log?.LogError("Manual scroll prefab missing; the Cargo Damage Manual is disabled."); return; }
+            try
+            {
+                var holder = new GameObject("EconomyOverhaul manual template"); holder.SetActive(false); UnityEngine.Object.DontDestroyOnLoad(holder);
+                var o = UnityEngine.Object.Instantiate(dir[ScrollIndex], holder.transform, false); o.name = "646 cargo damage manual";
+                o.transform.localPosition = Vector3.zero; o.transform.localRotation = Quaternion.identity;
+                var item = o.GetComponent<ShipItem>(); item.amount = 3; item.name = Name; item.value = Value; item.sold = false;
+                o.GetComponent<SaveablePrefab>().prefabIndex = ManualIndex;
+                if (dir.Length <= ManualIndex) { var resized = new GameObject[ManualIndex + 1]; Array.Copy(dir, resized, dir.Length); directory.directory = dir = resized; }
+                dir[ManualIndex] = o; Template = o;
+                Plugin.Log?.LogInfo("Registered the Cargo Damage Manual (646).");
+            }
+            catch (Exception e) { Template = null; Plugin.Log?.LogError("Cargo Damage Manual registration failed; it is disabled. " + e); }
+        }
+
+        // After the game's OnLoad: our pages, name and value in place of the navigation manual's.
+        internal static void Loaded(ShipItemScroll scroll)
+        {
+            if (!Is(scroll)) return;
+            var pages = Drawn(); if (pages == null) return;
+            Fields.Set(scroll, "pages", pages); Fields.Set(scroll, "pageCount", pages.Length); Fields.Set(scroll, "currentPage", 0);
+            var page = Fields.Get<Renderer>(scroll, "page"); if (page) page.material.mainTexture = pages[0];
+            scroll.name = Name; scroll.value = Value;
+        }
+
+        // The game's book font (the trade book's): IMMORTAL, as the vanilla manuals are lettered.
+        private static Font BookFont()
+        {
+            var ui = EconomyUI.instance; var name = ui ? Fields.Get<TextMesh>(ui, "textGoodName") : null;
+            return name && name.font ? name.font : Resources.FindObjectsOfTypeAll<Font>().FirstOrDefault(f => f.name == "IMMORTAL");
+        }
+
+        // The pages drawn once: each line a TextMesh on its own layer, far below the world, taken by a camera of its own into a texture
+        // the size of the vanilla pages, then removed in the same frame (DestroyImmediate: nothing is drawn by the game's cameras).
+        // Title centred 1.6 times the body's size, 10% down the page (at 3.6% the held scroll's view cut it, tut-3); the body
+        // left-aligned, a line every 68 of 2048 pixels (the vanilla pages' pitch, tutm-1), wrapped to 88% of the page; a blank line
+        // between paragraphs.
+        internal const float Pitch = 68f / PageSize * 2f, TitleScale = 1.6f, Margin = .06f, TopMargin = .10f;
+        private static Texture[] Drawn()
+        {
+            if (drawn != null) return drawn;
+            var font = BookFont(); if (!font) { Plugin.Log?.LogWarning("Cargo Damage Manual: the book font is not loaded; pages not drawn."); return null; }
+            const int layer = 31; const int size = 64;
+            var root = new GameObject("EconomyOverhaul manual pages"); root.transform.position = new Vector3(0, -9000, 0);
+            var rt = new RenderTexture(PageSize, PageSize, 0, RenderTextureFormat.ARGB32);
+            var camGo = new GameObject("manual camera"); camGo.transform.SetParent(root.transform, false); camGo.transform.localPosition = new Vector3(0, 0, -10);
+            var cam = camGo.AddComponent<Camera>(); cam.enabled = false; cam.orthographic = true; cam.orthographicSize = 1; cam.aspect = 1;
+            cam.clearFlags = CameraClearFlags.SolidColor; cam.backgroundColor = new Color(0, 0, 0, 0); cam.cullingMask = 1 << layer;
+            cam.nearClipPlane = .1f; cam.farClipPlane = 20; cam.targetTexture = rt; cam.allowHDR = false; cam.allowMSAA = false;
+            var result = new List<Texture>();
+            try
+            {
+                font.RequestCharactersInTexture(string.Concat(Pages.SelectMany(p => p).ToArray()), size, FontStyle.Normal);
+                // a font pixel in page units at characterSize 1: TextMesh draws characterSize / 10 of a unit a font pixel
+                float linePx = font.lineHeight * (float)size / Mathf.Max(1, font.fontSize);
+                float body = Pitch / (linePx * .1f);
+                float width = 2f * (1 - 2 * Margin);
+                foreach (var page in Pages)
+                {
+                    var made = new List<GameObject>();
+                    TextMesh Line(string text, float x, float y, float charSize, TextAnchor anchor)
+                    {
+                        var go = new GameObject("line"); go.layer = layer; go.transform.SetParent(root.transform, false); go.transform.localPosition = new Vector3(x, y, 0);
+                        var tm = go.AddComponent<TextMesh>(); tm.font = font; tm.fontSize = size; tm.characterSize = charSize; tm.anchor = anchor; tm.alignment = TextAlignment.Left;
+                        tm.color = Color.black; tm.richText = false; tm.text = text; go.GetComponent<MeshRenderer>().sharedMaterial = font.material; made.Add(go); return tm;
+                    }
+                    float top = 1 - TopMargin * 2;
+                    Line(page[0], 0, top, body * TitleScale, TextAnchor.UpperCenter);
+                    float y = top - Pitch * TitleScale * 1.6f;
+                    for (int i = 1; i < page.Length; i++)
+                    {
+                        foreach (var row in Wrap(font, size, page[i], width / (body * .1f)))
+                        { Line(row, -1 + 2 * Margin, y, body, TextAnchor.UpperLeft); y -= Pitch; }
+                        y -= Pitch * .6f;
+                    }
+                    cam.Render();
+                    var keep = RenderTexture.active; RenderTexture.active = rt;
+                    var tex = new Texture2D(PageSize, PageSize, TextureFormat.RGBA32, true) { name = "cargo manual page " + result.Count, wrapMode = TextureWrapMode.Clamp };
+                    tex.ReadPixels(new Rect(0, 0, PageSize, PageSize), 0, 0); RenderTexture.active = keep;
+                    tex.Apply(true); tex.Compress(true); tex.Apply(false, true);   // 4 MB each (DXT5), as the vanilla pages; no copy kept on the CPU
+                    result.Add(tex);
+                    foreach (var go in made) UnityEngine.Object.DestroyImmediate(go);
+                    if (y < -1) Plugin.Log?.LogWarning("Cargo Damage Manual: page " + result.Count + " runs past the parchment (" + y.ToString("F2") + ").");
+                }
+                drawn = result.ToArray();
+                Plugin.Log?.LogInfo("Cargo Damage Manual: " + drawn.Length + " pages drawn in " + font.name + ".");
+            }
+            catch (Exception e) { Plugin.Log?.LogError("Cargo Damage Manual: the pages could not be drawn. " + e); }
+            finally { cam.targetTexture = null; rt.Release(); UnityEngine.Object.DestroyImmediate(rt); UnityEngine.Object.DestroyImmediate(root); }
+            return drawn;
+        }
+        // Rows of whole words no wider than `widthPx` font pixels (the font's own advances).
+        internal static List<string> Wrap(Font font, int size, string text, float widthPx)
+        {
+            float Px(string s) { float w = 0; foreach (char ch in s) if (font.GetCharacterInfo(ch, out var ci, size, FontStyle.Normal)) w += ci.advance; return w; }
+            var rows = new List<string>(); string row = "";
+            foreach (var word in text.Split(' '))
+            {
+                string next = row.Length == 0 ? word : row + " " + word;
+                if (row.Length > 0 && Px(next) > widthPx) { rows.Add(row); row = word; } else row = next;
+            }
+            if (row.Length > 0) rows.Add(row);
+            return rows;
+        }
+    }
+    [HarmonyPatch(typeof(ShipItemScroll), "OnLoad")] internal static class CargoManualLoadPatch
+    { static void Postfix(ShipItemScroll __instance) { try { CargoManual.Loaded(__instance); } catch (Exception e) { Plugin.Log?.LogWarning("Cargo Damage Manual: its pages not set: " + e.Message); } } }
+
+    // A new game's two extra items (S2: new games only), put in the start region's StarterSet with the game's own: the set drops its
+    // items 15 m onto the start ship as the game starts, marks them sold and saves them (StarterSet.InitiateStarterSet). Each item
+    // at a fixed place on her open deck, in her own frame (x across, z along, the deck's height: her walk collider measured by the
+    // QA's tutdeck, tutm-2), side by side beside the vanilla table; the set's place for it is that point plus the set's 15 m.
+    internal static class StartItems
+    {
+        internal const float PackHealth = 20f;   // 2 days of a tied tarp's wear (10 a day)
+        internal struct Spot { internal float x, z, deck; internal Spot(float x, float z, float deck) { this.x = x; this.z = z; this.deck = deck; } }
+        // [region]: the pack, then the scroll (PortRegion: alankh 0, emerald 1, medi 2).
+        internal static readonly Spot[][] Spots = {
+            new[] { new Spot(-.55f, -2.55f, 1.07f), new Spot(-.45f, -3.55f, 1.16f) },   // Dhow small (10), Al'Ankh
+            new[] { new Spot(.55f, 1.0f, 1.10f), new Spot(.55f, 1.5f, 1.13f) },        // Junk small single roof (90), Emerald
+            new[] { new Spot(-.8f, -3.7f, 1.32f), new Spot(-.8f, -3.1f, 1.32f) } };    // Medi small (40), Aestrin: in her cabin across from
+                                                                                         // the table (her waist's spot was at the foot of the stairs, start-M-2; tutm-3)
+        internal const float Lift = .005f;
+        internal static void Add()
+        {
+            int region = (int)GameState.newGameRegion; if (region < 0 || region >= Spots.Length) return;
+            var set = UnityEngine.Object.FindObjectsOfType<StarterSet>().FirstOrDefault(s => s.region == GameState.newGameRegion);
+            if (!set || !set.starterBoat) { Plugin.Log?.LogWarning("Starting items: no starter set for " + GameState.newGameRegion + "."); return; }
+            var boat = set.starterBoat;
+            GameObject Put(GameObject template, Spot spot, Quaternion turn, float bottom, string what)
+            {
+                if (!template) return null;
+                var o = UnityEngine.Object.Instantiate(template, template.transform.parent, false); o.SetActive(false);
+                o.transform.SetParent(set.transform, false);
+                o.transform.rotation = boat.rotation * turn;
+                o.transform.position = boat.TransformPoint(new Vector3(spot.x, spot.deck + Lift - bottom, spot.z)) + Vector3.up * 15f;
+                Plugin.Log?.LogInfo("Starting items: " + what + " in " + set.name + " at set-local " + o.transform.localPosition + " (on " + boat.name + " at " + spot.x + ", " + spot.deck + ", " + spot.z + ").");
+                return o;
+            }
+            // the pack lying on its largest face (its box's shortest side up; as its template stands it is on end, tut-3)
+            var pack = Tarps.PackTemplate;
+            var box = pack ? pack.GetComponent<BoxCollider>() : null;
+            int k = !box ? 1 : box.size.x <= box.size.y && box.size.x <= box.size.z ? 0 : box.size.y <= box.size.z ? 1 : 2;
+            var lying = k == 0 ? Quaternion.Euler(0, 0, 90) : k == 2 ? Quaternion.Euler(270, 0, 0) : Quaternion.identity;   // that side to her up
+            var p = Put(pack, Spots[region][0], lying, box ? box.center[k] - box.size[k] / 2 : 0, "canvas pack (health " + PackHealth + ")");
+            if (p) p.GetComponent<ShipItem>().health = PackHealth;
+            // the scroll lying closed as the game's own lies (turned 270 about x: its box's z is up; tutm-1: z -0.011 +- 0.0395)
+            var sbox = CargoManual.Template ? CargoManual.Template.GetComponent<BoxCollider>() : null;
+            Put(CargoManual.Template, Spots[region][1], Quaternion.Euler(270, 0, 0), sbox ? sbox.center.z - sbox.size.z / 2 : -.05f, "Cargo Damage Manual");
+        }
+    }
+    [HarmonyPatch(typeof(StartMenu), "StartNewGame")] internal static class StartItemsPatch
+    { static void Postfix() { try { StartItems.Add(); } catch (Exception e) { Plugin.Log?.LogWarning("Starting items not added: " + e); } } }
 }

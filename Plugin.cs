@@ -40,7 +40,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "1.1.3";
+        public const string Version = "1.1.4";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -515,8 +515,8 @@ namespace EconomyOverhaul
         // The mod's data is stale when the game saved after it without the mod (MIDSAVE_DRAFT.md): the hour stored with the
         // data differs from the save's own. 0: a save from before the hour was stored, never stale.
         public static bool StaleSave(double savedHour, double gameHour) => savedHour > 0 && Math.Abs(savedHour - gameHour) > .01;
-        // The mod's own items (wood plank bundle and plank, canvas pack, wood pole and pole bundle, wood pallet), removed by the uninstall.
-        public static bool ModItem(int prefabIndex) => prefabIndex >= 640 && prefabIndex <= 645;
+        // The mod's own items (wood plank bundle and plank, canvas pack, wood pole and pole bundle, wood pallet, the Cargo Damage Manual), removed by the uninstall.
+        public static bool ModItem(int prefabIndex) => prefabIndex >= 640 && prefabIndex <= 646;
     }
 
     // ---- Save state ----
@@ -577,6 +577,9 @@ namespace EconomyOverhaul
         // (MarketState.reportIds and incomingIds, BoatState.reportIds). Only in the JSON copy (StateCodec.Write); null in memory and
         // in the binary save (the formatter keeps shared reports shared by itself).
         [System.Runtime.Serialization.OptionalField] public List<ReportState> reportTable;
+        // The loan tutorials seen (TUTORIAL_UI_DRAFT.md, T5): optional, false in older saves, so each shows once there too.
+        [System.Runtime.Serialization.OptionalField] public bool tutorialRespondentia;
+        [System.Runtime.Serialization.OptionalField] public bool tutorialBottomry;
         internal SaveState Copy() => (SaveState)MemberwiseClone();
     }
 

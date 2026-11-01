@@ -1036,6 +1036,40 @@ namespace EconomyOverhaul
         static void Prefix(out bool __state) => __state = TradeBook.HideView();
         static Exception Finalizer(Exception __exception, bool __state) { if (__state) TradeBook.ShowView(); return __exception; }
     }
+    // The good page's two lines (the user, 2026-11-01, TUTORIAL_UI_DRAFT.md U3 and §3): the good's category on a smaller line under
+    // its name (none for goods outside the four), and "Port price update at midnight everyday" above the price list. Each a copy of
+    // the name's own text (its font, ink and turn), made once under the same parent.
+    internal static class GoodPageLines
+    {
+        // The price line on one row in the free band above the price list's headings, under Size and Weight (their rows end about
+        // .83, the headings' row tops at .751): tut-7, at .700 across the page, it ran through the headings; tut-8, in their left cell
+        // on two rows, through "days ago" and the first port.
+        internal const string PriceLine = "Port price update at midnight everyday";
+        // In the parent's units: the name at (.294, .872); the category under it at .790, clear of a "g" or "y" in the name (the
+        // user's option 3 of four pictured, tut-24; at .808 the tails touched it); the price line centred at x -.25 (Size's label
+        // ends at -.208, its value starts at -.258), 65% of the port names' size.
+        internal const float CategoryY = .790f, CategorySize = .55f, PriceX = -.25f, PriceY = .79f, PriceSize = .65f;
+        private static TextMesh category, price;
+        private static TextMesh Copy(TextMesh source, string label, float x, float y, float size)
+        {
+            var o = Object.Instantiate(source.gameObject, source.transform.parent, false); o.name = label;
+            o.transform.localPosition = new Vector3(x, y, source.transform.localPosition.z); o.transform.localScale = source.transform.localScale * size;
+            return o.GetComponent<TextMesh>();
+        }
+        internal static void Show(EconomyUI ui, int good)
+        {
+            var name = Fields.Get<TextMesh>(ui, "textGoodName"); var ports = Fields.Get<TextMesh>(ui, "textIslandNames"); if (!name) return;
+            if (!category) category = Copy(name, "economy good category", name.transform.localPosition.x, CategoryY, CategorySize);
+            if (!price && ports)
+            {
+                price = Copy(ports, "economy price update", PriceX, PriceY, PriceSize);
+                price.anchor = TextAnchor.MiddleCenter; price.alignment = TextAlignment.Center; price.text = PriceLine;
+            }
+            category.text = Rules.CategoryName(Rules.Category(good));
+        }
+    }
+    [HarmonyPatch(typeof(EconomyUI), "ShowGoodPage")] internal static class GoodPageLinesPatch
+    { static void Postfix(EconomyUI __instance, int goodIndex) { try { GoodPageLines.Show(__instance, goodIndex); } catch (Exception e) { Plugin.Log?.LogWarning("Trade book: the good page's lines not drawn: " + e.Message); } } }
     // Vanilla shows "?" as the age of a report dated day 0 or earlier. The startup history dates its reports before
     // day 0, so show their real age (today minus the report's day) like any other report.
     [HarmonyPatch(typeof(EconomyUI), "ShowGoodPage")] internal static class TradeBookAgePatch
