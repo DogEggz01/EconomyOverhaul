@@ -181,6 +181,25 @@ namespace EconomyOverhaul
         // mass is in pounds, as its mission board prints it). A sale takes 2/16 of a lumber from the port's stock (a plank bundle 1/16).
         public const float PalletWidth = 1.45f, PalletDepth = 1.28f, PalletHeight = .25f, PalletMass = 80, PalletLumber = 2f / 16;
         public const int PalletValue = 750;
+        // The half pallet (HALF_PALLET_DRAFT.md; the user, 2026-11-02: "Sold price and weight also half, other property should remain
+        // same as pallet"; H1 "cut across", H2 "2 half pallet", H4 "5", H5 "keep in pallet's prefab"): the pallet cut across its 1.28 m
+        // into two halves 1.45 x 0.64 m, each 375 and 40 lb; kept in prefab 645 by a mark in its saved health (a whole pallet's is the
+        // lumber prefab's, never this; the mod reads a pallet's health nowhere else). A half cut again gives 5 planks (230 of its 375, a
+        // bundle gives 8 for 375: the user, "this way of generating plank should be less efficient").
+        public const float HalfDepth = PalletDepth / 2, HalfMass = PalletMass / 2, HalfMark = -645f;
+        public const int HalfValue = PalletValue / 2, HalfPlanks = 5;
+        public static bool IsHalfMark(float health) => health == HalfMark;
+
+        // The control hints of a held pole or plank (HALF_PALLET_DRAFT.md §4; the user, 2026-11-02, H7: "All 3"): each line its key and
+        // what it does, in the order shown. A pole: length, diameter, brace; a plank in placement mode (by one end): length, width,
+        // repair mode; in repair mode (flat) only H to placement mode. With things on it (its size fixed) only the H line.
+        public static List<(string key, string what)> RodHintLines(bool pole, bool endMode, bool sizeFixed, string brace)
+        {
+            var lines = new List<(string, string)>();
+            if (pole || endMode) { if (!sizeFixed) { lines.Add(("Q/E", "length")); lines.Add(("O/L", pole ? "diameter" : "width")); } lines.Add((brace, pole ? "brace" : "repair mode")); }
+            else lines.Add((brace, "placement mode"));
+            return lines;
+        }
         // Its top boards 40 mm (PALLET_PLANK_DRAFT.md P9, the user: "Make the wood plank at top of pallet be thicker a bit"; was 25 mm;
         // Data/MakePallet.py), the height kept. Its wood the planks' material 15% darker (P8, the user: "pick 15% darker for pallet",
         // from the pictures of probe palletshow run 20261024-162516): the material's colour times 0.85.
@@ -193,22 +212,24 @@ namespace EconomyOverhaul
         // (x across, y up, z along), the rope's middle line, `r` its half thickness; closed (the last point joins the first).
         public const float RopeHalf = .0125f, RopeOpening = .295f, RopeBand = .55f;
         public static bool Roped(int slots, int loaded, int nailed) => slots > 0 && loaded == slots && nailed == slots;
-        public static (Vector3 min, Vector3 max) LoadBox(PalletLoad load)
+        public static (Vector3 min, Vector3 max) LoadBox(PalletLoad load, bool half = false)
         {
-            var size = LoadSize(load); Vector3 lo = Vector3.positiveInfinity, hi = Vector3.negativeInfinity;
-            foreach (var s in LoadSlots(load))
+            var size = LoadSize(load, half); Vector3 lo = Vector3.positiveInfinity, hi = Vector3.negativeInfinity;
+            foreach (var s in LoadSlots(load, half))
             {
                 var c = s + new Vector3(0, PalletHeight + size.y / 2, 0);
                 lo = Vector3.Min(lo, c - size / 2); hi = Vector3.Max(hi, c + size / 2);
             }
             return (lo, hi);
         }
-        public static List<Vector3[]> RopeLoops(PalletLoad load)
+        // A half pallet's one opening, between its end runner (z -0.32 to -0.22) and its half of the middle runner (0.27 to 0.32).
+        public const float HalfRopeOpening = .025f;
+        public static List<Vector3[]> RopeLoops(PalletLoad load, bool half = false)
         {
-            var loops = new List<Vector3[]>(); if (LoadSlots(load).Length == 0) return loops;
-            var (lo, hi) = LoadBox(load); float r = RopeHalf;
+            var loops = new List<Vector3[]>(); if (LoadSlots(load, half).Length == 0) return loops;
+            var (lo, hi) = LoadBox(load, half); float r = RopeHalf;
             float x = Math.Max(Math.Max(-lo.x, hi.x), PalletWidth / 2) + r, top = hi.y + r, under = PalletHeight - PalletTopBoards - r;
-            foreach (float z in new[] { -RopeOpening, RopeOpening })
+            foreach (float z in half ? new[] { HalfRopeOpening } : new[] { -RopeOpening, RopeOpening })
                 loops.Add(new[] { new Vector3(-x, under, z), new Vector3(-x, top, z), new Vector3(x, top, z), new Vector3(x, under, z) });
             float y = PalletHeight + (hi.y - PalletHeight) * RopeBand, bx = Math.Max(-lo.x, hi.x) + r, bz = Math.Max(-lo.z, hi.z) + r;
             loops.Add(new[] { new Vector3(-bx, y, -bz), new Vector3(-bx, y, bz), new Vector3(bx, y, bz), new Vector3(bx, y, -bz) });
@@ -232,8 +253,12 @@ namespace EconomyOverhaul
         }
         // Each load's drawn size as it stands on the pallet (across its 1.45 m, up, along its 1.28 m: the meshes measured by the probe
         // palletshow, 2026-10-24) and its slots: the bottom middles on the pallet's top, in the pallet's frame (x across, z along).
-        public static Vector3 LoadSize(PalletLoad load)
+        public static Vector3 LoadSize(PalletLoad load, bool half = false)
         {
+            // On a half pallet (1.45 x 0.64 m) the standard crate and the medium package stand turned, their length across (the user,
+            // 2026-11-02, H3: "yes"; 3.5 and 2.9 cm over each long side); the others as on the pallet.
+            if (half && load == PalletLoad.StandardCrate) return new Vector3(1.270f, 1.029f, .710f);
+            if (half && load == PalletLoad.MediumPackage) return new Vector3(1.216f, 1.016f, .698f);
             switch (load)
             {
                 case PalletLoad.LargeCrate: return new Vector3(1.270f, 1.093f, 1.229f);         // upright
@@ -244,6 +269,19 @@ namespace EconomyOverhaul
                 case PalletLoad.StandardPackage: return new Vector3(1.866f, 1.066f, .606f);     // on its side, 21 cm over each side
                 case PalletLoad.SmallPackage: return new Vector3(1.466f, 1.066f, .406f);        // on its side
                 default: return Vector3.zero;
+            }
+        }
+        // A half pallet takes half a pallet's count, rounded down (the user, 2026-11-02: "if normal pallet only take 1 crate, then half
+        // pallet can no longer take those crate"): no large crate or package, one standard crate, medium, standard or small package in
+        // its middle, three small crates in one row across.
+        public static Vector3[] LoadSlots(PalletLoad load, bool half)
+        {
+            if (!half) return LoadSlots(load);
+            switch (load)
+            {
+                case PalletLoad.StandardCrate: case PalletLoad.MediumPackage: case PalletLoad.StandardPackage: case PalletLoad.SmallPackage: return new[] { Vector3.zero };
+                case PalletLoad.SmallCrate: return new[] { new Vector3(-.478f, 0, 0), Vector3.zero, new Vector3(.478f, 0, 0) };
+                default: return new Vector3[0];
             }
         }
         public static Vector3[] LoadSlots(PalletLoad load)
@@ -677,7 +715,7 @@ namespace EconomyOverhaul
         // The bundle leaves at once in every way that shows or saves, but its physics body is switched off rather than
         // removed: removing it would put the body back at the visible bundle, inside the boat's hull, where the physics
         // engine throws the two apart. Switched off, the body still weighs on the boat until the planks have boarded.
-        private static void Retire(ShipItem item)
+        internal static void Retire(ShipItem item)
         {
             var save = item.GetComponent<SaveablePrefab>();
             if (save && World.Ready && !World.Loading && !GameState.currentlyLoading && !World.SaveBlocked && save.GetParentObject() != -2 && save.GetParentObject() != -3)
@@ -692,7 +730,7 @@ namespace EconomyOverhaul
         // Planks unbundled aboard join the boat through the bundle's embark collider once their physics bodies exist (one
         // physics step), at their place on the boat however far it sailed meanwhile (they are frozen like wall items until
         // then). The bundle leaves the boat in that same step, so the boat's load and balance never change.
-        private static IEnumerator Board(ShipItem old, List<ShipItem> planks, List<Pose> onBoat, Transform boat, Collider embark)
+        internal static IEnumerator Board(ShipItem old, List<ShipItem> planks, List<Pose> onBoat, Transform boat, Collider embark)
         {
             Spawning++;
             try
@@ -891,7 +929,7 @@ namespace EconomyOverhaul
     { static void Postfix(ShipItem __instance) { if (WoodPlanks.IsPlank(__instance)) __instance.amount = 0; } }
     // A loaded plank shows its saved look.
     [HarmonyPatch(typeof(SaveablePrefab), "Load")] internal static class PlankLoadPatch
-    { static void Postfix(SaveablePrefab __instance) { var item = __instance.GetComponent<ShipItem>(); if (WoodPlanks.IsPlank(item)) WoodPlanks.ApplyLook(item); else if (WoodPoles.IsPole(item)) WoodPoles.ApplyLength(item); } }
+    { static void Postfix(SaveablePrefab __instance) { var item = __instance.GetComponent<ShipItem>(); if (WoodPlanks.IsPlank(item)) WoodPlanks.ApplyLook(item); else if (WoodPoles.IsPole(item)) WoodPoles.ApplyLength(item); else if (WoodPallets.IsHalf(item)) WoodPallets.ApplyHalf(item); } }
     [HarmonyPatch(typeof(ShipItem), "UpdateLookText")] internal static class PlankLookTextPatch
     {
         static void Postfix(ShipItem __instance)
@@ -915,6 +953,13 @@ namespace EconomyOverhaul
                 return;
             }
             var pointer = Fields.Get<GoPointer>(__instance, "pointer");
+            // A knife at a pallet it may cut: the game's "cut" line with its R icon, as at food (HALF_PALLET_DRAFT.md §3).
+            if (global::Settings.controlsTextEnabled && pointer && PalletCut.Knife(pointer.GetHeldItem() as ShipItem) && PalletCut.Cuttable(item) && PalletCut.BlockReason(item) == null)
+            {
+                hideIcons.Invoke(__instance, null); showR.Invoke(__instance, null);
+                Fields.Get<TextMesh>(__instance, "controlsText").text = "\ncut";
+                return;
+            }
             if (global::Settings.controlsTextEnabled && WoodPlanks.Unbundleable(item) && pointer && !pointer.GetHeldItem() && WoodPlanks.BlockReason(item) == null)
             {
                 showL.Invoke(__instance, null); showR.Invoke(__instance, null);
@@ -1983,7 +2028,9 @@ namespace EconomyOverhaul
             if (!WoodPoles.IsPole(__instance)) return;
             WoodPoles.ResetLean(__instance);   // upright at each pick-up
             if (__instance.sold) InventoryBrace.TakenOut(__instance);
-            if (__instance.sold) Loans.Notify(WoodPoles.PickupNotice(__instance));
+            // The keys' notice only when the game's controls text is off: on, the controls line shows them (RodHints; the user, 2026-11-02,
+            // H8: "yes").
+            if (__instance.sold && !global::Settings.controlsTextEnabled) Loans.Notify(WoodPoles.PickupNotice(__instance));
         } }
     // Upright at each pick-up with Deft Hands too (the user, 2026-10-20; POLE_ROUND5_DRAFT.md): Deft Hands keeps an attached item's
     // roll as it stood when it is picked up (its PickUpItemPatch, WallAttachmentRoll.ReadAttachedRoll), and the pole counts Deft
@@ -2017,14 +2064,19 @@ namespace EconomyOverhaul
     // takes nothing (PoleCarry.Stored).
     [HarmonyPatch(typeof(CrateInventory), "WithdrawItem")] internal static class PoleCrateWithdrawPatch
     { static void Prefix(ShipItem item) { if (WoodPoles.IsPole(item)) PoleCarry.WithdrawnFromCrate(item); } }
-    // Removed (the game's clean-up of items left off a ship 600 m away, or any other way): a tarp tied to it is untied, and one it
-    // held up drops back to its shape without it.
+    // Removed (the game's clean-up of items left off a ship 600 m away, or any other way): a tarp tied to any nailed item is untied,
+    // as the hammer does (TarpUnnailPatch), and one a pole held up drops back to its shape without it. A far ship's or a sunk ship's
+    // items the game only unloads are skipped inside Tarps (Tarps.Unloading): they come back where they were.
     [HarmonyPatch(typeof(ShipItem), "DestroyItem")] internal static class PoleRemovePatch
     {
         static void Prefix(ShipItem __instance)
         {
             if (PoleCarry.Active) PoleCarry.Removed(__instance);
-            if (WoodPoles.IsPole(__instance) && Tarps.Registered && __instance.nailed) { Tarps.UntieFrom(__instance); Tarps.PoleMoved(__instance, true); }
+            if (Tarps.Registered && __instance.nailed)
+            {
+                Tarps.UntieFrom(__instance);
+                if (WoodPoles.IsPole(__instance)) Tarps.PoleMoved(__instance, true);
+            }
         }
     }
     // Nailed with the hammer (the game's ShipItemHammer.NailItem, which may refuse): a wood pole under a tarp holds it up.
@@ -2059,6 +2111,7 @@ namespace EconomyOverhaul
         private static readonly MethodInfo exitBoat = AccessTools.Method(typeof(ShipItem), "ExitBoat"), enterBoat = AccessTools.Method(typeof(ShipItem), "EnterBoat");
         private static readonly MethodInfo hangLate = AccessTools.Method(typeof(HangableItem), "LateUpdate");
         private static readonly AccessTools.FieldRef<ShipItem, Collider> boatCollider = AccessTools.FieldRefAccess<ShipItem, Collider>("currentBoatCollider");
+        private static readonly AccessTools.FieldRef<HangableItem, Collider> currentHook = AccessTools.FieldRefAccess<HangableItem, Collider>("currentHook");
         internal static bool Active => loads.Count > 0;
         internal static bool Riding(ShipItem item) => item && riding.ContainsKey(item);
         internal static Load Of(ShipItem pole) => pole && pole.itemRigidbodyC && loads.TryGetValue(pole.itemRigidbodyC, out var load) ? load : null;
@@ -2239,17 +2292,25 @@ namespace EconomyOverhaul
         }
         // A carried thing on the pole's ship, or off any (the game boards an attached item but never takes it off a ship, and its own
         // boarding is skipped while it rides: PoleCarryBoardPatch).
-        private static void Board(ShipItem item, ShipItem pole)
+        private static void Board(ShipItem item, ShipItem pole) => ChangeShip(item, pole, "A thing on a wood pole");
+        // A carried thing (on a pole or a pallet: WoodPallets.Board) onto its carrier's ship, or off any, held as it was: leaving a ship
+        // frees it (ItemRigidbody.ExitBoat clears attached) and unhooks a hung one (ShipItem.ExitBoat: HangableItem.DisconnectJoint), so
+        // its attached is put back and a hung one hung again on its hook (the deep review of 2026-11-02, Claude's fix: a lantern on a
+        // carried hook was left unhooked and frozen in the air, and a pallet's crate lost its snap).
+        internal static void ChangeShip(ShipItem item, ShipItem carrier, string what)
         {
-            var copy = item.itemRigidbodyC; bool attached = copy.attached;   // leaving a ship frees it (ItemRigidbody.ExitBoat)
+            var copy = item.itemRigidbodyC; bool attached = copy.attached;
+            var hangs = item.GetComponent<HangableItem>(); var hook = hangs ? currentHook(hangs) : null;
             try
             {
                 if (item.currentActualBoat) exitBoat.Invoke(item, null);
-                var embark = pole.currentActualBoat ? boatCollider(pole) : null;
+                var embark = carrier.currentActualBoat ? boatCollider(carrier) : null;
                 if (embark) enterBoat.Invoke(item, new object[] { embark });
             }
-            catch (Exception e) { Plugin.Log?.LogWarning("A thing on a wood pole could not change ship: " + (e.InnerException ?? e).Message); }
+            catch (Exception e) { Plugin.Log?.LogWarning(what + " could not change ship: " + (e.InnerException ?? e).Message); }
             copy.attached = attached;
+            try { if (hook && !hangs.IsHanging()) hangs.ConnectJoint(hook); }
+            catch (Exception e) { Plugin.Log?.LogWarning(what + " could not hang on its hook again: " + e.Message); }
         }
         // Drawn each frame on the pole in the hand (posed after everything else, after the brace's own drawing); a hung lantern
         // under its hook after that, by the game's own hanging (HangableItem.LateUpdate).
@@ -2398,9 +2459,26 @@ namespace EconomyOverhaul
         internal const int PalletIndex = 645;
         internal const string RopesName = "EconomyOverhaul pallet ropes";
         internal static GameObject Template; internal static Material Wood;
+        internal static Mesh FullMesh, HalfMesh;
         internal static bool Registered => Template;
         internal static readonly HashSet<ShipItem> Live = new HashSet<ShipItem>();
         internal static bool IsPallet(ShipItem item) => Registered && WoodPlanks.Index(item) == PalletIndex;
+        internal static bool IsHalf(ShipItem item) => IsPallet(item) && Rules.IsHalfMark(item.health);
+        // A pallet whole or half after spawning, loading or a cut: its mesh, its box and its physics copy's box (copied from it once,
+        // ItemRigidbody.AddCollider), its weight and value, as the plank's ApplyLook does.
+        internal static void ApplyHalf(ShipItem pallet)
+        {
+            if (!IsPallet(pallet) || !FullMesh || !HalfMesh) return;
+            bool half = IsHalf(pallet); var mesh = half ? HalfMesh : FullMesh;
+            var filter = pallet.GetComponent<MeshFilter>(); if (filter && filter.sharedMesh != mesh) filter.sharedMesh = mesh;
+            var box = pallet.GetComponent<BoxCollider>(); if (box) { box.size = mesh.bounds.size; box.center = mesh.bounds.center; }
+            var body = pallet.itemRigidbodyC; var copy = body ? PoleBrace.boxCol(body) : null;
+            if (copy) { copy.size = mesh.bounds.size; copy.center = mesh.bounds.center; }
+            pallet.mass = half ? Rules.HalfMass : Rules.PalletMass; pallet.value = half ? Rules.HalfValue : Rules.PalletValue;
+            pallet.name = half ? "half pallet" : "wood pallet";
+            if (body && body.GetBody()) body.UpdateMass();
+        }
+        internal static void SetHalf(ShipItem pallet) { if (!IsPallet(pallet)) return; pallet.health = Rules.HalfMark; ApplyHalf(pallet); }
 
         internal static void Register(PrefabsDirectory directory)
         {
@@ -2415,6 +2493,7 @@ namespace EconomyOverhaul
                 var paint = new Material(wood) { name = wood.name + " (pallet)" };
                 if (paint.HasProperty("_Color")) { var c = wood.color; float k = Rules.PalletShade; paint.color = new Color(c.r * k, c.g * k, c.b * k, c.a); }
                 var mesh = ObjMesh.Load("EconomyOverhaul.Data.wood_pallet.obj", "wood pallet");
+                HalfMesh = ObjMesh.Load("EconomyOverhaul.Data.wood_pallet_half.obj", "half pallet"); FullMesh = mesh;
                 var o = WoodPlanks.Template(dir[WoodPlanks.LumberIndex], holder.transform, "645 wood pallet", mesh, paint, PalletIndex, "wood pallet", Rules.PalletValue, Rules.PalletMass, true);
                 UnityEngine.Object.DestroyImmediate(o.GetComponent<Good>());
                 o.AddComponent<PalletMark>();
@@ -2460,9 +2539,9 @@ namespace EconomyOverhaul
         }
         // Where an item of `load` stands in slot `slot`, in the pallet's frame: turned to the load's size, its drawn bottom middle on
         // the slot (as the probe palletshow laid them out).
-        internal static Pose SlotPose(ShipItem item, Rules.PalletLoad load, int slot)
+        internal static Pose SlotPose(ShipItem item, Rules.PalletLoad load, int slot, bool half)
         {
-            var s = Drawn(item); var (zTo, yTo) = Rules.LoadAxes(s.size, Rules.LoadSize(load));
+            var s = Drawn(item); var (zTo, yTo) = Rules.LoadAxes(s.size, Rules.LoadSize(load, half));
             Vector3 Axis(int k) => k == 0 ? Vector3.right : k == 1 ? Vector3.up : Vector3.forward;
             var turn = Quaternion.LookRotation(Axis(zTo), Axis(yTo));
             Vector3 lo = Vector3.positiveInfinity, hi = Vector3.negativeInfinity;
@@ -2472,7 +2551,7 @@ namespace EconomyOverhaul
                 lo = Vector3.Min(lo, c); hi = Vector3.Max(hi, c);
             }
             var bottomMid = new Vector3((lo.x + hi.x) / 2, lo.y, (lo.z + hi.z) / 2);
-            return new Pose(Rules.LoadSlots(load)[slot] + new Vector3(0, Rules.PalletHeight, 0) - bottomMid, turn);
+            return new Pose(Rules.LoadSlots(load, half)[slot] + new Vector3(0, Rules.PalletHeight, 0) - bottomMid, turn);
         }
         internal static Pose World(ShipItem pallet, Pose local) => new Pose(pallet.transform.TransformPoint(local.position), pallet.transform.rotation * local.rotation);
         // The crates in a pallet's slots now (snapped: held still, or nailed) and the slots they take: the saved items within 2 m of
@@ -2499,8 +2578,8 @@ namespace EconomyOverhaul
         internal const float SlotMatch = .02f, PickupMatch = .1f;
         internal static int SlotOf(ShipItem pallet, ShipItem crate, Rules.PalletLoad load, float within = SlotMatch)
         {
-            var local = pallet.transform.InverseTransformPoint(crate.transform.position);
-            for (int k = 0; k < Rules.LoadSlots(load).Length; k++) if ((SlotPose(crate, load, k).position - local).magnitude < within) return k;
+            var local = pallet.transform.InverseTransformPoint(crate.transform.position); bool half = IsHalf(pallet);
+            for (int k = 0; k < Rules.LoadSlots(load, half).Length; k++) if ((SlotPose(crate, load, k, half).position - local).magnitude < within) return k;
             return -1;
         }
         // The nailed pallet a held crate is aimed at (the crosshair on the pallet or its load's room above it, within 2.55 m, where it
@@ -2523,7 +2602,7 @@ namespace EconomyOverhaul
             if (!best) return null;
             var loaded = Loaded(best);
             if (loaded.Count > 0 && loaded[0].load != load) return null;   // one size a pallet
-            for (int k = 0; k < Rules.LoadSlots(load).Length; k++) if (!loaded.Any(x => x.slot == k)) { slot = k; return best; }
+            for (int k = 0; k < Rules.LoadSlots(load, IsHalf(best)).Length; k++) if (!loaded.Any(x => x.slot == k)) { slot = k; return best; }
             return null;
         }
         private static bool Enter(Transform t, Vector3 centre, Vector3 half, Ray eye, float reach, out float at)
@@ -2547,7 +2626,7 @@ namespace EconomyOverhaul
         {
             if (!crate || !pointer || crate.held != pointer || !GameState.playing) return false;
             var pallet = Aimed(crate, out int slot); if (!pallet) return false;
-            var pose = World(pallet, SlotPose(crate, LoadOf(crate), slot));
+            var pose = World(pallet, SlotPose(crate, LoadOf(crate), slot, IsHalf(pallet)));
             crate.OnDrop(); pointer.DropItem();
             // On the pallet's boat, or ashore with it: a held crate can count as aboard a boat whose trigger it passes (the pallet run
             // of 2026-10-24: a crate carried on the dock beside the starting dhow was the dhow's).
@@ -2611,7 +2690,7 @@ namespace EconomyOverhaul
             if (!crate || LoadOf(crate) == Rules.PalletLoad.None) return;
             var pallet = Aimed(crate, out int slot); if (!pallet) return;
             var targeter = pointer.GetTargeter(); var paint = targeter ? targeterMaterial(targeter) : null; if (!paint) return;
-            var pose = World(pallet, SlotPose(crate, LoadOf(crate), slot));
+            var pose = World(pallet, SlotPose(crate, LoadOf(crate), slot, IsHalf(pallet)));
             var toSlot = Matrix4x4.TRS(pose.position, pose.rotation, Vector3.one) * crate.transform.worldToLocalMatrix;
             foreach (var r in crate.GetComponentsInChildren<MeshRenderer>())
             {
@@ -2631,21 +2710,21 @@ namespace EconomyOverhaul
         }
 
         // ---- The ropes (P4) ----
-        private static readonly Dictionary<Rules.PalletLoad, Mesh> ropeMeshes = new Dictionary<Rules.PalletLoad, Mesh>();
+        private static readonly Dictionary<(Rules.PalletLoad, bool), Mesh> ropeMeshes = new Dictionary<(Rules.PalletLoad, bool), Mesh>();
         // Full and every crate nailed: the load it holds, else None.
         internal static Rules.PalletLoad RopedLoad(ShipItem pallet)
         {
             var loaded = Loaded(pallet); if (loaded.Count == 0) return Rules.PalletLoad.None;
             var load = loaded[0].load;
-            return Rules.Roped(Rules.LoadSlots(load).Length, loaded.Select(x => x.slot).Distinct().Count(), loaded.Count(x => x.crate.nailed)) ? load : Rules.PalletLoad.None;
+            return Rules.Roped(Rules.LoadSlots(load, IsHalf(pallet)).Length, loaded.Select(x => x.slot).Distinct().Count(), loaded.Count(x => x.crate.nailed)) ? load : Rules.PalletLoad.None;
         }
         // Each loop's sides as square bars 2.5 cm across, each running on past its corners by the rope's half thickness (so the corners
-        // close), in the atlas's black (the pole bundle's bands' spot): 3 loops of 4 bars, 144 triangles.
-        internal static Mesh RopeMesh(Rules.PalletLoad load)
+        // close), in the atlas's black (the pole bundle's bands' spot): 3 loops of 4 bars, 144 triangles (a half pallet's 2 loops, 96).
+        internal static Mesh RopeMesh(Rules.PalletLoad load, bool half = false)
         {
-            if (ropeMeshes.TryGetValue(load, out var cached)) return cached;
+            if (ropeMeshes.TryGetValue((load, half), out var cached)) return cached;
             var v = new List<Vector3>(); var n = new List<Vector3>(); var t = new List<int>(); float r = Rules.RopeHalf;
-            foreach (var loop in Rules.RopeLoops(load))
+            foreach (var loop in Rules.RopeLoops(load, half))
                 for (int i = 0; i < loop.Length; i++)
                 {
                     Vector3 a = loop[i], b = loop[(i + 1) % loop.Length], d = (b - a).normalized;
@@ -2665,16 +2744,16 @@ namespace EconomyOverhaul
                         if (normal == d) t.AddRange(new[] { s, s + 1, s + 2, s, s + 2, s + 3 }); else t.AddRange(new[] { s, s + 2, s + 1, s, s + 3, s + 2 });
                     }
                 }
-            var m = new Mesh { name = "wood pallet ropes " + load };
+            var m = new Mesh { name = (half ? "half pallet ropes " : "wood pallet ropes ") + load };
             m.SetVertices(v); m.SetNormals(n); m.SetUVs(0, Enumerable.Repeat(new Vector2(.01f, .01f), v.Count).ToList()); m.SetTriangles(t, 0);
             m.RecalculateBounds();
-            return ropeMeshes[load] = m;
+            return ropeMeshes[(load, half)] = m;
         }
         internal static void ShowRopes(ShipItem pallet, Rules.PalletLoad load)
         {
             var ropes = pallet ? pallet.transform.Find(RopesName) : null; if (!ropes) return;
             bool on = load != Rules.PalletLoad.None;
-            if (on) { var f = ropes.GetComponent<MeshFilter>(); var mesh = RopeMesh(load); if (f.sharedMesh != mesh) f.sharedMesh = mesh; }
+            if (on) { var f = ropes.GetComponent<MeshFilter>(); var mesh = RopeMesh(load, IsHalf(pallet)); if (f.sharedMesh != mesh) f.sharedMesh = mesh; }
             if (ropes.gameObject.activeSelf != on) ropes.gameObject.SetActive(on);
         }
 
@@ -2704,7 +2783,7 @@ namespace EconomyOverhaul
             foreach (var (crate, load, slot) in Loaded(item, false, PickupMatch))
             {
                 if (!crate.nailed) { crate.itemRigidbodyC.attached = false; dropped++; continue; }
-                var pose = SlotPose(crate, load, slot);
+                var pose = SlotPose(crate, load, slot, IsHalf(item));
                 var rider = new Rider { crate = crate, at = pose.position, turn = pose.rotation, ignored = new List<Collider>() };
                 // Solid while the pallet is down, so its own colliders are kept from touching the crate's (the crate, moved onto the pallet
                 // each step, would shove the loose pallet it rests on).
@@ -2760,17 +2839,9 @@ namespace EconomyOverhaul
             }
             if (!pallet.held && pallet.nailed) End(pallet);   // nailed again: plain nailed crates in its slots
         }
-        // A rider on the pallet's ship, or off any (its own boarding skipped while it rides: PalletRiderBoardPatch).
-        private static void Board(ShipItem crate, ShipItem pallet)
-        {
-            try
-            {
-                if (crate.currentActualBoat) exitBoat.Invoke(crate, null);
-                var embark = pallet.currentActualBoat ? Fields.Get<Collider>(pallet, "currentBoatCollider") : null;
-                if (embark) enterBoat.Invoke(crate, new object[] { embark });
-            }
-            catch (Exception e) { Plugin.Log?.LogWarning("Wood pallet: " + crate.name + " could not change ship: " + (e.InnerException ?? e).Message); }
-        }
+        // A rider on the pallet's ship, or off any (its own boarding skipped while it rides: PalletRiderBoardPatch), its snap kept
+        // (PoleCarry.ChangeShip; the deep review of 2026-11-02, Claude's fix: leaving a ship cleared it).
+        private static void Board(ShipItem crate, ShipItem pallet) => PoleCarry.ChangeShip(crate, pallet, "Wood pallet: " + crate.name);
         // Drawn each frame on the pallet in the hand (the game sets a held item's transform every frame; the bodies move on physics steps).
         private static bool hooked;
         private static void Hook() { if (hooked) return; Application.onBeforeRender += Render; hooked = true; }
@@ -2867,6 +2938,161 @@ namespace EconomyOverhaul
     { static bool Prefix(ShipItem __instance) => !(WoodPallets.Carrying && WoodPallets.Riding(__instance)); }
     [HarmonyPatch(typeof(ShipItem), "DestroyItem")] internal static class PalletRemovePatch
     { static void Prefix(ShipItem __instance) { if (WoodPallets.Registered) WoodPallets.Removed(__instance); } }
+
+    // ---- The knife on a pallet (HALF_PALLET_DRAFT.md §3, §3b; the user, 2026-11-02) ----
+    // R with a bought knife at a bought pallet cuts it across into two half pallets; at a half pallet, into 5 planks. Refused with a
+    // notice while a crate is snapped or nailed on it, or it is nailed (H6: "refused when crated are snapped or when pallet is nailed").
+    // Silent, as the game's own cut (H6's sound: not chosen). Built the vanilla way of a cut (ShipItemKnife.CutFood: the knife's swing,
+    // the pieces spawned and registered, the item removed), so Keevi Fixes' cut placement (a finalizer on OnAltActivate) lays the
+    // pieces out as it does the game's, with no reference to it. The pallet is retired at once and removed once the pieces have boarded
+    // (H9, the user: "Yes, our own fix": the mod's own fix for the jolt, as an unbundled bundle), their places on the ship read in a
+    // finalizer that runs after every other (Priority.Last), after Keevi's placement.
+    internal static class PalletCut
+    {
+        internal const string NailedNotice = "Un-nail the pallet before cutting it", LoadedNotice = "Take the cargo off the pallet before cutting it";
+        // A half pallet only while the planks are registered: its cut makes planks, and without them the half was retired and then lost
+        // to the cut's error (the deep review of 2026-11-02, Claude's fix).
+        internal static bool Cuttable(ShipItem item) => WoodPallets.IsPallet(item) && item.sold && !item.held && item.GetCurrentInventorySlot() == -1
+            && (!WoodPallets.IsHalf(item) || WoodPlanks.Registered);
+        internal static bool Knife(ShipItem held) => held is ShipItemKnife && held.sold;
+        // null: it may be cut; else why not.
+        internal static string BlockReason(ShipItem pallet) => pallet.nailed ? NailedNotice : WoodPallets.Loaded(pallet).Count > 0 ? LoadedNotice : null;
+        private sealed class Pending { internal ShipItem old; internal List<ShipItem> pieces; internal Transform boat; internal Collider embark; }
+        private static Pending pending;
+        internal static ShipItem LastCut; internal static List<ShipItem> LastPieces;   // for tests
+        private static readonly AccessTools.FieldRef<ShipItemKnife, bool> animating = AccessTools.FieldRefAccess<ShipItemKnife, bool>("animating");
+        private static readonly AccessTools.FieldRef<ShipItemKnife, float> cutTimer = AccessTools.FieldRefAccess<ShipItemKnife, float>("cutTimer");
+        internal static void Cut(ShipItemKnife knife)
+        {
+            pending = null;
+            if (!knife || !knife.sold || !knife.held || !GameState.playing) return;
+            var pallet = knife.held.GetPointedAtItem(); if (!Cuttable(pallet)) return;
+            string reason = BlockReason(pallet); if (reason != null) { Loans.Notify(reason); return; }
+            animating(knife) = true; knife.heldRotationOffset = 0; cutTimer(knife) = .25f;   // the knife's swing, as at food
+            bool half = WoodPallets.IsHalf(pallet);
+            var boat = pallet.currentActualBoat; Collider embark = null;
+            if (boat) try { embark = Fields.Get<Collider>(pallet, "currentBoatCollider"); } catch (MissingFieldException) { }
+            var holder = pallet.transform.parent ? pallet.transform.parent : FloatingOriginManager.instance ? FloatingOriginManager.instance.transform : null;
+            var poses = half ? PlankPoses(pallet) : HalfPoses(pallet);
+            WoodPlanks.Retire(pallet);
+            var pieces = new List<ShipItem>(poses.Count);
+            foreach (var (pose, look) in poses)
+            {
+                var o = UnityEngine.Object.Instantiate(half ? WoodPlanks.PlankTemplate : WoodPallets.Template, pose.position, pose.rotation, holder);
+                var piece = o.GetComponent<ShipItem>(); piece.sold = true; piece.amount = 0;
+                if (half) WoodPlanks.SetLook(piece, look); else WoodPallets.SetHalf(piece);
+                o.GetComponent<SaveablePrefab>().RegisterToSave(); pieces.Add(piece);
+            }
+            pending = new Pending { old = pallet, pieces = pieces, boat = boat, embark = embark };
+            LastCut = pallet; LastPieces = pieces;
+            Plugin.Log?.LogInfo((half ? "Half pallet cut into " + pieces.Count + " wood planks" : "Wood pallet cut into two half pallets") + (boat ? " aboard." : "."));
+        }
+        // After every other finalizer on the knife's R (Keevi Fixes' placement among them): the pieces board the pallet's ship at the
+        // places they have now and the pallet leaves in that step (WoodPlanks.Board), or ashore it leaves at once.
+        internal static void Finish()
+        {
+            var p = pending; pending = null; if (p == null) return;
+            if (p.boat && p.embark && Plugin.Instance)
+            {
+                var onBoat = p.pieces.Select(x => x ? new Pose(p.boat.InverseTransformPoint(x.transform.position), Quaternion.Inverse(p.boat.rotation) * x.transform.rotation) : default).ToList();
+                Plugin.Instance.StartCoroutine(WoodPlanks.Board(p.old, p.pieces, onBoat, p.boat, p.embark));
+            }
+            else if (p.old) p.old.DestroyItem();
+        }
+        // The two halves where the pallet's two halves were, a centimetre apart, each with its end runner outward (the half mesh's
+        // end runner is at its -z).
+        internal static List<(Pose pose, int look)> HalfPoses(ShipItem pallet)
+        {
+            var t = pallet.transform; var list = new List<(Pose, int)>();
+            foreach (int side in new[] { -1, 1 })
+                list.Add((new Pose(t.TransformPoint(new Vector3(0, 0, side * (Rules.HalfDepth / 2 + .005f))), t.rotation * (side < 0 ? Quaternion.identity : Quaternion.Euler(0, 180, 0))), 0));
+            return list;
+        }
+        // Five planks lying flat side by side where the half was, along its 1.45 m (a plank is 0.872 m), the bundle's 0.155 m apart, each
+        // back face (its pivot) down on the half's base: the bundle's first five looks.
+        internal static List<(Pose pose, int look)> PlankPoses(ShipItem half)
+        {
+            var t = half.transform; var list = new List<(Pose, int)>();
+            var turn = t.rotation * Quaternion.LookRotation(Vector3.down, Vector3.forward);   // plank length (x) along the half's x, width (y) along its z
+            for (int k = 0; k < Rules.HalfPlanks; k++)
+            {
+                var c = WoodPlanks.PlankMeshes != null ? WoodPlanks.PlankMeshes[k].bounds.center : Vector3.zero;
+                var at = t.TransformPoint(new Vector3(0, .002f, (k - (Rules.HalfPlanks - 1) / 2f) * .155f));
+                list.Add((new Pose(at - turn * new Vector3(c.x, c.y, 0), turn), k));
+            }
+            return list;
+        }
+    }
+    [HarmonyPatch(typeof(ShipItemKnife), "AllowOnItemClick")] internal static class PalletKnifePointPatch
+    {
+        static void Postfix(ShipItemKnife __instance, GoPointerButton lookedAtButton, ref bool __result)
+        { if (!__result && WoodPallets.Registered && __instance.sold && PalletCut.Cuttable(lookedAtButton as ShipItem)) __result = true; }
+    }
+    [HarmonyPatch(typeof(ShipItemKnife), "OnAltActivate", new Type[0])] internal static class PalletKnifeCutPatch
+    {
+        static void Postfix(ShipItemKnife __instance) { if (WoodPallets.Registered) PalletCut.Cut(__instance); }
+        [HarmonyPriority(Priority.Last)] static void Finalizer() => PalletCut.Finish();
+    }
+
+    // ---- The pole and plank control hints (HALF_PALLET_DRAFT.md §4; the user, 2026-11-02: "it should follow vanilla setting", "like
+    // vanilla R/F hint, not the white hint like water damage hint", H7 "All 3, but show me picture from test be finalized") ----
+    // Held, a bought pole or plank not nailed shows its keys in the game's controls line (LookUI.ShowHoldText, where an oar shows "row"),
+    // only under the game's controls text setting (Settings.controlsTextEnabled): a line a key (Rules.RodHintLines), each beside a key
+    // box copied from the game's own R icon box with the key's name in it (as the game shows a pick-up bound to a key). The game's
+    // controls text grows upward from its last line, which stands at the R icon (hp-3's pictures: a box placed down from the L icon
+    // stood a line below its word), so the last box stands at the R icon and each one before it a line (R less L) higher; hidden
+    // whenever the game hides its icons (LookUI.HideIcons).
+    internal static class RodHints
+    {
+        private static readonly AccessTools.FieldRef<LookUI, TextMesh> controlsText = AccessTools.FieldRefAccess<LookUI, TextMesh>("controlsText"),
+            textLicon = AccessTools.FieldRefAccess<LookUI, TextMesh>("textLicon"), textRIcon = AccessTools.FieldRefAccess<LookUI, TextMesh>("textRIcon");
+        private static readonly AccessTools.FieldRef<LookUI, Renderer> mouseRIcon = AccessTools.FieldRefAccess<LookUI, Renderer>("mouseRIcon");
+        private static LookUI owner; private static TextMesh[] boxes; private static Vector3 lastLine, lineStep;
+        internal static TextMesh[] Boxes => boxes;   // for tests
+        internal static string BraceKey() { var k = Settings.BraceKey?.Value ?? new BepInEx.Configuration.KeyboardShortcut(KeyCode.H); return k.MainKey == KeyCode.None ? "H" : k.ToString(); }
+        internal static void Show(LookUI ui, PickupableItem item)
+        {
+            var held = item as ShipItem;
+            if (!global::Settings.controlsTextEnabled || !held || !held.sold || held.nailed || !(WoodPoles.IsPole(held) || WoodPlanks.IsPlank(held))) return;
+            var lines = Rules.RodHintLines(WoodPoles.IsPole(held), WoodPlanks.EndMode(held), PoleCarry.Carries(held), BraceKey());
+            var text = controlsText(ui); if (!text || !Make(ui)) return;
+            text.text = string.Join("\n", lines.Select(l => l.what));
+            for (int i = 0; i < boxes.Length; i++)
+            {
+                bool on = i < lines.Count; if (on && boxes[i].text != lines[i].key) boxes[i].text = lines[i].key;
+                if (on) boxes[i].transform.localPosition = lastLine - lineStep * (lines.Count - 1 - i);
+                if (boxes[i].gameObject.activeSelf != on) boxes[i].gameObject.SetActive(on);
+            }
+        }
+        internal static void Hide(LookUI ui)
+        {
+            if (ui != owner || boxes == null) return;
+            foreach (var b in boxes) if (b && b.gameObject.activeSelf) b.gameObject.SetActive(false);
+        }
+        private static bool Make(LookUI ui)
+        {
+            if (owner == ui && boxes != null && boxes.All(b => b)) return true;
+            var l = textLicon(ui); var r = textRIcon(ui); if (!l || !r) return false;
+            lastLine = r.transform.localPosition; lineStep = r.transform.localPosition - l.transform.localPosition;
+            var mouse = mouseRIcon(ui); string mousePath = mouse && mouse.transform != r.transform && mouse.transform.IsChildOf(r.transform) ? PathIn(r.transform, mouse.transform) : null;
+            boxes = new TextMesh[3];
+            for (int i = 0; i < boxes.Length; i++)
+            {
+                var o = UnityEngine.Object.Instantiate(r.gameObject, r.transform.parent, false); o.name = "EconomyOverhaul key box " + i;
+                o.transform.localRotation = r.transform.localRotation; o.transform.localScale = r.transform.localScale;
+                // never the mouse picture the game may show in its R box
+                var m = mousePath != null ? o.transform.Find(mousePath) : null; if (m && m.GetComponent<Renderer>()) m.GetComponent<Renderer>().enabled = false;
+                o.SetActive(false); boxes[i] = o.GetComponent<TextMesh>();
+            }
+            owner = ui;
+            return true;
+        }
+        private static string PathIn(Transform root, Transform t) { var parts = new List<string>(); for (var x = t; x && x != root; x = x.parent) parts.Insert(0, x.name); return string.Join("/", parts); }
+    }
+    [HarmonyPatch(typeof(LookUI), "ShowHoldText")] internal static class RodHintShowPatch
+    { static void Postfix(LookUI __instance, PickupableItem item) { if (WoodPoles.Registered) RodHints.Show(__instance, item); } }
+    [HarmonyPatch(typeof(LookUI), "HideIcons")] internal static class RodHintHidePatch
+    { static void Postfix(LookUI __instance) => RodHints.Hide(__instance); }
 
     // ---- The wood vendors ----
     // A new vendor beside the shipyard keeper of Gold Rock City, Dragon Cliffs and Fort Aestrin's vanilla yard (none at Chronos), and
@@ -3830,7 +4056,7 @@ namespace EconomyOverhaul
         // up change is built again at once (the user: it jumps to its new shape). Nailed under a tarp but too tall: the notice.
         internal static int PoleMoved(ShipItem pole, bool leaving)
         {
-            if (!Registered || !WoodPoles.Registered || !pole) return 0;
+            if (!Registered || !WoodPoles.Registered || !pole || Unloading(pole)) return 0;
             int reshaped = 0; bool tall = false;
             foreach (var tarp in Tarp.All.ToList())
             {
@@ -4175,9 +4401,17 @@ namespace EconomyOverhaul
         // tied on the item's edge, nudged off it by a load.
         private static bool TiedTo(Collider c, Vector3 knot, Vector3 facing) =>
             c.Raycast(new Ray(knot - facing * OnItem, facing), out _, OnItem + Behind) || (Closest(c, knot) - knot).sqrMagnitude <= OnEdge * OnEdge;
+        // The game destroys a far ship's (or house's) items after caching them (parent -2, BoatLocalItems.CacheCurrentItems), and a
+        // sunk ship's after saving them for recovery (-3); they come back from that data, nailed where they were. A tarp tied to them
+        // stays as it is (a player's report on Tent and Plank 1.1.3: a tarp on a pole packed itself up when the ship was left).
+        internal static bool Unloading(ShipItem item)
+        {
+            var save = item ? item.GetComponent<SaveablePrefab>() : null;
+            return save && (save.GetParentObject() == -2 || save.GetParentObject() == -3);
+        }
         internal static int UntieFrom(ShipItem item)
         {
-            if (!item || !item.itemRigidbodyC) return 0;
+            if (!item || !item.itemRigidbodyC || Unloading(item)) return 0;
             var colliders = item.itemRigidbodyC.GetComponentsInChildren<Collider>(true).Where(Solid).ToArray();
             if (colliders.Length == 0) return 0;
             if (Pending.Any(c => c.part && colliders.Contains(c.part))) Cancel(true);
@@ -4900,11 +5134,10 @@ namespace EconomyOverhaul
             new[] { new Spot(-.8f, -3.7f, 1.32f), new Spot(-.8f, -3.1f, 1.32f) } };    // Medi small (40), Aestrin: in her cabin across from
                                                                                          // the table (her waist's spot was at the foot of the stairs, start-M-2; tutm-3)
         internal const float Lift = .005f;
-        internal static void Add()
+        internal static void Add(StarterSet set)
         {
-            int region = (int)GameState.newGameRegion; if (region < 0 || region >= Spots.Length) return;
-            var set = UnityEngine.Object.FindObjectsOfType<StarterSet>().FirstOrDefault(s => s.region == GameState.newGameRegion);
-            if (!set || !set.starterBoat) { Plugin.Log?.LogWarning("Starting items: no starter set for " + GameState.newGameRegion + "."); return; }
+            int region = (int)GameState.newGameRegion; if (region < 0 || region >= Spots.Length || !set || set.region != GameState.newGameRegion) return;
+            if (!set.starterBoat) { Plugin.Log?.LogWarning("Starting items: the starter set for " + GameState.newGameRegion + " has no start ship."); return; }
             var boat = set.starterBoat;
             GameObject Put(GameObject template, Spot spot, Quaternion turn, float bottom, string what)
             {
@@ -4928,6 +5161,10 @@ namespace EconomyOverhaul
             Put(CargoManual.Template, Spots[region][1], Quaternion.Euler(270, 0, 0), sbox ? sbox.center.z - sbox.size.z / 2 : -.05f, "Cargo Damage Manual");
         }
     }
-    [HarmonyPatch(typeof(StartMenu), "StartNewGame")] internal static class StartItemsPatch
-    { static void Postfix() { try { StartItems.Add(); } catch (Exception e) { Plugin.Log?.LogWarning("Starting items not added: " + e); } } }
+    // Added as the game starts the new game's set (it starts only the set of GameState.newGameRegion): after every prefix, before the
+    // coroutine's first step shows, lowers and registers what the set holds. Scrambled Seas' prefix here moves everything in the set by
+    // the start island's shift, and its StartNewGame prefix has already moved the start ship: added at StartNewGame (as before), ours
+    // were placed by the moved ship and then moved again, off her (the deep review of 2026-11-02, Claude's fix).
+    [HarmonyPatch(typeof(StarterSet), "InitiateStarterSet")] internal static class StartItemsPatch
+    { static void Postfix(StarterSet __instance) { try { StartItems.Add(__instance); } catch (Exception e) { Plugin.Log?.LogWarning("Starting items not added: " + e); } } }
 }

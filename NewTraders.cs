@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Text;
+using System.Threading;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -1713,6 +1715,38 @@ namespace EconomyOverhaul
         internal Vector2 End => Points[Points.Length - 1];
         internal readonly Vector2 Min, Max;      // its bounds
         internal LanePath Reversed() => new LanePath(Points.Reverse()) { room = room, roomStep = roomStep, roomFromEnd = !roomFromEnd, left = left, right = right, widthStep = widthStep, widthFromEnd = !widthFromEnd };
+        // Scrambled Seas (SCRAMBLED_TRADERS_DRAFT.md section 2): a harbour way moved with its island, its room and water records kept.
+        internal LanePath Moved(Vector2 by) => new LanePath(Points.Select(p => p + by)) { room = room, roomStep = roomStep, roomFromEnd = roomFromEnd, left = left, right = right, widthStep = widthStep, widthFromEnd = widthFromEnd };
+        // Its part from s0 to s1 (s1 < s0: walked backwards), then the points of `more` (new water: wide), as one way; its room and
+        // water records sampled again along it in its own direction, the new part's as wide water.
+        internal const float WideRoom = 999f;
+        internal LanePath Part(float s0, float s1, IList<Vector2> more)
+        {
+            var pts = new List<Vector2> { At(s0) };
+            if (s1 >= s0) { for (int i = 0; i < Points.Length; i++) if (Along[i] > s0 && Along[i] < s1) pts.Add(Points[i]); }
+            else for (int i = Points.Length - 1; i >= 0; i--) if (Along[i] < s0 && Along[i] > s1) pts.Add(Points[i]);
+            pts.Add(At(s1));
+            if (more != null) pts.AddRange(more);
+            var p = new LanePath(pts); float kept = Math.Abs(s1 - s0), dir = s1 >= s0 ? 1f : -1f;
+            if (room != null && roomStep > 0)
+            {
+                var r = new float[Mathf.FloorToInt(p.Length / roomStep) + 1];
+                for (int k = 0; k < r.Length; k++) r[k] = k * roomStep <= kept ? RoomAt(s0 + dir * k * roomStep) : WideRoom;
+                p.SetRoom(roomStep, r);
+            }
+            if (left != null && widthStep > 0)
+            {
+                int n = Mathf.FloorToInt(p.Length / widthStep) + 1; var l = new float[n]; var rr = new float[n];
+                for (int k = 0; k < n; k++)
+                {
+                    if (k * widthStep > kept) { l[k] = rr[k] = WideWater; continue; }
+                    WidthAt(s0 + dir * k * widthStep, out float a, out float b);
+                    if (dir > 0) { l[k] = a; rr[k] = b; } else { l[k] = b; rr[k] = a; }   // walked backwards its sides swap
+                }
+                p.SetWidth(widthStep, l, rr);
+            }
+            return p;
+        }
         // A harbour leg's water each side (Data/lanes.txt's W records, at its hull's depth): to its left and right every widthStep m from
         // its first point as stored; on the reversed leg read from its end with the sides swapped. None: wide water (WideWater each side).
         private float[] left, right; private float widthStep; private bool widthFromEnd;
@@ -1934,7 +1968,13 @@ namespace EconomyOverhaul
         private static readonly Dictionary<long, LanePath> trips = new Dictionary<long, LanePath>();
         private static Vector2[] lagoon = new Vector2[0];
         internal static bool Loaded { get; private set; }
-        internal static IEnumerable<TraderHarbour> Harbours => harbours.Values;
+        // A Scrambled Seas map's harbours and lanes (ScrambledMap, at this file's end), in place of the vanilla ones while that game is played; null
+        // on the vanilla map (VisibleTraders sets it at its first scan after each load).
+        private static ScrambledMap scrambled;
+        internal static ScrambledMap Scrambled => scrambled;
+        internal static void Use(ScrambledMap map) => scrambled = map;
+        internal static IReadOnlyDictionary<int, TraderHarbour> VanillaHarbours => harbours;
+        internal static IEnumerable<TraderHarbour> Harbours => scrambled != null ? scrambled.Harbours.Values : harbours.Values;
         internal static int InterLanes => inter.Values.Sum(l => l.Count);
         internal static void Load()
         {
@@ -2034,9 +2074,10 @@ namespace EconomyOverhaul
         }
         private static Graph Region(string name) { if (!graphs.TryGetValue(name, out var g)) graphs[name] = g = new Graph(); return g; }
         private static TraderHarbour Harbour(int port) { if (!harbours.TryGetValue(port, out var h)) harbours[port] = h = new TraderHarbour { Port = port }; return h; }
-        internal static TraderHarbour HarbourOf(int port) => harbours.TryGetValue(port, out var h) ? h : null;
+        internal static TraderHarbour HarbourOf(int port) => scrambled != null ? scrambled.HarbourOf(port) : harbours.TryGetValue(port, out var h) ? h : null;
         // Inside the lagoon a lane is 40 m wide, at sea 120 m (the user, 2026-10-17, question 3 (b)): the half-width traders spread over.
-        internal static float HalfWidth(Vector2 p) => InLagoon(p) ? 20f : 60f;
+        // On a scrambled map the lagoon ring is gone: 40 m within 800 m of a lagoon port (ScrambledMap.HalfWidth).
+        internal static float HalfWidth(Vector2 p) => scrambled != null ? scrambled.HalfWidth(p) : InLagoon(p) ? 20f : 60f;
         internal static bool InLagoon(Vector2 p)
         {
             bool inside = false;
@@ -2055,6 +2096,8 @@ namespace EconomyOverhaul
         // test port, Saffron Island).
         internal static int Choices(int from, int to)
         {
+            // a scrambled map: one lane per pair of groups (the user, 2026-11-02); a saved lane is read modulo 1
+            if (scrambled != null) return scrambled.Choices(from, to);
             if (!group.TryGetValue(from, out string gf) || !group.TryGetValue(to, out string gt) || !harbours.ContainsKey(from) || !harbours.ContainsKey(to)) return 0;
             if (regionOf[gf] == regionOf[gt]) return 1;
             if (!exit.TryGetValue(gf + ">" + gt, out string nf) || !exit.TryGetValue(gt + ">" + gf, out string nt)) return 0;
@@ -2064,6 +2107,7 @@ namespace EconomyOverhaul
         // regions to its departure area, one of the pair's lanes, on through the other region's graph). Null when there is none.
         internal static LanePath Trip(int from, int to, int lane)
         {
+            if (scrambled != null) return scrambled.Trip(from, to);
             int choices = Choices(from, to); if (choices == 0 || from == to) return null;
             lane = ((lane % choices) + choices) % choices;
             long key = ((long)from * 1000 + to) * 16 + lane;
@@ -2181,9 +2225,13 @@ namespace EconomyOverhaul
                 }
             }
             // and what those options require (BoatPartOption.requires, as the shipyard checks it: a long-bowsprit forestay needs the
-            // long bowsprit), until nothing changes
+            // long bowsprit), until nothing changes; at most a pass per part and one more: two requirements wanting different options
+            // of one part not kept would change it back and forth for ever, so the options stay as they are and the clash is logged
+            // (the deep review of 2026-11-02, Claude's fix)
+            int passes = 0;
             for (bool more = true; more;)
             {
+                if (++passes > parts.availableParts.Count + 1) { changed.Add("requirements still changing after " + (passes - 1) + " passes (a clash): options kept as they are"); break; }
                 more = false;
                 for (int i = 0; i < parts.availableParts.Count && i < options.Length; i++)
                 {
@@ -2798,9 +2846,11 @@ namespace EconomyOverhaul
             // the user's feedback on 0.10.4: the hull independent of the game's ship (it shared that ship's damage, dirt and sail
             // colour through their materials), no mooring ropes, no purchase paper
             int materials = OwnMaterials(copy);
-            int ropes = DropMooring(copy);
+            // the paper first: it is found by its place in the ship, which DropMooring's removals renumber (its path then led to the
+            // part after it; the deep review of 2026-11-02, Claude's fix)
             var paper = AccessTools.Field(typeof(PurchasableBoat), "purchaseUI")?.GetValue(boat) as GameObject;
             bool paperOff = DropPaper(copy, root, paper);
+            int ropes = DropMooring(copy);
             // the game's own hull collider for the player (HullPlayerCollider: its hull's mesh, on the player's layer), read before
             // the scripts are stripped
             var hullForPlayer = copy.GetComponentsInChildren<HullPlayerCollider>(true).Select(p => p.GetComponent<MeshCollider>()).FirstOrDefault(m => m && m.sharedMesh);
@@ -3707,6 +3757,9 @@ namespace EconomyOverhaul
             internal BoatState Boat; internal TraderCopy Copy; internal int Hull, Class; internal string Key; internal Vector2 Size; internal float Draft;
             internal Phase Phase;
             internal LanePath Path; internal int From = -1, To = -1, Lane = -1; internal float S;     // the trip, approach point to approach point
+            // S as the clock last set it, exactly (Clocked): on a lane over 1,000 km (a 4x Scrambled Seas map) a frame's way is under a
+            // float's step at S, and S alone would stop growing
+            internal double SExact; internal float SKept = float.NaN;
             internal LanePath Leg; internal float U; internal TraderBerth Berth; internal int Slot = -1, Port = -1;   // a harbour leg; the berth or anchorage slot held
             internal Vector2 Pos; internal float Yaw, Pitch, Roll, Offset, Avoid, AvoidTill, Unroll, Speed, Wind, NextWind = -1, NextContact, NextCheck;
             internal Vector2 Velocity; internal int Side;
@@ -3749,6 +3802,7 @@ namespace EconomyOverhaul
         private static readonly Collider[] found = new Collider[256];
         private static float nextScan;
         private static bool? scrambled;
+        private static bool askedEarly; private static float nextEarly;
         private static bool failedOnce;
         private static System.Reflection.FieldInfo windTarget;
         private static System.Reflection.MethodInfo chaoticLerp; private static bool chaoticLooked;
@@ -3941,7 +3995,9 @@ namespace EconomyOverhaul
         // of the ships they passed through stay (Meet: a ship the player owns since is made solid again).
         internal static void Reset()
         {
-            ReleaseAll(); keptBerth.Clear(); scrambled = null; islandOf.Clear(); islandMiss.Clear(); failedOnce = false; nextRegistered = 0; nextHulls = -1; hullPartOf.Clear();
+            ReleaseAll(); keptBerth.Clear(); scrambled = null; askedEarly = false; islandOf.Clear(); islandMiss.Clear(); failedOnce = false; nextRegistered = 0; nextHulls = -1; hullPartOf.Clear();
+            // a scrambled map's routes under way are dropped, and the vanilla lanes are used until the next first scan decides
+            ScrambledLanes.Cancel(); LaneMap.Use(null);
         }
         private static void ReleaseAll() { foreach (var v in shown.Values.ToList()) Release(v); berthHolders.Clear(); anchorSlots.Clear(); toBegin.Clear(); }
         // The traders the last scan picked to be drawn, nearest first, not yet taken from the pool (Update takes one a frame).
@@ -3953,6 +4009,20 @@ namespace EconomyOverhaul
             long t0 = FrameParts.Now;
             try { UpdateParts(); TraderBubble.Step(); }
             finally { FrameParts.End(t0, shown.Count); }
+        }
+        // The user's 10 (2026-11-02, "Yes, go"): on a scrambled map the routes are asked for as soon as the islands are moved, while
+        // the game loads or prepares its economy (8-9 s at a new game), not at the first scan after; that scan asks again and the work
+        // under way for the same islands' places goes on (ScrambledLanes.Request). Looked at twice a second, only while a game starts.
+        private static void AskEarly()
+        {
+            if (askedEarly || scrambled != null || !(Startup.IsPreparing || GameState.currentlyLoading || World.Loading)) return;
+            if (!FloatingOriginManager.instance || !LaneMap.Loaded || Refs.islands == null || Time.realtimeSinceStartup < nextEarly) return;
+            nextEarly = Time.realtimeSinceStartup + .5f;
+            double moved = MapStretch.MaxMove(); if (moved <= 50) return;
+            askedEarly = true;
+            Plugin.Log?.LogInfo("Visible traders: the ports are moved (by " + moved.ToString("F0") + " m) while the game " + (Startup.IsPreparing ? "prepares its economy" : "loads") + ": the routes for this map are asked for now.");
+            try { ScrambledLanes.Request(ScrambledInput.Read()); }
+            catch (Exception e) { Plugin.Log?.LogError("Visible traders: the routes for this map could not be started early (they are asked for again once play begins): " + e); }
         }
         private static void UpdateParts()
         {
@@ -3970,17 +4040,40 @@ namespace EconomyOverhaul
             if (!TraderHulls.PoolDone && !GameState.currentlyLoading) { TraderHulls.BuildStep(); FrameParts.Add(FrameParts.Build, t); }
             else if (!TraderHulls.LooksReady && !GameState.currentlyLoading) { TraderHulls.LookStep(); FrameParts.Add(FrameParts.Looks, t); }
             if (!World.Ready || World.Loading || Startup.BlocksGameplay || GameState.currentlyLoading || !Refs.observerMirror || !FloatingOriginManager.instance || !LaneMap.Loaded)
-            { if (shown.Count > 0) ReleaseAll(); return; }
+            { if (shown.Count > 0) ReleaseAll(); AskEarly(); return; }
             if (scrambled == null)
             {
-                // Under Scrambled Seas no trader is drawn (the user's rule): a port moved from its vanilla place relative to port 0.
+                // Under Scrambled Seas (a port moved from its vanilla place relative to port 0) the routes for this map are made on a
+                // thread (ScrambledLanes, SCRAMBLED_TRADERS_DRAFT.md section 2); no trader is drawn until they are ready (S2, the user:
+                // "draw no trader until the route is ready"). Was: no trader drawn in a scrambled game.
                 double moved = MapStretch.MaxMove();
                 scrambled = moved > 50;
-                Plugin.Log?.LogInfo(scrambled.Value ? "Visible traders: the ports are moved (by " + moved.ToString("F0") + " m): no trader is drawn in this game." : "Visible traders: on.");
+                if (scrambled.Value)
+                {
+                    Plugin.Log?.LogInfo("Visible traders: the ports are moved (by " + moved.ToString("F0") + " m): the routes for this map are being made; no trader is drawn until they are ready.");
+                    try { ScrambledLanes.Request(ScrambledInput.Read()); }
+                    catch (Exception e) { Plugin.Log?.LogError("Visible traders: the routes for this map could not be started: " + e); }
+                }
+                else { if (askedEarly) ScrambledLanes.Cancel(); LaneMap.Use(null); Plugin.Log?.LogInfo("Visible traders: on."); }
             }
-            // (the flag too: a game before in the session may have left it on with no boat in the list, and the game's distance
-            // switcher's prefix would then keep them off here: the deep review of 2026-10-19)
-            if (scrambled.Value) { if (npcOff.Count > 0 || NpcBoatsHidden) NpcBoats(false); return; }
+            if (scrambled.Value)
+            {
+                var map = ScrambledLanes.Ready;
+                if (map != null && LaneMap.Scrambled != map)
+                {
+                    LaneMap.Use(map);
+                    Plugin.Log?.LogInfo("Visible traders: the routes for this map are ready (" + (Time.realtimeSinceStartup - ScrambledLanes.RequestedAt).ToString("F1") + " s after they were asked for): traders are drawn.");
+                }
+                // (the flag too: a game before in the session may have left it on with no boat in the list, and the game's distance
+                // switcher's prefix would then keep them off here: the deep review of 2026-10-19)
+                if (map == null)
+                {
+                    if (ScrambledLanes.Failure != null && !failedOnce) { failedOnce = true; Plugin.Log?.LogError("Visible traders: the routes for this map failed; no trader is drawn in this game: " + ScrambledLanes.Failure); }
+                    if (npcOff.Count > 0 || NpcBoatsHidden) NpcBoats(false);
+                    if (shown.Count > 0) ReleaseAll();
+                    return;
+                }
+            }
             t = FrameParts.Now; bool searched = NpcBoats(true); FrameParts.Add(FrameParts.Npc, t);
             watch.Restart();
             try
@@ -4202,8 +4295,12 @@ namespace EconomyOverhaul
                 {
                     case Phase.Sail:
                         if (b.destination < 0 || v.Path == null || b.origin != v.From || b.destination != v.To) return false;
-                        v.S = Mathf.Min(v.S + d, v.Path.Length);
-                        b.remaining = Rules.TripRemaining(b.trip, v.S, v.Path.Length);
+                        {
+                            // from the exact place while S still holds what the clock stored (S set elsewhere since: from S)
+                            double s = Math.Min((v.S == v.SKept ? v.SExact : v.S) + d, v.Path.Length);
+                            v.SExact = s; v.S = v.SKept = (float)s;
+                            b.remaining = Rules.TripRemaining(b.trip, s, v.Path.Length);
+                        }
                         return true;
                     case Phase.LegOut:
                         v.U = v.Back ? Mathf.Max(v.BackTo, v.U - d) : Mathf.Min(v.U + d, v.Leg.Length);
@@ -5012,7 +5109,9 @@ namespace EconomyOverhaul
             v.NextContact = Time.time + .25f;
             Beside(v);
             var player = PlayerReal();
-            if ((v.Pos - player).magnitude > Rules.TraderNear) return;
+            // far from the player nothing is looked for, but a turn aside still eases off as when nothing is ahead (it stayed aside
+            // until the player came within 1 km; the deep review of 2026-11-02, Claude's fix)
+            if ((v.Pos - player).magnitude > Rules.TraderNear) { if (ahead && Time.time > v.AvoidTill) v.Avoid = Mathf.MoveTowards(v.Avoid, 0f, 1f); return; }
             var f2 = DirOf(v.Yaw); var turn = Quaternion.Euler(0, v.Yaw, 0);
             bool inPort = v.Phase == Phase.LegIn || v.Phase == Phase.LegOut;
             if (ahead)
@@ -5447,6 +5546,982 @@ namespace EconomyOverhaul
         {
             try { var body = collision != null ? collision.rigidbody : null; if (body && TraderHulls.IsCopy(body)) TraderBubble.Contact(__instance.transform, body); }
             catch (Exception e) { if (!warned) { warned = true; Plugin.Log?.LogWarning("Trader bubble: a contact failed: " + e); } }
+        }
+    }
+
+    // ---- Visible traders on a Scrambled Seas map (SCRAMBLED_TRADERS_DRAFT.md section 2, the user's answers S1-S6; built 2026-11-02) ----
+    // Once the islands are moved and read (VisibleTraders' first scan after a load), the harbours and routes for this map are made on a
+    // background thread from the island charts and the lane map's harbour data; no trader is drawn until they are ready (S2). Every
+    // port's harbour moves with its island; a berth another island's land comes within 20 m of is closed (S1); each arrival point is
+    // made again by S5's rule; one lane per pair of Scrambled Seas' groups, A* only round each blocked stretch (the prototype
+    // outputs/economyoverhaul_scrambled/tools/routetime, measured in the draft's section 5). Nothing is saved.
+
+    // One island's own land (probe scrambled_charts, Data/islands.bin made by Data/MakeIslands.py): 10 m cells where it lies in the
+    // vanilla game, as bit rows. Cell (i, j) is the square x 10 i .. 10 i + 10, z 10 j .. 10 j + 10 (real, vanilla).
+    internal sealed class LandChart
+    {
+        internal const double Cell = 10;
+        internal readonly int Index, I0, J0, W, H, Count;
+        internal readonly double RootX, RootZ;
+        private readonly int words;
+        private readonly ulong[] bits;
+        // runs: row (from J0), column (from I0), count
+        internal LandChart(int index, double rootX, double rootZ, int i0, int j0, IList<int[]> runs)
+        {
+            Index = index; RootX = rootX; RootZ = rootZ; I0 = i0; J0 = j0;
+            foreach (var r in runs) { W = Math.Max(W, r[1] + r[2]); H = Math.Max(H, r[0] + 1); }
+            words = (W + 63) >> 6; bits = new ulong[Math.Max(1, words * H)];
+            foreach (var r in runs) for (int c = r[1]; c < r[1] + r[2]; c++) { bits[r[0] * words + (c >> 6)] |= 1UL << (c & 63); Count++; }
+        }
+        internal double MinX => I0 * Cell;
+        internal double MinZ => J0 * Cell;
+        internal double MaxX => (I0 + W) * Cell;
+        internal double MaxZ => (J0 + H) * Cell;
+        internal bool Has(int i, int j)
+        {
+            i -= I0; j -= J0;
+            return i >= 0 && j >= 0 && i < W && j < H && (bits[j * words + (i >> 6)] >> (i & 63) & 1UL) != 0;
+        }
+        // any land in row j between columns a and b (absolute, inclusive)
+        private bool RowAny(int j, int a, int b)
+        {
+            j -= J0; if (j < 0 || j >= H) return false;
+            a = Math.Max(a - I0, 0); b = Math.Min(b - I0, W - 1); if (a > b) return false;
+            int row = j * words, wa = a >> 6, wb = b >> 6;
+            for (int w = wa; w <= wb; w++)
+            {
+                ulong m = ulong.MaxValue;
+                if (w == wa) m &= ulong.MaxValue << (a & 63);
+                if (w == wb && (b & 63) != 63) m &= (1UL << ((b & 63) + 1)) - 1;
+                if ((bits[row + w] & m) != 0) return true;
+            }
+            return false;
+        }
+        // Land closer than d to (x, z) in the chart's vanilla frame (to the nearest point of a cell's square).
+        internal bool Near(double x, double z, double d)
+        {
+            if (x < MinX - d || x > MaxX + d || z < MinZ - d || z > MaxZ + d) return false;
+            int j0 = (int)Math.Floor((z - d) / Cell), j1 = (int)Math.Floor((z + d) / Cell);
+            for (int j = j0; j <= j1; j++)
+            {
+                double lo = j * Cell, dz = z < lo ? lo - z : z > lo + Cell ? z - lo - Cell : 0;
+                if (dz >= d) continue;
+                double w = Math.Sqrt(d * d - dz * dz);
+                if (RowAny(j, (int)Math.Floor((x - w) / Cell), (int)Math.Ceiling((x + w) / Cell) - 1)) return true;
+            }
+            return false;
+        }
+        // Every land cell (absolute i, j).
+        internal void Each(Action<int, int> cell)
+        {
+            for (int j = 0; j < H; j++)
+                for (int w = 0; w < words; w++)
+                {
+                    ulong v = bits[j * words + w];
+                    for (int b = 0; v != 0; b++, v >>= 1) if ((v & 1UL) != 0) cell(I0 + (w << 6) + b, J0 + j);
+                }
+        }
+    }
+
+    // The embedded island charts (Data/islands.bin): each charted island's land, the land that belongs to no island (the lagoon's
+    // terrain plane, which Scrambled Seas never moves), and the island each port is on.
+    internal static class IslandCharts
+    {
+        private static readonly object gate = new object();
+        private static Dictionary<int, LandChart> islands;
+        private static List<LandChart> fixedLand;
+        private static Dictionary<int, int> portIsland;
+        internal static Dictionary<int, LandChart> Islands { get { Load(); return islands; } }
+        internal static List<LandChart> Fixed { get { Load(); return fixedLand; } }
+        internal static Dictionary<int, int> PortIsland { get { Load(); return portIsland; } }
+        internal static void Load()
+        {
+            lock (gate)
+            {
+                if (islands != null) return;
+                using (var s = typeof(IslandCharts).Assembly.GetManifestResourceStream("EconomyOverhaul.Data.islands.bin"))
+                using (var r = new System.IO.BinaryReader(s)) Parse(r);
+            }
+        }
+        private static void Parse(System.IO.BinaryReader r)
+        {
+            var magic = r.ReadBytes(4);
+            if (magic.Length != 4 || magic[0] != 'E' || magic[1] != 'O' || magic[2] != 'I' || magic[3] != '1') throw new InvalidOperationException("islands.bin: not an island chart file");
+            var isl = new Dictionary<int, LandChart>(); var fx = new List<LandChart>(); var ports = new Dictionary<int, int>();
+            int n = r.ReadInt32();
+            for (int k = 0; k < n; k++) { var c = Read(r); isl[c.Index] = c; }
+            n = r.ReadInt32();
+            for (int k = 0; k < n; k++) fx.Add(Read(r));
+            n = r.ReadInt32();
+            for (int k = 0; k < n; k++) { int port = r.ReadInt32(), island = r.ReadInt32(); ports[port] = island; }
+            fixedLand = fx; portIsland = ports; islands = isl;
+        }
+        private static LandChart Read(System.IO.BinaryReader r)
+        {
+            int index = r.ReadInt32(); float rx = r.ReadSingle(), rz = r.ReadSingle(); int i0 = r.ReadInt32(), j0 = r.ReadInt32(), runs = r.ReadInt32();
+            var list = new List<int[]>(runs);
+            for (int k = 0; k < runs; k++) { int row = r.ReadInt16(), col = r.ReadInt16(), count = r.ReadInt16(); list.Add(new[] { row, col, count }); }
+            return new LandChart(index, rx, rz, i0, j0, list);
+        }
+    }
+
+    // Scrambled Seas' archipelagos (7.1.9's WorldScrambler.GenerateDefs, no regions.json): island 30 is in groups 6 and 7 and group
+    // 7, placed later, wins; an island in no group joins its closest region's group: Better Ports' Bottleneck (67) Emerald's (its
+    // region 15.8 km off, probe scrambled_charts' REGION lines).
+    internal static class ScrambleGroups
+    {
+        private static readonly int[][] Defs = {
+            new[] { 1, 2, 3, 4, 5, 6, 7, 8, 40 }, new[] { 9, 10, 11, 12, 13, 22, 37, 38, 39, 67 }, new[] { 15, 16, 17, 19, 21, 23, 33, 34, 35, 36 },
+            new[] { 20, 41, 42 }, new[] { 18 }, new[] { 25 }, new[] { 26, 27, 28, 29, 31 }, new[] { 30 }, new[] { 32 } };
+        internal static readonly int[] LagoonIslands = { 26, 27, 28, 29, 31 };
+        internal static int Of(int island)
+        {
+            for (int g = 0; g < Defs.Length; g++) if (Array.IndexOf(Defs[g], island) >= 0) return g;
+            return -1;
+        }
+    }
+
+    // The map as it is when the routes are asked for, read on the main thread (the islands' live places), so the thread makes no
+    // Unity call: each charted island's offset from its vanilla place, the islands without a chart as circles.
+    internal sealed class ScrambledInput
+    {
+        internal readonly Dictionary<int, Vector2> Offsets = new Dictionary<int, Vector2>();
+        internal readonly List<Vector3> Circles = new List<Vector3>();    // x, z (real, live), radius
+        internal readonly List<string> Notes = new List<string>();
+        internal string Key;
+        private static readonly Dictionary<int, float> radiusOf = new Dictionary<int, float>();
+        internal const float CircleRadius = 2000f;
+        internal static ScrambledInput Read()
+        {
+            var fom = FloatingOriginManager.instance; var input = new ScrambledInput(); var key = new StringBuilder();
+            var charts = IslandCharts.Islands;
+            for (int i = 0; Refs.islands != null && i < Refs.islands.Length; i++)
+            {
+                var t = Refs.islands[i]; if (!t) continue;
+                var real = fom.ShiftingPosToRealPos(t.position);
+                if (charts.TryGetValue(i, out var c))
+                {
+                    var o = new Vector2((float)(real.x - c.RootX), (float)(real.z - c.RootZ)); input.Offsets[i] = o;
+                    key.Append(i).Append(':').Append(Mathf.RoundToInt(o.x)).Append(',').Append(Mathf.RoundToInt(o.y)).Append(';');
+                }
+                else
+                {
+                    if (!radiusOf.TryGetValue(i, out float radius)) radiusOf[i] = radius = UnchartedRadius(t);
+                    input.Circles.Add(new Vector3(real.x, real.z, radius));
+                    key.Append(i).Append("c:").Append(Mathf.RoundToInt(real.x)).Append(',').Append(Mathf.RoundToInt(real.z)).Append(';');
+                    input.Notes.Add("Scrambled lanes: island " + i + " (" + t.name + ") has no chart: kept clear as a circle of " + radius.ToString("F0") + " m round its root.");
+                }
+            }
+            input.Key = key.ToString();
+            return input;
+        }
+        // An island an island mod adds since the charts were made: its own colliders' reach from its root (under it, and its scene's
+        // while loaded), else 2 km.
+        private static float UnchartedRadius(Transform t)
+        {
+            try
+            {
+                var colliders = new List<Collider>(t.GetComponentsInChildren<Collider>(true));
+                var hz = t.GetComponent<IslandHorizon>();
+                if (hz && hz.islandIndex > 0 && hz.islandIndex < SceneManager.sceneCountInBuildSettings)
+                {
+                    var scene = SceneManager.GetSceneByBuildIndex(hz.islandIndex);
+                    if (scene.isLoaded) foreach (var g in scene.GetRootGameObjects()) colliders.AddRange(g.GetComponentsInChildren<Collider>(true));
+                }
+                float most = 0; var root = t.position;
+                foreach (var c in colliders)
+                {
+                    if (!c || c.isTrigger) continue;
+                    var b = c.bounds;
+                    foreach (float x in new[] { b.min.x, b.max.x }) foreach (float z in new[] { b.min.z, b.max.z }) most = Mathf.Max(most, new Vector2(x - root.x, z - root.z).magnitude);
+                }
+                return most > 50 && most < 20000 ? most : CircleRadius;
+            }
+            catch { return CircleRadius; }
+        }
+    }
+
+    // The harbours and lanes of one scrambled map (made on the thread, then used on the main thread only).
+    internal sealed class ScrambledMap
+    {
+        internal string Key;
+        internal int Generation;
+        internal readonly Dictionary<int, TraderHarbour> Harbours = new Dictionary<int, TraderHarbour>();   // ports drawn
+        internal readonly Dictionary<int, int> GroupOf = new Dictionary<int, int>();
+        internal readonly Dictionary<int, Vector2> Offsets = new Dictionary<int, Vector2>();
+        internal readonly List<Vector2> LagoonPorts = new List<Vector2>();
+        internal readonly Dictionary<long, Vector2> Exits = new Dictionary<long, Vector2>();          // group a * 100 + group b: a's exit toward b
+        internal readonly Dictionary<long, List<Vector2>> InGroup = new Dictionary<long, List<Vector2>>();   // port a * 1000 + port b (a < b)
+        internal readonly Dictionary<long, List<Vector2>> PortExit = new Dictionary<long, List<Vector2>>();  // port * 100 + other group
+        internal readonly Dictionary<long, List<Vector2>> Lanes = new Dictionary<long, List<Vector2>>();     // group a * 100 + group b (a < b)
+        internal readonly HashSet<int> Shut = new HashSet<int>();
+        internal readonly List<string> Log = new List<string>();
+        internal double Ms, HarbourMs, GridMs, SearchMs;
+        internal int Searches, Straight, Detoured, NoWay, BerthsClosed, AnchoragesClosed, DirectDropped, HarbourWays, Blocked;
+        internal float LongestWay;
+        internal const float LagoonReach = 800f, SeaHalf = 60f, LagoonHalf = 20f;
+        private readonly Dictionary<long, LanePath> trips = new Dictionary<long, LanePath>();
+        internal TraderHarbour HarbourOf(int port) => Harbours.TryGetValue(port, out var h) ? h : null;
+        internal int Choices(int from, int to) => Trip(from, to) != null ? 1 : 0;
+        // Lanes 120 m wide at sea, 40 m within 800 m of a lagoon port (LaneMap.InLagoon's lagoon ring no longer exists).
+        internal float HalfWidth(Vector2 p)
+        {
+            foreach (var q in LagoonPorts) if ((q - p).sqrMagnitude < LagoonReach * LagoonReach) return LagoonHalf;
+            return SeaHalf;
+        }
+        private static List<Vector2> Way(Dictionary<long, List<Vector2>> ways, long a, long b, long scale)
+        {
+            if (a < b) return ways.TryGetValue(a * scale + b, out var w) ? w : null;
+            if (!ways.TryGetValue(b * scale + a, out var back) || back == null) return null;
+            var r = new List<Vector2>(back); r.Reverse(); return r;
+        }
+        // A trip from the origin's approach point to the destination's: in one group the way between them; between groups to the
+        // origin group's exit toward the other, the pair's lane, then from the other group's exit to the port. Null when none.
+        internal LanePath Trip(int from, int to)
+        {
+            if (from == to) return null;
+            long key = (long)from * 1000 + to;
+            if (trips.TryGetValue(key, out var cached)) return cached;
+            LanePath path = null;
+            if (Harbours.ContainsKey(from) && Harbours.ContainsKey(to) && GroupOf.TryGetValue(from, out int ga) && GroupOf.TryGetValue(to, out int gb))
+            {
+                List<Vector2> pts = null;
+                if (ga == gb) pts = Way(InGroup, from, to, 1000);
+                else
+                {
+                    PortExit.TryGetValue((long)from * 100 + gb, out var a); PortExit.TryGetValue((long)to * 100 + ga, out var b);
+                    var lane = Way(Lanes, ga, gb, 100);
+                    if (a != null && b != null && lane != null) { pts = new List<Vector2>(a); pts.AddRange(lane); for (int i = b.Count - 1; i >= 0; i--) pts.Add(b[i]); }
+                }
+                if (pts != null && pts.Count >= 2) path = new LanePath(pts);
+            }
+            trips[key] = path;
+            return path;
+        }
+    }
+
+    // Makes a ScrambledMap: no Unity call (Vector2 and Mathf are plain code).
+    internal sealed class ScrambleBuilder
+    {
+        // A land at its place on this map: a chart moved by its island's offset, the fixed land, or an uncharted island's circle.
+        private sealed class Placed
+        {
+            internal LandChart Chart; internal double Ox, Oz, Cx, Cz, R; internal int Island; internal bool Lagoon;
+            internal double X0, Z0, X1, Z1;
+            internal bool Near(double x, double z, double d)
+            {
+                if (x < X0 - d || x > X1 + d || z < Z0 - d || z > Z1 + d) return false;
+                if (Chart != null) return Chart.Near(x - Ox, z - Oz, d);
+                double dx = x - Cx, dz = z - Cz, r = R + d; return dx * dx + dz * dz < r * r;
+            }
+        }
+        // The harbours' rules (section 2): the arrival point keeps 120 m clear of every island (40 m at a lagoon port); a berth with
+        // another island's land within 20 m of it is closed (S1); a harbour way keeps 12 m from its own island and S1's 20 m from
+        // any other, dearer within 40 m of land.
+        internal const double ClearSea = 120, ClearLagoon = 40, Close = 20, OwnPass = 12, NearLand = 40, Walk = 5;
+        internal static readonly int[] LagoonPortIds = { 22, 23, 24, 25 };
+        private readonly ScrambledInput input;
+        private readonly IReadOnlyDictionary<int, TraderHarbour> vanilla;
+        private readonly Func<bool> cancelled;
+        private readonly List<Placed> lands = new List<Placed>();
+        private readonly ScrambledMap map = new ScrambledMap();
+        private RouteGrid grid;
+        private ScrambleBuilder(ScrambledInput input, IReadOnlyDictionary<int, TraderHarbour> vanilla, Func<bool> cancelled)
+        { this.input = input; this.vanilla = vanilla; this.cancelled = cancelled; }
+        private void Check() { if (cancelled != null && cancelled()) throw new OperationCanceledException(); }
+
+        internal static ScrambledMap Build(ScrambledInput input, IReadOnlyDictionary<int, TraderHarbour> vanilla, Func<bool> cancelled)
+        {
+            var b = new ScrambleBuilder(input, vanilla, cancelled);
+            var all = Stopwatch.StartNew();
+            b.Place();
+            var t = Stopwatch.StartNew(); b.MakeHarbours(); b.map.HarbourMs = t.Elapsed.TotalMilliseconds;
+            t = Stopwatch.StartNew(); b.grid = new RouteGrid(b.lands, b.map.LagoonPorts, b.Check); b.map.Blocked = b.grid.Blocked.Count; b.map.GridMs = t.Elapsed.TotalMilliseconds;
+            t = Stopwatch.StartNew(); b.MakeLanes(); b.map.SearchMs = t.Elapsed.TotalMilliseconds;
+            b.map.Ms = all.Elapsed.TotalMilliseconds; b.map.Key = input.Key;
+            b.map.Log.AddRange(input.Notes);
+            b.map.Log.Add("Scrambled lanes: made in " + b.map.Ms.ToString("F0") + " ms (harbours " + b.map.HarbourMs.ToString("F0") + ", land kept clear " + b.map.GridMs.ToString("F0") +
+                " (" + b.map.Blocked + " cells of 50 m), routes " + b.map.SearchMs.ToString("F0") + "); ports drawn " + b.map.Harbours.Count + ", shut in " + b.map.Shut.Count +
+                "; berths closed " + b.map.BerthsClosed + ", anchorages closed " + b.map.AnchoragesClosed + ", direct ways dropped " + b.map.DirectDropped + ", harbour ways " + b.map.HarbourWays +
+                "; searches " + b.map.Searches + " (straight " + b.map.Straight + ", round land " + b.map.Detoured + ", no way " + b.map.NoWay + "), the longest " + (b.map.LongestWay / 1000).ToString("F0") + " km.");
+            return b.map;
+        }
+
+        // ---- The land at its new places ----
+        private void Place()
+        {
+            foreach (var kv in input.Offsets)
+            {
+                if (!IslandCharts.Islands.TryGetValue(kv.Key, out var c)) continue;
+                map.Offsets[kv.Key] = kv.Value;
+                lands.Add(new Placed { Chart = c, Ox = kv.Value.x, Oz = kv.Value.y, Island = kv.Key, Lagoon = Array.IndexOf(ScrambleGroups.LagoonIslands, kv.Key) >= 0,
+                    X0 = c.MinX + kv.Value.x, Z0 = c.MinZ + kv.Value.y, X1 = c.MaxX + kv.Value.x, Z1 = c.MaxZ + kv.Value.y });
+            }
+            foreach (var c in IslandCharts.Fixed)
+                lands.Add(new Placed { Chart = c, Island = -1, Lagoon = true, X0 = c.MinX, Z0 = c.MinZ, X1 = c.MaxX, Z1 = c.MaxZ });
+            int n = 0;
+            foreach (var c in input.Circles)
+                lands.Add(new Placed { Cx = c.x, Cz = c.y, R = c.z, Island = -1000 - n++, X0 = c.x - c.z, Z0 = c.y - c.z, X1 = c.x + c.z, Z1 = c.y + c.z });
+            foreach (int p in LagoonPortIds)
+                if (vanilla.TryGetValue(p, out var h) && IslandCharts.PortIsland.TryGetValue(p, out int i) && input.Offsets.TryGetValue(i, out var o)) map.LagoonPorts.Add(h.PortPoint + o);
+        }
+        // land within d of (x, z) in `set`, but not of island `skip` (int.MinValue: none skipped)
+        private static bool Near(List<Placed> set, double x, double z, double d, int skip)
+        {
+            for (int k = 0; k < set.Count; k++) { var p = set[k]; if (p.Island != skip && p.Near(x, z, d)) return true; }
+            return false;
+        }
+        private static bool NearOwn(List<Placed> set, double x, double z, double d, int own)
+        {
+            for (int k = 0; k < set.Count; k++) { var p = set[k]; if (p.Island == own && p.Near(x, z, d)) return true; }
+            return false;
+        }
+
+        // ---- The harbours (section 2: "Harbours kept", S1, S5) ----
+        private sealed class Harbour
+        {
+            internal int Port, Island; internal Vector2 O; internal double Clear; internal List<Placed> Lands;
+        }
+        private void MakeHarbours()
+        {
+            var moves = new List<float>();
+            foreach (var v in vanilla.Values.OrderBy(h => h.Port))
+            {
+                Check();
+                if (!IslandCharts.PortIsland.TryGetValue(v.Port, out int island) || !input.Offsets.TryGetValue(island, out var o)) continue;
+                int group = ScrambleGroups.Of(island); if (group < 0) continue;
+                var h = MakeHarbour(v, island, o, moves);
+                if (h != null) { map.Harbours[v.Port] = h; map.GroupOf[v.Port] = group; }
+            }
+            if (moves.Count > 0)
+            {
+                moves.Sort();
+                map.Log.Add("Scrambled lanes: arrival points made again " + moves.Count + ", from the vanilla one moved with its island: median " + moves[moves.Count / 2].ToString("F0") + " m, at most " + moves[moves.Count - 1].ToString("F0") + " m.");
+            }
+        }
+        private static IEnumerable<Vector2> PointsOf(TraderHarbour v)
+        {
+            yield return v.Approach; yield return v.PortPoint; yield return v.Anchorage;
+            foreach (var b in v.Berths)
+            {
+                yield return b.Centre;
+                foreach (var p in b.Leg.Points) yield return p;
+                if (b.Second != null) foreach (var p in b.Second.Points) yield return p;
+                if (b.Direct != null) foreach (var p in b.Direct.Points) yield return p;
+            }
+            if (v.AnchorLeg != null) foreach (var p in v.AnchorLeg.Points) yield return p;
+            if (v.AnchorSecond != null) foreach (var p in v.AnchorSecond.Points) yield return p;
+        }
+        private TraderHarbour MakeHarbour(TraderHarbour v, int island, Vector2 o, List<float> moves)
+        {
+            var hb = new Harbour { Port = v.Port, Island = island, O = o, Clear = Array.IndexOf(LagoonPortIds, v.Port) >= 0 ? ClearLagoon : ClearSea };
+            // the land within reach of this harbour (its own island's too)
+            double x0 = double.MaxValue, z0 = double.MaxValue, x1 = double.MinValue, z1 = double.MinValue;
+            foreach (var p in PointsOf(v)) { x0 = Math.Min(x0, p.x + o.x); z0 = Math.Min(z0, p.y + o.y); x1 = Math.Max(x1, p.x + o.x); z1 = Math.Max(z1, p.y + o.y); }
+            const double reach = 2000;
+            hb.Lands = lands.Where(l => l.X1 >= x0 - reach && l.X0 <= x1 + reach && l.Z1 >= z0 - reach && l.Z0 <= z1 + reach).ToList();
+            var h = new TraderHarbour { Port = v.Port, PortPoint = v.PortPoint + o, Anchorage = v.Anchorage + o, AnchorRadius = v.AnchorRadius };
+            var berths = v.Berths.OrderBy(b => b.Number).ToList();
+            // The arrival point (S5): berth 1's leg (else the anchorage's, from its centre) walked out to its first point clear of every
+            // island; a leg that never gets there goes on by a harbour way to the nearest clear water.
+            LanePath first = berths.Count > 0 ? berths[0].Leg.Moved(o) : v.AnchorLeg?.Moved(o).Reversed();
+            if (first == null) return null;
+            float cut = Cut(hb, first);
+            Vector2 arrival; List<Vector2> firstWay = null;
+            if (cut >= 0) arrival = first.At(cut);
+            else
+            {
+                firstWay = HarbourWay(hb, first.End, null);
+                if (firstWay == null) { map.Log.Add("Scrambled lanes: port " + v.Port + ": no clear water reached from its harbour: not drawn."); return null; }
+                arrival = firstWay[firstWay.Count - 1]; map.HarbourWays++;
+            }
+            h.Approach = arrival; moves.Add(Vector2.Distance(arrival, v.Approach + o));
+            var closed = new List<int>();
+            foreach (var b in berths)
+            {
+                Check();
+                var leg = b.Leg.Moved(o);
+                var kept = Kept(hb, leg, out float c);
+                var joined = c >= 0 || b != berths[0] || firstWay == null ? Join(hb, leg, c, arrival) : leg.Part(0, leg.Length, firstWay);
+                LanePath second = null, keptSecond = null;
+                if (b.Second != null)
+                {
+                    var s = b.Second.Moved(o); keptSecond = Kept(hb, s, out float cs);
+                    second = Join(hb, s, cs, arrival);
+                }
+                // S1: another island's land within 20 m of its hull, the kept part of its leg or of its second way
+                if (joined == null || OthersNear(hb, Outline(b.Centre + o, b.Heading, b.Length, b.Beam)) || OthersNear(hb, Samples(kept)) || keptSecond != null && OthersNear(hb, Samples(keptSecond)))
+                { closed.Add(b.Number); map.BerthsClosed++; continue; }
+                var nb = new TraderBerth { Port = b.Port, Number = b.Number, Class = b.Class, Side = b.Side, Centre = b.Centre + o, Heading = b.Heading, Length = b.Length, Beam = b.Beam, WayOut = b.WayOut, Leg = joined, Second = second };
+                if (b.Direct != null)
+                {
+                    var d = b.Direct.Moved(o);
+                    if (OthersNear(hb, Samples(d))) map.DirectDropped++; else nb.Direct = d;
+                }
+                h.Berths.Add(nb);
+            }
+            bool anchorOpen = false;
+            if (v.AnchorLeg != null)
+            {
+                // stored from the approach point to the anchorage: walked out from the anchorage's centre, then turned back
+                var leg = v.AnchorLeg.Moved(o).Reversed(); var kept = Kept(hb, leg, out float c); var joined = Join(hb, leg, c, arrival);
+                LanePath keptSecond = null, second = null;
+                if (v.AnchorSecond != null) { var s = v.AnchorSecond.Moved(o).Reversed(); keptSecond = Kept(hb, s, out float cs); second = Join(hb, s, cs, arrival); }
+                if (joined == null || OthersNear(hb, h.Anchorage, v.AnchorRadius + Close) || OthersNear(hb, Samples(kept)) || keptSecond != null && OthersNear(hb, Samples(keptSecond))) map.AnchoragesClosed++;
+                else { h.AnchorLeg = joined.Reversed(); h.AnchorSecond = second?.Reversed(); anchorOpen = true; }
+            }
+            if (closed.Count > 0 || !anchorOpen && v.AnchorLeg != null)
+                map.Log.Add("Scrambled lanes: port " + v.Port + ": another island's land within 20 m: " + (closed.Count > 0 ? "berths " + string.Join(", ", closed.Select(n => n.ToString()).ToArray()) + " closed" : "no berth closed") +
+                    (!anchorOpen && v.AnchorLeg != null ? ", the anchorage closed" : "") + ".");
+            if (h.Berths.Count == 0 && !anchorOpen) { map.Log.Add("Scrambled lanes: port " + v.Port + ": no berth or anchorage left: not drawn."); return null; }
+            return h;
+        }
+        // The first place (every 5 m from the leg's start, then its end) clear of every island by the harbour's clearance; -1: none.
+        private float Cut(Harbour hb, LanePath leg)
+        {
+            for (float s = 0; ; s += (float)Walk)
+            {
+                if (s > leg.Length) s = leg.Length;
+                var p = leg.At(s);
+                if (!Near(hb.Lands, p.x, p.y, hb.Clear, int.MinValue)) return s;
+                if (s >= leg.Length) return -1;
+            }
+        }
+        // The kept part of a leg: up to its first clear place (all of it when it never gets there).
+        private LanePath Kept(Harbour hb, LanePath leg, out float cut)
+        {
+            cut = Cut(hb, leg);
+            return cut >= 0 ? leg.Part(0, cut, null) : leg;
+        }
+        // A leg cut at its first clear place (or its end) and joined to the arrival point: straight where the line keeps the clearance,
+        // else a harbour way; null when there is none.
+        private LanePath Join(Harbour hb, LanePath leg, float cut, Vector2 arrival)
+        {
+            float at = cut >= 0 ? cut : leg.Length; var from = leg.At(at);
+            if ((from - arrival).sqrMagnitude < 1f) return leg.Part(0, at, new[] { arrival });   // its own cut, or within a metre of it
+            List<Vector2> more;
+            if (Clear(hb, from, arrival)) more = new List<Vector2> { arrival };
+            else { more = HarbourWay(hb, from, arrival); if (more == null) return null; map.HarbourWays++; }
+            return leg.Part(0, at, more);
+        }
+        private bool Clear(Harbour hb, Vector2 a, Vector2 b)
+        {
+            float len = Vector2.Distance(a, b); int n = Mathf.Max(1, Mathf.CeilToInt(len / (float)Walk));
+            for (int k = 0; k <= n; k++) { var p = Vector2.Lerp(a, b, (float)k / n); if (Near(hb.Lands, p.x, p.y, hb.Clear, int.MinValue)) return false; }
+            return true;
+        }
+        private bool OthersNear(Harbour hb, IEnumerable<Vector2> pts)
+        {
+            foreach (var p in pts) if (Near(hb.Lands, p.x, p.y, Close, hb.Island)) return true;
+            return false;
+        }
+        private bool OthersNear(Harbour hb, Vector2 p, double d) => Near(hb.Lands, p.x, p.y, d, hb.Island);
+        private static IEnumerable<Vector2> Samples(LanePath leg)
+        {
+            for (float s = 0; s < leg.Length; s += 2.5f) yield return leg.At(s);
+            yield return leg.End;
+        }
+        // A berth's hull rectangle's edge, every 2 m (heading in degrees from +z toward +x).
+        private static IEnumerable<Vector2> Outline(Vector2 c, float heading, float length, float beam)
+        {
+            float t = heading * Mathf.Deg2Rad; var f = new Vector2(Mathf.Sin(t), Mathf.Cos(t)); var r = new Vector2(Mathf.Cos(t), -Mathf.Sin(t));
+            var corners = new[] { c + f * length / 2 + r * beam / 2, c + f * length / 2 - r * beam / 2, c - f * length / 2 - r * beam / 2, c - f * length / 2 + r * beam / 2 };
+            for (int k = 0; k < 4; k++)
+            {
+                var a = corners[k]; var b = corners[(k + 1) % 4]; int n = Mathf.Max(1, Mathf.CeilToInt(Vector2.Distance(a, b) / 2f));
+                for (int i = 0; i < n; i++) yield return Vector2.Lerp(a, b, (float)i / n);
+            }
+        }
+        // A harbour way on a 10 m grid (as the lane map routed its berth legs, as far as the charts go): cells keeping 12 m from the
+        // harbour's own island and 20 m from any other land, dearer (x3) within 40 m of land; cells within 30 m of its ends free. To
+        // `to`, or with `to` null to the nearest water clear by the harbour's clearance. Its points after `from`, smoothed; null: none.
+        private List<Vector2> HarbourWay(Harbour hb, Vector2 from, Vector2? to)
+        {
+            foreach (double margin in new[] { 400.0, 1500.0 })
+            {
+                var way = HarbourSearch(hb, from, to, margin);
+                if (way != null) return way;
+            }
+            return null;
+        }
+        private List<Vector2> HarbourSearch(Harbour hb, Vector2 from, Vector2? to, double margin)
+        {
+            const double cell = 10, free = 30;
+            var goal = to ?? from;
+            double ox = Math.Floor((Math.Min(from.x, goal.x) - margin) / cell) * cell, oz = Math.Floor((Math.Min(from.y, goal.y) - margin) / cell) * cell;
+            int w = (int)Math.Ceiling((Math.Max(from.x, goal.x) + margin - ox) / cell) + 1, h = (int)Math.Ceiling((Math.Max(from.y, goal.y) + margin - oz) / cell) + 1;
+            var state = new sbyte[w * h];   // 0 unknown, 1 passable, 2 passable near land, -1 blocked
+            var g = new float[w * h]; var prev = new int[w * h]; var done = new bool[w * h];
+            for (int i = 0; i < g.Length; i++) g[i] = float.MaxValue;
+            int Index(Vector2 p) => Mathf.Clamp((int)((p.y - oz) / cell), 0, h - 1) * w + Mathf.Clamp((int)((p.x - ox) / cell), 0, w - 1);
+            Vector2 Centre(int i) => new Vector2((float)(ox + (i % w + .5) * cell), (float)(oz + (i / w + .5) * cell));
+            bool EndZone(Vector2 p) => (p - from).sqrMagnitude < free * free || to.HasValue && (p - to.Value).sqrMagnitude < free * free;
+            sbyte State(int i)
+            {
+                if (state[i] != 0) return state[i];
+                var p = Centre(i);
+                bool pass = EndZone(p) || !NearOwn(hb.Lands, p.x, p.y, OwnPass, hb.Island) && !Near(hb.Lands, p.x, p.y, Close, hb.Island);
+                return state[i] = !pass ? (sbyte)-1 : Near(hb.Lands, p.x, p.y, NearLand, int.MinValue) ? (sbyte)2 : (sbyte)1;
+            }
+            int start = Index(from), target = to.HasValue ? Index(to.Value) : -1, gx = target >= 0 ? target % w : 0, gz = target >= 0 ? target / w : 0;
+            float H(int i) { if (target < 0) return 0; int dx = Math.Abs(i % w - gx), dz = Math.Abs(i / w - gz); return Math.Max(dx, dz) + .41421f * Math.Min(dx, dz); }
+            var heap = new MinHeap(); g[start] = 0; prev[start] = -1; heap.Push(start, H(start));
+            int[] DX = { 1, -1, 0, 0, 1, 1, -1, -1 }, DZ = { 0, 0, 1, -1, 1, -1, 1, -1 }; float[] C = { 1, 1, 1, 1, 1.41421f, 1.41421f, 1.41421f, 1.41421f };
+            int found = -1, expanded = 0;
+            while (heap.Count > 0)
+            {
+                int u = heap.Pop(); if (done[u]) continue; done[u] = true;
+                if (++expanded % 2048 == 0) Check();
+                if (u == target || target < 0 && !Near(hb.Lands, Centre(u).x, Centre(u).y, hb.Clear, int.MinValue)) { found = u; break; }
+                int ux = u % w, uz = u / w;
+                for (int k = 0; k < 8; k++)
+                {
+                    int vx = ux + DX[k], vz = uz + DZ[k]; if (vx < 0 || vz < 0 || vx >= w || vz >= h) continue;
+                    int v = vz * w + vx; if (done[v]) continue;
+                    sbyte s = State(v); if (s < 0) continue;
+                    if (k >= 4 && (State(uz * w + vx) < 0 || State(vz * w + ux) < 0)) continue;
+                    float nd = g[u] + C[k] * (s == 2 ? 3f : 1f);
+                    if (nd < g[v]) { g[v] = nd; prev[v] = u; heap.Push(v, nd + H(v)); }
+                }
+            }
+            if (found < 0) return null;
+            // the start cell itself qualifies (it holds `to`, or is clear water already): one point, as the smoothing below needs two
+            // cells and gave none (MakeHarbour's last point threw, Join left a leg short; the deep review of 2026-11-02, Claude's fix)
+            if (prev[found] < 0) return new List<Vector2> { to ?? Centre(found) };
+            var cells = new List<Vector2>();
+            for (int k = found; k >= 0; k = prev[k]) cells.Add(Centre(k));
+            cells.Reverse(); cells[0] = from;
+            if (to.HasValue) cells[cells.Count - 1] = to.Value;
+            // smoothed: each point kept only where the straight line past it would leave the passable water
+            bool LineOk(Vector2 a, Vector2 b)
+            {
+                float len = Vector2.Distance(a, b); int n = Mathf.Max(1, Mathf.CeilToInt(len / 2.5f));
+                for (int k = 1; k < n; k++)
+                {
+                    var p = Vector2.Lerp(a, b, (float)k / n);
+                    if (!EndZone(p) && (NearOwn(hb.Lands, p.x, p.y, OwnPass, hb.Island) || Near(hb.Lands, p.x, p.y, Close, hb.Island))) return false;
+                }
+                return true;
+            }
+            var outp = new List<Vector2>(); int i0 = 0;
+            while (i0 < cells.Count - 1)
+            {
+                int j = i0 + 1;
+                while (j + 1 < cells.Count && LineOk(cells[i0], cells[j + 1])) j++;
+                outp.Add(cells[j]); i0 = j;
+            }
+            return outp;
+        }
+
+        // ---- The lanes (section 2: "The lanes") ----
+        private void MakeLanes()
+        {
+            var ports = map.Harbours.Keys.OrderBy(p => p).ToList();
+            // a port shut in by land (its arrival point joined to no open sea through the water kept clear): no lanes, not drawn
+            foreach (int p in ports) { Check(); if (!grid.Open(map.Harbours[p].Approach)) map.Shut.Add(p); }
+            foreach (int p in map.Shut) { var q = map.Harbours[p].Approach; map.Log.Add("Scrambled lanes: port " + p + " is shut in by land (no open sea from its arrival point at (" + q.x.ToString("F0") + ", " + q.y.ToString("F0") + ")): not drawn."); }
+            var byGroup = ports.GroupBy(p => map.GroupOf[p]).ToDictionary(g => g.Key, g => g.ToList());
+            var mid = new Dictionary<int, Vector2>(); var rad = new Dictionary<int, float>();
+            foreach (var g in byGroup)
+            {
+                var c = Vector2.zero; foreach (int p in g.Value) c += map.Harbours[p].Approach; c /= g.Value.Count;
+                mid[g.Key] = c; rad[g.Key] = g.Value.Max(p => Vector2.Distance(map.Harbours[p].Approach, c)) + 1500f;
+            }
+            var open = ports.Where(p => !map.Shut.Contains(p)).ToList();
+            var groups = byGroup.Keys.OrderBy(k => k).ToList();
+            // inside a group: the way between each pair of arrival points
+            for (int a = 0; a < open.Count; a++)
+                for (int b = a + 1; b < open.Count; b++)
+                    if (map.GroupOf[open[a]] == map.GroupOf[open[b]])
+                        map.InGroup[(long)open[a] * 1000 + open[b]] = Search(map.Harbours[open[a]].Approach, map.Harbours[open[b]].Approach, open[a] + "-" + open[b]);
+            // between groups: one lane per pair, between an exit on each group's edge toward the other (its ports' middle, out past its
+            // farthest port by 1.5 km, then the nearest clear cell joined to open sea)
+            for (int a = 0; a < groups.Count; a++)
+                for (int b = a + 1; b < groups.Count; b++)
+                {
+                    int ga = groups[a], gb = groups[b]; var d = (mid[gb] - mid[ga]).normalized;
+                    var ea = grid.NearestOpen(mid[ga] + d * rad[ga]); var eb = grid.NearestOpen(mid[gb] - d * rad[gb]);
+                    map.Exits[(long)ga * 100 + gb] = ea; map.Exits[(long)gb * 100 + ga] = eb;
+                    map.Lanes[(long)ga * 100 + gb] = Search(ea, eb, "group " + ga + "|" + gb);
+                }
+            // each port to its group's exit toward every other group
+            foreach (int p in open)
+                foreach (int g in groups)
+                {
+                    int own = map.GroupOf[p]; if (g == own) continue;
+                    map.PortExit[(long)p * 100 + g] = Search(map.Harbours[p].Approach, map.Exits[(long)own * 100 + g], "port " + p + " to the exit toward group " + g);
+                }
+            foreach (int p in map.Shut) map.Harbours.Remove(p);
+        }
+        private List<Vector2> Search(Vector2 a, Vector2 b, string name)
+        {
+            Check();
+            map.Searches++;
+            var way = grid.Way(a, b, out bool straight);
+            if (way == null) { map.NoWay++; map.Log.Add("Scrambled lanes: no way found " + name + "."); return null; }
+            if (straight) map.Straight++; else map.Detoured++;
+            float len = 0; for (int k = 1; k < way.Count; k++) len += Vector2.Distance(way[k - 1], way[k]);
+            map.LongestWay = Mathf.Max(map.LongestWay, len);
+            return way;
+        }
+
+        // The land kept clear on a 50 m grid (sparse, so a 4x map costs no more than a 1x one): every cell whose square comes within
+        // 100 m of a land cell's (5 x 5 cells round it), so a lane through free cells keeps 100 m from the charted land; lines are walked
+        // cell by cell. Within 600 m of a way's ends 50 m (3 x 3: an arrival point between an island's own rocks, Firefly Grotto's, is
+        // shut in by the 100 m on some of the grid's alignments), within 200 m none (the prototype's); lagoon land within 800 m of a
+        // lagoon port only its own cells (the prototype's 20 m disk on 50 m cells: the lagoon's 40 m lanes). The rest is the prototype's
+        // (routetime/Program.cs).
+        private sealed class RouteGrid
+        {
+            internal const double Cell = 50, EndFree = 200, EndNear = 600;
+            internal readonly HashSet<long> Blocked = new HashSet<long>(), BlockedNear = new HashSet<long>();
+            private readonly List<double[]> boxes = new List<double[]>();   // each land's blocked cells' bounds: x0, z0, x1, z1
+            private readonly Action check;
+            private HashSet<long> tiles;
+            private readonly HashSet<long> shutIn = new HashSet<long>(), openCells = new HashSet<long>();
+            internal static long Key(long cx, long cz) => (cx << 32) ^ (cz & 0xffffffffL);
+            internal RouteGrid(List<Placed> lands, List<Vector2> lagoonPorts, Action check)
+            {
+                this.check = check;
+                foreach (var l in lands)
+                {
+                    check();
+                    var cells = new HashSet<long>();
+                    if (l.Chart != null)
+                    {
+                        double ox = l.Ox, oz = l.Oz;
+                        l.Chart.Each((i, j) =>
+                        {
+                            // every 50 m cell the moved 10 m square touches
+                            double x0 = i * LandChart.Cell + ox, z0 = j * LandChart.Cell + oz;
+                            long a0 = (long)Math.Floor(x0 / Cell), a1 = (long)Math.Floor((x0 + LandChart.Cell - 1e-6) / Cell), b0 = (long)Math.Floor(z0 / Cell), b1 = (long)Math.Floor((z0 + LandChart.Cell - 1e-6) / Cell);
+                            for (long a = a0; a <= a1; a++) for (long b = b0; b <= b1; b++) cells.Add(Key(a, b));
+                        });
+                    }
+                    else
+                    {
+                        long r = (long)Math.Ceiling(l.R / Cell) + 1, cx = (long)Math.Floor(l.Cx / Cell), cz = (long)Math.Floor(l.Cz / Cell);
+                        for (long a = -r; a <= r; a++) for (long b = -r; b <= r; b++)
+                            {
+                                double x = (cx + a + .5) * Cell, z = (cz + b + .5) * Cell;
+                                if ((x - l.Cx) * (x - l.Cx) + (z - l.Cz) * (z - l.Cz) <= (l.R + Cell) * (l.R + Cell)) cells.Add(Key(cx + a, cz + b));
+                            }
+                    }
+                    if (cells.Count == 0) continue;
+                    long bx0 = long.MaxValue, bz0 = long.MaxValue, bx1 = long.MinValue, bz1 = long.MinValue;
+                    foreach (long k in cells)
+                    {
+                        long cx = k >> 32, cz = (int)(k & 0xffffffffL);
+                        bool lagoon = false;
+                        if (l.Lagoon) foreach (var q in lagoonPorts) if (Sq((cx + .5) * Cell - q.x) + Sq((cz + .5) * Cell - q.y) <= ScrambledMap.LagoonReach * ScrambledMap.LagoonReach) { lagoon = true; break; }
+                        // the cells whose square lies nearer than the clearance to this one's (|offset| - 1 cells between them)
+                        int r = lagoon ? 0 : 2, rn = lagoon ? 0 : 1;
+                        for (int a = -r; a <= r; a++) for (int b = -r; b <= r; b++) Blocked.Add(Key(cx + a, cz + b));
+                        for (int a = -rn; a <= rn; a++) for (int b = -rn; b <= rn; b++) BlockedNear.Add(Key(cx + a, cz + b));
+                        bx0 = Math.Min(bx0, cx - r); bz0 = Math.Min(bz0, cz - r); bx1 = Math.Max(bx1, cx + r); bz1 = Math.Max(bz1, cz + r);
+                    }
+                    boxes.Add(new[] { bx0 * Cell, bz0 * Cell, (bx1 + 1) * Cell, (bz1 + 1) * Cell });
+                }
+            }
+            private static double Sq(double v) => v * v;
+            private bool IsBlocked(long cx, long cz) => Blocked.Contains(Key(cx, cz));
+
+            // Open sea: a cell whose 1 km tile no land's box touches. A cell is open when clear cells join it to open sea (8 moves, no
+            // corner cut, as A*); with `end`, cells within 200 m of p are clear. A fill's result is kept only when it had no free end
+            // (one through an end's free cells holds water joined only that way: EconomyOverhaul_FAILED.md).
+            private bool OpenSea(long cx, long cz)
+            {
+                if (tiles == null)
+                {
+                    tiles = new HashSet<long>();
+                    foreach (var b in boxes)
+                        for (long tx = (long)Math.Floor(b[0] / 1000); tx <= (long)Math.Floor(b[2] / 1000); tx++)
+                            for (long tz = (long)Math.Floor(b[1] / 1000); tz <= (long)Math.Floor(b[3] / 1000); tz++) tiles.Add(Key(tx, tz));
+                }
+                return !tiles.Contains(Key((long)Math.Floor(cx * Cell / 1000), (long)Math.Floor(cz * Cell / 1000)));
+            }
+            private static readonly int[] DX = { 1, -1, 0, 0, 1, 1, -1, -1 }, DZ = { 0, 0, 1, -1, 1, -1, 1, -1 };
+            internal bool Open(Vector2 p, bool end = true)
+            {
+                long sx = (long)Math.Floor(p.x / Cell), sz = (long)Math.Floor(p.y / Cell);
+                bool Free(long x, long z) => end ? !BlockedFor(x, z, p, p) : !Blocked.Contains(Key(x, z));
+                if (!Free(sx, sz) || shutIn.Contains(Key(sx, sz))) return false;
+                if (openCells.Contains(Key(sx, sz))) return true;
+                var seen = new HashSet<long> { Key(sx, sz) }; var queue = new Queue<long>(); queue.Enqueue(Key(sx, sz));
+                while (queue.Count > 0 && seen.Count < 300000)
+                {
+                    long k = queue.Dequeue(); long x = k >> 32, z = (int)(k & 0xffffffffL);
+                    if ((seen.Count & 4095) == 0) check();
+                    if (OpenSea(x, z) || openCells.Contains(k)) { if (!end) openCells.UnionWith(seen); return true; }
+                    for (int d = 0; d < 8; d++)
+                    {
+                        long vx = x + DX[d], vz = z + DZ[d];
+                        if (!Free(vx, vz) || d >= 4 && (!Free(x + DX[d], z) || !Free(x, z + DZ[d])) || !seen.Add(Key(vx, vz))) continue;
+                        queue.Enqueue(Key(vx, vz));
+                    }
+                }
+                if (!end && queue.Count == 0) shutIn.UnionWith(seen);
+                return false;
+            }
+            // The nearest clear cell joined to open sea (an exit point).
+            internal Vector2 NearestOpen(Vector2 p)
+            {
+                long cx = (long)Math.Floor(p.x / Cell), cz = (long)Math.Floor(p.y / Cell);
+                var ring = new List<KeyValuePair<long, long>>();
+                for (int r = 0; r < 4000; r++)
+                {
+                    check(); ring.Clear();
+                    for (int a = -r; a <= r; a++) for (int b = -r; b <= r; b++)
+                            if (Math.Max(Math.Abs(a), Math.Abs(b)) == r && !IsBlocked(cx + a, cz + b)) ring.Add(new KeyValuePair<long, long>(a * a + b * b, Key(cx + a, cz + b)));
+                    foreach (var c in ring.OrderBy(c => c.Key))
+                    {
+                        var q = new Vector2((float)(((c.Value >> 32) + .5) * Cell), (float)(((int)(c.Value & 0xffffffffL) + .5) * Cell));
+                        if (Open(q, false)) return q;
+                    }
+                }
+                return p;
+            }
+            // The 50 m cells a segment passes through, in order (Amanatides and Woo), with the distance along it where each is entered.
+            private void Cells(Vector2 a, Vector2 b, double from, double to, Func<long, long, double, bool> cell)
+            {
+                double dx = b.x - a.x, dz = b.y - a.y, len = Math.Sqrt(dx * dx + dz * dz); if (len < 1e-9) { cell((long)Math.Floor(a.x / Cell), (long)Math.Floor(a.y / Cell), 0); return; }
+                double ux = dx / len, uz = dz / len, sx0 = a.x + ux * from, sz0 = a.y + uz * from;
+                long x = (long)Math.Floor(sx0 / Cell), z = (long)Math.Floor(sz0 / Cell);
+                int stepX = ux > 0 ? 1 : -1, stepZ = uz > 0 ? 1 : -1;
+                double tMaxX = Math.Abs(ux) < 1e-12 ? double.MaxValue : from + ((ux > 0 ? (x + 1) * Cell : x * Cell) - sx0) / ux;
+                double tMaxZ = Math.Abs(uz) < 1e-12 ? double.MaxValue : from + ((uz > 0 ? (z + 1) * Cell : z * Cell) - sz0) / uz;
+                double tDX = Math.Abs(ux) < 1e-12 ? double.MaxValue : Cell / Math.Abs(ux), tDZ = Math.Abs(uz) < 1e-12 ? double.MaxValue : Cell / Math.Abs(uz);
+                double t = from;
+                while (t <= to)
+                {
+                    if (!cell(x, z, t)) return;
+                    if (tMaxX < tMaxZ) { t = tMaxX; tMaxX += tDX; x += stepX; } else { t = tMaxZ; tMaxZ += tDZ; z += stepZ; }
+                }
+            }
+            // The parts of a-b inside the land's boxes (Liang-Barsky), as distances along it.
+            private List<double[]> Spans(Vector2 a, Vector2 b)
+            {
+                double dx = b.x - a.x, dz = b.y - a.y, len = Math.Sqrt(dx * dx + dz * dz); var spans = new List<double[]>();
+                foreach (var bx in boxes)
+                {
+                    double t0 = 0, t1 = 1; bool hit = true;
+                    double[] pp = { -dx, dx, -dz, dz }, qq = { a.x - bx[0], bx[2] - a.x, a.y - bx[1], bx[3] - a.y };
+                    for (int k = 0; k < 4 && hit; k++)
+                    {
+                        if (Math.Abs(pp[k]) < 1e-12) { if (qq[k] < 0) hit = false; continue; }
+                        double t = qq[k] / pp[k];
+                        if (pp[k] < 0) t0 = Math.Max(t0, t); else t1 = Math.Min(t1, t);
+                        if (t0 > t1) hit = false;
+                    }
+                    if (hit) spans.Add(new[] { t0 * len, t1 * len });
+                }
+                return spans;
+            }
+            // Kept clear for a way between start and goal: free within 200 m of either, the 50 m rule within 600 m, else the 100 m one.
+            private bool BlockedFor(long cx, long cz, Vector2 start, Vector2 goal)
+            {
+                double x = (cx + .5) * Cell, z = (cz + .5) * Cell, d = Math.Min(Sq(x - start.x) + Sq(z - start.y), Sq(x - goal.x) + Sq(z - goal.y));
+                return d >= EndFree * EndFree && (d < EndNear * EndNear ? BlockedNear : Blocked).Contains(Key(cx, cz));
+            }
+            // The stretches of a-b (distances along it) through kept-clear land, cells within 200 m of its ends free; runs closer than
+            // 500 m are one stretch.
+            private List<double[]> BlockedStretches(Vector2 a, Vector2 b)
+            {
+                var hits = new List<double>();
+                foreach (var sp in Spans(a, b))
+                    Cells(a, b, sp[0], sp[1], (x, z, t) => { if (BlockedFor(x, z, a, b)) hits.Add(t); return true; });
+                hits.Sort();
+                var merged = new List<double[]>();
+                foreach (double d in hits)
+                {
+                    if (merged.Count > 0 && d - merged[merged.Count - 1][1] < 500) merged[merged.Count - 1][1] = d;
+                    else merged.Add(new[] { d, d });
+                }
+                return merged;
+            }
+            private bool LineClear(Vector2 a, Vector2 b, Vector2 start, Vector2 goal)
+            {
+                bool clear = true;
+                foreach (var sp in Spans(a, b))
+                {
+                    Cells(a, b, sp[0], sp[1], (x, z, t) => { if (BlockedFor(x, z, start, goal)) { clear = false; return false; } return true; });
+                    if (!clear) return false;
+                }
+                return true;
+            }
+            // The way from a to b: straight, with A* round each blocked stretch (windows 2, 8, 30 km), smoothed; null when a stretch has
+            // no way round it. A stretch whose start or end lies in water walled in by land is searched as one way end to end.
+            internal List<Vector2> Way(Vector2 a, Vector2 b, out bool straight)
+            {
+                var stretches = BlockedStretches(a, b); straight = stretches.Count == 0;
+                if (straight) return new List<Vector2> { a, b };
+                var path = new List<Vector2> { a };
+                double len = Vector2.Distance(a, b); var u = (b - a) / (float)len;
+                var spans = new List<Vector2[]>(); bool pocket = false;
+                foreach (var st in stretches)
+                {
+                    double s0 = Math.Max(0, st[0] - 2 * Cell), s1 = Math.Min(len, st[1] + 2 * Cell);
+                    if (s0 < EndFree) s0 = 0; if (len - s1 < EndFree) s1 = len;
+                    var p0 = a + u * (float)s0; var p1 = a + u * (float)s1;
+                    if (s0 > 0 && !Open(p0, false) || s1 < len && !Open(p1, false)) { pocket = true; break; }
+                    spans.Add(new[] { s0 > 0 ? p0 : a, s1 < len ? p1 : b });
+                }
+                if (pocket) { spans.Clear(); spans.Add(new[] { a, b }); }
+                foreach (var sp in spans)
+                {
+                    List<Vector2> detour = null;
+                    foreach (double margin in new[] { 2000.0, 8000.0, 30000.0 }) { detour = AStar(sp[0], sp[1], a, b, margin); if (detour != null) break; }
+                    if (detour == null) return null;
+                    path.AddRange(detour);
+                }
+                path.Add(b);
+                return Smooth(path, a, b);
+            }
+            private List<Vector2> Smooth(List<Vector2> path, Vector2 start, Vector2 goal)
+            {
+                var outp = new List<Vector2> { path[0] }; int i = 0;
+                while (i < path.Count - 1)
+                {
+                    int j = i + 1;
+                    while (j + 1 < path.Count && LineClear(path[i], path[j + 1], start, goal)) j++;
+                    outp.Add(path[j]); i = j;
+                }
+                return outp;
+            }
+            // A* on the 50 m grid in the box round p0-p1 grown by margin; cells within 200 m of the way's ends free.
+            private List<Vector2> AStar(Vector2 p0, Vector2 p1, Vector2 start, Vector2 goal, double margin)
+            {
+                long sx = (long)Math.Floor(p0.x / Cell), sz = (long)Math.Floor(p0.y / Cell), gx = (long)Math.Floor(p1.x / Cell), gz = (long)Math.Floor(p1.y / Cell);
+                long m = (long)(margin / Cell), x0 = Math.Min(sx, gx) - m, z0 = Math.Min(sz, gz) - m;
+                long wl = Math.Max(sx, gx) + m - x0 + 1, hl = Math.Max(sz, gz) + m - z0 + 1;
+                if (wl * hl > 40000000L) return null;
+                int w = (int)wl, h = (int)hl;
+                var g = new float[w * h]; var from = new int[w * h]; var closed = new bool[w * h];
+                for (int i = 0; i < g.Length; i++) g[i] = float.MaxValue;
+                int S = (int)((sz - z0) * w + (sx - x0)), G = (int)((gz - z0) * w + (gx - x0));
+                float H(int i) { float ddx = Math.Abs(i % w - (gx - x0)), ddz = Math.Abs(i / w - (gz - z0)); return Math.Max(ddx, ddz) + .41421f * Math.Min(ddx, ddz); }
+                bool Free(long wx, long wz) => wx == sx && wz == sz || wx == gx && wz == gz || !BlockedFor(wx, wz, start, goal);
+                var heap = new MinHeap(); g[S] = 0; from[S] = -1; heap.Push(S, H(S));
+                float[] C = { 1, 1, 1, 1, 1.41421f, 1.41421f, 1.41421f, 1.41421f };
+                int nodes = 0;
+                while (heap.Count > 0)
+                {
+                    int cur = heap.Pop(); if (closed[cur]) continue; closed[cur] = true;
+                    if (++nodes % 4096 == 0) check();
+                    if (cur == G)
+                    {
+                        var cells = new List<Vector2>();
+                        for (int k = cur; k >= 0; k = from[k]) cells.Add(new Vector2((float)((k % w + x0 + .5) * Cell), (float)((k / w + z0 + .5) * Cell)));
+                        cells.Reverse(); return cells;
+                    }
+                    int ux = cur % w, uz = cur / w;
+                    for (int k = 0; k < 8; k++)
+                    {
+                        int vx = ux + DX[k], vz = uz + DZ[k]; if (vx < 0 || vz < 0 || vx >= w || vz >= h) continue;
+                        int v = vz * w + vx; if (closed[v] || !Free(vx + x0, vz + z0)) continue;
+                        if (k >= 4 && (!Free(ux + DX[k] + x0, uz + z0) || !Free(ux + x0, uz + DZ[k] + z0))) continue;
+                        float nd = g[cur] + C[k]; if (nd < g[v]) { g[v] = nd; from[v] = cur; heap.Push(v, nd + H(v)); }
+                    }
+                }
+                return null;
+            }
+        }
+    }
+
+    // A binary min-heap of (item, key) (netstandard2.0 has no PriorityQueue).
+    internal sealed class MinHeap
+    {
+        private int[] items = new int[256]; private float[] keys = new float[256]; private int count;
+        internal int Count => count;
+        internal void Push(int item, float key)
+        {
+            if (count == items.Length) { Array.Resize(ref items, count * 2); Array.Resize(ref keys, count * 2); }
+            int i = count++;
+            while (i > 0) { int p = (i - 1) >> 1; if (keys[p] <= key) break; items[i] = items[p]; keys[i] = keys[p]; i = p; }
+            items[i] = item; keys[i] = key;
+        }
+        internal int Pop()
+        {
+            int top = items[0]; int last = items[--count]; float lk = keys[count]; int i = 0;
+            while (true)
+            {
+                int c = 2 * i + 1; if (c >= count) break;
+                if (c + 1 < count && keys[c + 1] < keys[c]) c++;
+                if (keys[c] >= lk) break;
+                items[i] = items[c]; keys[i] = keys[c]; i = c;
+            }
+            if (count > 0) { items[i] = last; keys[i] = lk; }
+            return top;
+        }
+    }
+
+    // The routes' work on a background thread (S2): asked for as soon as the islands are moved while a game loads or prepares
+    // (VisibleTraders.AskEarly, the user's 10) and again at the first scan after, dropped by the next load or new game
+    // (VisibleTraders.Reset: Cancel); the last map made is kept for the session and taken again for the same islands' places (a
+    // reload of the same game). The thread is a background one, so quitting the game ends it.
+    internal static class ScrambledLanes
+    {
+        private static int generation;
+        private static ScrambledMap finished;     // handed over by the thread
+        private static ScrambledMap ready, last;
+        private static string failure;
+        private static string asked;              // the islands' places (ScrambledInput.Key) of the work under way or made
+        internal static bool Running { get; private set; }
+        internal static string Failure => failure;
+        internal static float RequestedAt { get; private set; } = -1;
+        internal static float ReadyAt { get; private set; } = -1;
+        internal static void Cancel()
+        {
+            Interlocked.Increment(ref generation); ready = null; failure = null; Running = false; RequestedAt = ReadyAt = -1; asked = null;
+        }
+        // Main thread: the routes for the map as it is now are made, or the session's last ones taken when the islands lie the same.
+        // Asked again for the same islands' places (the first scan after an early ask) while that work goes on or its map is made: it
+        // is kept; any other place (an island registered late, a world shift mid-read) starts the work again.
+        internal static void Request(ScrambledInput input)
+        {
+            if (asked != null && asked == input.Key && (Running || ready != null))
+            {
+                Plugin.Log?.LogInfo("Scrambled lanes: asked again for the same islands' places: the routes asked for " + (Time.realtimeSinceStartup - RequestedAt).ToString("F1") + " s ago are kept.");
+                return;
+            }
+            Cancel(); asked = input.Key;
+            RequestedAt = Time.realtimeSinceStartup;
+            if (last != null && last.Key == input.Key)
+            {
+                ready = last; ReadyAt = RequestedAt;
+                Plugin.Log?.LogInfo("Scrambled lanes: the islands lie as in the last map made this session: its routes are taken again.");
+                return;
+            }
+            int gen = Volatile.Read(ref generation); Running = true;
+            var vanilla = LaneMap.VanillaHarbours;
+            var thread = new Thread(() => Run(input, vanilla, gen)) { IsBackground = true, Name = "EconomyOverhaul scrambled lanes", Priority = System.Threading.ThreadPriority.BelowNormal };
+            thread.Start();
+        }
+        private static void Run(ScrambledInput input, IReadOnlyDictionary<int, TraderHarbour> vanilla, int gen)
+        {
+            try
+            {
+                var map = ScrambleBuilder.Build(input, vanilla, () => Volatile.Read(ref generation) != gen);
+                map.Generation = gen;
+                if (Volatile.Read(ref generation) == gen) Interlocked.Exchange(ref finished, map);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception e) { if (Volatile.Read(ref generation) == gen) Interlocked.Exchange(ref failure, e.ToString()); }
+        }
+        // Main thread, each frame: the map once its routes are ready (null before, and after a failure).
+        internal static ScrambledMap Ready
+        {
+            get
+            {
+                var f = Interlocked.Exchange(ref finished, null);
+                if (f != null && f.Generation == Volatile.Read(ref generation))
+                {
+                    ready = last = f; Running = false; ReadyAt = Time.realtimeSinceStartup;
+                    foreach (var line in f.Log) Plugin.Log?.LogInfo(line);
+                }
+                if (Running && failure != null) Running = false;
+                return ready;
+            }
         }
     }
 }

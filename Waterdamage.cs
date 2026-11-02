@@ -542,6 +542,8 @@ namespace EconomyOverhaul
                 if (itemsOnly && !copy) continue;
                 if (hit.transform.IsChildOf(transform) || copy == item.itemRigidbodyC) continue;
                 if (CoverEvents.NotCover(hit.collider)) continue;   // an item in a hand, the inventory or the cart is never a roof
+                // nor the player's own body (aboard on her walk copy, layer 11; the deep review of 2026-11-02, Claude's fix)
+                if (Refs.charController && hit.collider.transform.IsChildOf(Refs.charController.transform)) continue;
                 return true;
             }
             return false;

@@ -231,7 +231,10 @@ namespace EconomyOverhaul
             var good = item.GetComponent<Good>();
             if (good && Port.ports != null)
             {
-                int g = PrefabsDirectory.ItemToGoodIndex(item.GetComponent<SaveablePrefab>().prefabIndex);
+                // a good without the game's save record (another mod's) still leaves the list, its count not touched (the deep review
+                // of 2026-11-02, Claude's fix)
+                var prefab = item.GetComponent<SaveablePrefab>();
+                int g = prefab ? PrefabsDirectory.ItemToGoodIndex(prefab.prefabIndex) : -1;
                 foreach (var port in Port.ports)
                 {
                     if (!port) continue; var m = port.GetComponent<IslandMarket>(); if (!m) continue;
@@ -294,7 +297,9 @@ namespace EconomyOverhaul
         internal static void Sinking(BoatLocalItems boat)
         {
             if (!World.Ready) return;
-            int parent = boat.GetComponent<SaveableObject>().sceneIndex;
+            // a ship without the game's save record (another mod's copy) holds no saved cargo (the deep review of 2026-11-02, Claude's fix)
+            var so = boat.GetComponent<SaveableObject>(); if (!so) return;
+            int parent = so.sceneIndex;
             foreach (var active in CargoCondition.Active) active.CaptureParent();
             var affected = World.State.cargo.Where(c => c.loan && c.parent == parent).ToArray();
             SinkLoans(affected);
@@ -360,16 +365,32 @@ namespace EconomyOverhaul
         }
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => Loans.ReplaceDestroy(instructions, nameof(Loans.Sacrifice));
     }
+    // Using financed cargo (unsealing, drinking, salting, pouring) collects its loan. These four run after every other mod's prefix
+    // and collect nothing when one of them refused the use (HarmonyX runs every prefix, also after one returned false): HooksHangMore
+    // refuses pouring into a mug or bucket hanging on a hook, Dizzy Bundle Up salting a sausage stack, and the loan was collected
+    // though nothing was used (X-2 of the deep review of 2026-11-02; the user: "Yes, build it"). The priority is on each method: a
+    // class-level one is dropped. A mod that skipped the game's code to do the same use its own way would now use the cargo
+    // without collecting; none in the user's mods (Check-PatchConflicts, 2026-11-02).
     [HarmonyPatch(typeof(ShipItemCrate), "UnsealCrate")] internal static class UnsealDebtPatch
-    { static bool Prefix(ShipItemCrate __instance) => __instance.amount <= 0 || !__instance.GetComponent<CrateInventory>() || Loans.Use(__instance); }
+    {
+        [HarmonyPriority(Priority.Last)]
+        static bool Prefix(ShipItemCrate __instance, bool __runOriginal) =>
+            !__runOriginal || __instance.amount <= 0 || !__instance.GetComponent<CrateInventory>() || Loans.Use(__instance);
+    }
     [HarmonyPatch(typeof(ShipItemBottle), "Drink")] internal static class DrinkDebtPatch
-    { static bool Prefix(ShipItemBottle __instance) => __instance.health <= 0 || Loans.Use(__instance); }
+    { [HarmonyPriority(Priority.Last)] static bool Prefix(ShipItemBottle __instance, bool __runOriginal) => !__runOriginal || __instance.health <= 0 || Loans.Use(__instance); }
     [HarmonyPatch(typeof(ShipItemSalt), "SaltFood")] internal static class SaltDebtPatch
-    { static bool Prefix(ShipItemSalt __instance, FoodState food) => __instance.amount <= 0 || food.GetRequiredSalt() <= 0 || Loans.Use(__instance); }
+    {
+        [HarmonyPriority(Priority.Last)]
+        static bool Prefix(ShipItemSalt __instance, FoodState food, bool __runOriginal) =>
+            !__runOriginal || __instance.amount <= 0 || food.GetRequiredSalt() <= 0 || Loans.Use(__instance);
+    }
     [HarmonyPatch(typeof(ShipItemBottle), "OnItemClick")] internal static class PourDebtPatch
     {
-        static bool Prefix(ShipItemBottle __instance, PickupableItem heldItem, ref bool __result)
+        [HarmonyPriority(Priority.Last)]
+        static bool Prefix(ShipItemBottle __instance, PickupableItem heldItem, ref bool __result, bool __runOriginal)
         {
+            if (!__runOriginal) return true;   // refused by another mod (its __result kept)
             var other = heldItem as ShipItemBottle;
             var good = __instance.GetComponent<Good>();
             if (!__instance.sold || (good && good.GetMissionIndex() >= 0)) return true;
@@ -631,6 +652,9 @@ namespace EconomyOverhaul
         internal static void SendHomeLater()
         {
             if (!World.Ready || World.Loading || GameState.currentlyLoading || World.State.homeLater.Count == 0) return;
+            // not while a forced move or the game's recovery runs (the player is being moved: where they stand is not yet known; the
+            // deep review of 2026-11-02, Claude's fix)
+            if (ForcedMove.Busy || GameState.recovering) return;
             var player = Refs.observerMirror ? Refs.observerMirror.transform.position : Vector3.zero;
             foreach (int index in World.State.homeLater.ToArray())
             {
@@ -808,10 +832,15 @@ namespace EconomyOverhaul
             if (rep > 0) Reputations.Change(rep, l.region);
         }
         // A pledged ship inside a shipyard's range can't be repaid at a box (it could be stripped there after a seizure).
+        // The shipyards found once (a search of every loaded object, about 3 ms; the page asks every half second with a loan's row
+        // selected), found again each time the Bottomry page opens and after a world reset; each still checked as it is now.
+        private static Shipyard[] yards;
+        internal static void ForgetYards() => yards = null;
         internal static bool InShipyard(PurchasableBoat b)
         {
             if (!b || b.isHouse) return false;
-            foreach (var yard in Resources.FindObjectsOfTypeAll<Shipyard>())
+            if (yards == null) yards = Resources.FindObjectsOfTypeAll<Shipyard>();
+            foreach (var yard in yards)
             {
                 if (!yard || !yard.gameObject.activeInHierarchy) continue;
                 var inside = Fields.Get<List<GameObject>>(yard, "boatsInTrigger");
@@ -891,6 +920,13 @@ namespace EconomyOverhaul
                     else if (late == 10) Loans.Notify("Bottomry: last day before the " + Name(l.pledge) + " is seized");
                 }
             if (!GameState.playing || GameState.recovering || ForcedMove.Moving || GameState.currentShipyard) return;
+            // each frame: a plain look for a loan at its day 11; the ordered list (and its query's closure) only when one is
+            bool due = false;
+            foreach (var l in World.State.bottomry) if (day >= l.dueDay + 11) { due = true; break; }
+            if (due) SeizeDue(day);
+        }
+        private static void SeizeDue(int day)
+        {
             foreach (var l in World.State.bottomry.Where(x => day >= x.dueDay + 11).OrderBy(x => x.dueDay).ThenBy(x => x.id).ToArray())
             {
                 if (!World.State.bottomry.Contains(l)) continue; // charged when an earlier one ended her rental
@@ -906,7 +942,7 @@ namespace EconomyOverhaul
         {
             if (!World.Ready || !hull) return;
             if (Rentals.IsIndex(hull.sceneIndex)) { Rentals.Sank(hull, ghosts); return; }
-            int index = hull.sceneIndex; var loans = On(index).ToArray(); if (loans.Length == 0) return;
+            int index = hull.sceneIndex; var loans = SunkLoans(index); if (loans.Length == 0) return;
             foreach (int region in loans.Select(l => l.region).Distinct())
             {
                 int level = Reputations.Level(region), rep = Reputations.Required(region, Math.Max(0, level - Rules.SinkingLevels));
@@ -917,6 +953,11 @@ namespace EconomyOverhaul
             LoanGate.StartPause();
             Loans.Notify("The " + Name(index) + " sank: its Bottomry loans are cancelled");
         }
+        // The loans a sinking acts on: none once a lender has taken her (she is no longer the player's; the other lenders' loans on her
+        // run on to their own day 11 and are charged then, as without the sinking). She can still sink: water comes into the last ship
+        // the player boarded (BoatDamage.UpdateWaterAndDrag), and a player ashore when she is taken boarded nothing since (LOAN-4 of
+        // the deep review of 2026-11-02, the user: "Fix it").
+        internal static BottomryLoan[] SunkLoans(int index) => Seized(index) != null ? new BottomryLoan[0] : On(index).ToArray();
         // Bankruptcy (one region, or all with -1): each of the bankrupt lender's loans takes back what it paid out from the
         // coins left in that currency (never below 0) and is forgiven; the lender takes the pledge, which can never be pledged
         // again. The pledge's loans from other regions run on to their own day 11. A rented ship is handled by Rentals first.
@@ -1005,7 +1046,10 @@ namespace EconomyOverhaul
         internal static bool Busy, Moving;
         // Two lines: on one, the game's font fills a 16:9 screen and runs off narrower ones.
         internal const string BlackScreen = "\n\n\nThey've come\nto take your debt";
-        private sealed class Trip { internal PurchasableBoat ship; internal bool sunk, restore; internal List<ShipItem> ghosts; }
+        // dark: a trip under the black screen (Queue's), which holds the game's recovery on as its own recovery does; a trip out of
+        // the player's sight (Home's) leaves it alone: while it is on the game holds every ship still, the player's under sail too
+        // (the deep review of 2026-11-02, Claude's fix)
+        private sealed class Trip { internal PurchasableBoat ship; internal bool sunk, restore, dark; internal List<ShipItem> ghosts; }
         private static bool movePlayer;
         private static readonly List<Trip> trips = new List<Trip>();
         private static readonly MethodInfo disembark = AccessTools.Method(typeof(PlayerEmbarkerNew), "PlayerDisembark");
@@ -1030,7 +1074,7 @@ namespace EconomyOverhaul
         {
             if (!player && !ship) return;
             movePlayer |= player;
-            if (ship && trips.All(t => t.ship != ship)) trips.Add(new Trip { ship = ship, sunk = sunk, restore = restore, ghosts = ghosts });
+            if (ship && trips.All(t => t.ship != ship)) trips.Add(new Trip { ship = ship, sunk = sunk, restore = restore, ghosts = ghosts, dark = true });
             if (!Busy) { Busy = true; Plugin.Instance.StartCoroutine(Run()); }
         }
         private static IEnumerator Run()
@@ -1205,7 +1249,7 @@ namespace EconomyOverhaul
             if (!stay && known && !trip.sunk && Pledges.BerthTaken(b, position)) { Pledges.HomeLater(b); stay = true; }
             if (!stay)
             {
-                bool recovering = GameState.recovering; GameState.recovering = true;
+                bool recovering = GameState.recovering; if (trip.dark) GameState.recovering = true;
                 try
                 {
                     if (ropes) { ropes.UnmoorAllRopes(); if (ropes.GetAnchorController()) ropes.GetAnchorController().ResetAnchor(); }
@@ -1224,7 +1268,7 @@ namespace EconomyOverhaul
                     Pledges.TieHome(b);
                     yield return new WaitForFixedUpdate(); yield return new WaitForFixedUpdate();
                 }
-                finally { GameState.recovering = recovering; }
+                finally { if (trip.dark) GameState.recovering = recovering; }
             }
             if (trip.restore) Rentals.Restore(b);
         }
@@ -1365,6 +1409,7 @@ namespace EconomyOverhaul
         private void ShowPage()
         {
             if (!World.Ready || box == null) return;
+            Bottomry.ForgetYards();
             Open = true; tabText.text = "Exchange"; tab.lookText = "Exchange";
             foreach (var panel in new[] { top, bottom }) foreach (Transform child in panel) if (child.name.StartsWith("Exchange amount", StringComparison.Ordinal)) Hide(child.gameObject);
             foreach (var go in hidden) if (go) go.SetActive(false);
@@ -1485,7 +1530,9 @@ namespace EconomyOverhaul
             }
             else
             {
-                var l = rows[selected].loan; currency = l.currency;
+                // the payout currency left as chosen: a repaid loan's currency was kept as the next pledge's payout (the deep review
+                // of 2026-11-02, Claude's fix); repaying reads the loan's own
+                var l = rows[selected].loan;
                 int due = Bottomry.BoxCost(l, box.region), have = PlayerGold.currency[l.currency], left = l.dueDay - GameState.day;
                 for (int c = 0; c < 4; c++) coins[c].text = PlayerGold.currency[c].ToString();
                 caption.text = "Repay in " + PlayerGold.GetCurrencyName(l.currency) + "\nREPAY";
@@ -2536,6 +2583,8 @@ namespace EconomyOverhaul
                 if (day == Rules.NextRentDay(r.startDay, r.charges) - 1) Loans.Notify("Rent due tomorrow: " + Money(Rules.RentalPeriod * r.daily, r.currency) + " (" + Name(r.ship) + ")");
             }
             if (!GameState.playing || GameState.recovering || ForcedMove.Moving || GameState.currentShipyard) return;
+            // no rent due: the ship not looked for (a search of every pledge each frame of a rental)
+            if (day < Rules.NextRentDay(r.startDay, r.charges)) return;
             var b = Ship(); if (!b) return; // a ship missing from the scene ends the rental when a save loads
             while (Current != null && day >= Rules.NextRentDay(Current.startDay, Current.charges))
             {
@@ -2550,8 +2599,8 @@ namespace EconomyOverhaul
                 ForcedEnd(b, Ending.Unpaid, Math.Max(Rules.RentalPeriod, DaysDue), null, "Couldn't pay the rent: the " + Name(r.ship) + " was taken back");
             }
         }
-        // She sank: the game's recovery fee from every wallet above 0, then her Bottomry loans (charged, 2 levels per lending
-        // region, the loan pause, never pledged or rented again), then the rental bill.
+        // She sank: the game's recovery fee from every wallet above 0, then her Bottomry loans (2 levels per lending region, then
+        // charged, the loan pause, never pledged or rented again), then the rental bill.
         internal static void Sank(SaveableObject hull, List<ShipItem> ghosts)
         {
             var b = hull.GetComponent<PurchasableBoat>(); int index = hull.sceneIndex;
@@ -2563,11 +2612,8 @@ namespace EconomyOverhaul
                 PlayerGold.currency[c] -= fee;
                 if (DayLogs.instance) DayLogs.instance.dayLogs[c].LogRecovery(-fee);
             }
-            var levels = Reputations.Levels(Bottomry.On(index).Select(l => l.region));
-            if (levels.Count > 0)
+            if (SinkAndCharge(index))
             {
-                ChargeLoans(index);
-                Reputations.Sink(levels);
                 if (!World.State.burned.Contains(index)) World.State.burned.Add(index);
                 if (!World.State.unrentable.Contains(index)) World.State.unrentable.Add(index);
                 LoanGate.StartPause();
@@ -2575,6 +2621,19 @@ namespace EconomyOverhaul
             PlayerNeeds.water = 100; PlayerNeeds.food = 100; PlayerNeeds.foodDebt = 100; PlayerNeeds.sleepDebt = 100;
             PlayerNeeds.sleep = 100; PlayerNeeds.vitamins = 100; PlayerNeeds.protein = 100;
             ForcedEnd(b, Ending.Sank, DaysDue, ghosts, "The " + Name(index) + " sank and was taken back");
+        }
+        // Her Bottomry loans as she sinks: each lending region first goes to the start of the level 2 below the one it had before the
+        // loss (Reputations.Sink), then her loans are charged, a shortfall's reputation loss coming off that start, never below 0, as
+        // the rental bill's after it. The two add up (LOAN-3, the user, 2026-11-02: "this should be adding up", Plan A: "Build Plan
+        // A"); charged first, the drop to the level's start wiped that loss out, or gave points back when it went below.
+        // False: no loan on her.
+        internal static bool SinkAndCharge(int index)
+        {
+            var levels = Reputations.Levels(Bottomry.On(index).Select(l => l.region));
+            if (levels.Count == 0) return false;
+            Reputations.Sink(levels);
+            ChargeLoans(index);
+            return true;
         }
         // A bankrupt lender's loans on her take back what they paid out (as on any pledge) and are forgiven; the lender takes
         // her back (never pledged again), her other loans are charged and the rental ends with its bill. Bankruptcy in her

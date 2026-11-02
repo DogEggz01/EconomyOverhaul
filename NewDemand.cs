@@ -14,8 +14,9 @@ namespace EconomyOverhaul
         public const float DemandDoneShare = .2f, LastDepartureKnown = .4f;
         // Saffron Island (33), Chronos (21) and the test ports (7, 8) never take part.
         public static bool DemandPort(int port) => port != 33 && port != 21 && port != 7 && port != 8;
-        // Not the special slots (45, 51), saffron (64), Chronos' own goods (32, 33) or the goods no port trades (1, 46, 52).
-        public static bool DemandGood(int good) => good > 1 && good < 64 && good != 45 && good != 51 && good != 32 && good != 33 && good != 46 && good != 52;
+        // Not the special slots (45, 51), saffron (64), Chronos' own goods (31, 32: only Chronos makes them, supply.csv) or the goods
+        // no port trades (1, 46, 52). Tools (33) take part: they were left out as if Chronos' (the deep review of 2026-11-02, Claude's fix).
+        public static bool DemandGood(int good) => good > 1 && good < 64 && good != 45 && good != 51 && good != 31 && good != 32 && good != 46 && good != 52;
         // The demanding port takes a good it doesn't produce, whose supply is below 1 and above the drop's target.
         public static bool DemandFits(float production, float supply, float cap) => production <= 0 && supply < 1 && supply > DemandTarget(cap);
         // The producing port must make the good, no exception (the user, 2026-10-16; was any port).

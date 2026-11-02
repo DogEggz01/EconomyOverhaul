@@ -40,7 +40,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "1.1.4";
+        public const string Version = "1.1.5";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -55,7 +55,10 @@ namespace EconomyOverhaul
                 harmony = new Harmony(Guid);
                 harmony.PatchAll(typeof(Plugin).Assembly);
                 TradeSaleCompatibility.Install(harmony);
-                NandCommandCompatibility.Install(harmony);
+                // as the other optional mods' hooks below: a failure costs only the NANDcommand hook, never the whole mod (it unpatched
+                // everything; the deep review of 2026-11-02, Claude's fix)
+                try { NandCommandCompatibility.Install(harmony); }
+                catch (Exception e) { Logger.LogWarning("NANDcommand SetLevel compatibility unavailable: " + e.Message); }
                 RentalYard.PatchOtherYardButtons(harmony);
                 try { DangerousWatersCompatibility.Install(harmony); }
                 catch (Exception e) { Logger.LogWarning("Dangerous Waters plunder compatibility unavailable: " + e.Message); }
@@ -99,20 +102,21 @@ namespace EconomyOverhaul
     }
     internal static class Fields
     {
-        private static readonly Dictionary<string, FieldInfo> cache = new Dictionary<string, FieldInfo>();
+        // Keyed by the type and the name, not a string joined from them: no string made per call (per-frame callers).
+        private static readonly Dictionary<(Type, string), FieldInfo> cache = new Dictionary<(Type, string), FieldInfo>();
         public static FieldInfo Find(Type type, string name)
         {
-            string key = type.FullName + "." + name;
-            if (!cache.TryGetValue(key, out FieldInfo f)) cache[key] = f = AccessTools.Field(type, name) ?? throw new MissingFieldException(key);
+            var key = (type, name);
+            if (!cache.TryGetValue(key, out FieldInfo f)) cache[key] = f = AccessTools.Field(type, name) ?? throw new MissingFieldException(type.FullName + "." + name);
             return f;
         }
         public static T Get<T>(object obj, string name) => (T)Find(obj.GetType(), name).GetValue(obj);
         public static void Set(object obj, string name, object value) => Find(obj.GetType(), name).SetValue(obj, value);
         // The method looked up once per type and name, as Find caches fields (the same AccessTools result each call).
-        private static readonly Dictionary<string, MethodInfo> methods = new Dictionary<string, MethodInfo>();
+        private static readonly Dictionary<(Type, string), MethodInfo> methods = new Dictionary<(Type, string), MethodInfo>();
         public static object Call(object obj, string name, params object[] args)
         {
-            string key = obj.GetType().FullName + "." + name;
+            var key = (obj.GetType(), name);
             if (!methods.TryGetValue(key, out MethodInfo m)) methods[key] = m = AccessTools.Method(obj.GetType(), name);
             return m.Invoke(obj, args);
         }
@@ -150,10 +154,10 @@ namespace EconomyOverhaul
             Startup.Cancel();
             TradeBook.Reset();
             Ready = false; Loading = false; SaveBlocked = false; SaveOffAdvice = ReloadAdvice; State = new SaveState();
-            saveFailures = 0; retryAt = -1; keepLastGood = false;
+            saveFailures = 0; retryAt = -1; keepLastGood = false; Quitting = false;
             Fleet.BeginRegistrationGrace();
             Markets.Clear(); Cargo.Clear(); Removed.Clear(); Missions.Reset(); Missions.DeliveredItems.Clear();
-            Tarps.Clear(); Uninstall.Reset(); VisibleTraders.Reset();
+            Tarps.Clear(); Uninstall.Reset(); VisibleTraders.Reset(); Bottomry.ForgetYards();
         }
         internal static void NewGame()
         {
@@ -202,8 +206,10 @@ namespace EconomyOverhaul
         internal static void SaveForGame(SaveLoadManager manager)
         {
             // the economy left as the last save wrote it (SaveFailed: the tries used up): the game saves with that
-            if (keepLastGood) { keepLastGood = false; return; }
-            try { Save(true); saveFailures = 0; }
+            if (keepLastGood) { keepLastGood = false; KeepLastGood(); return; }
+            // a save that succeeds ends any wait for a retry (a retry still pending saved again, unasked; the deep review of
+            // 2026-11-02, Claude's fix)
+            try { Save(true); saveFailures = 0; retryAt = -1; }
             catch (Exception e)
             {
                 // (preparation not done is a deferred save, not a damaged state: CanSave refuses it before, so only a save the
@@ -211,7 +217,16 @@ namespace EconomyOverhaul
                 if (manager) saveBusy?.SetValue(manager, false);
                 if (Startup.BlocksGameplay) throw;
                 if (SaveFailed(e, true, "while the game saved")) throw;   // this save stopped before its file; tried again soon
+                KeepLastGood();
             }
+        }
+        // The last good economy kept in the slot, dated to this save (StateCodec.Restamp): with the last save's hour, the next load
+        // took the whole economy for stale and started it over (the deep review of 2026-11-02, Claude's fix). Should that fail, the
+        // slot stays as it was, as before.
+        private static void KeepLastGood()
+        {
+            try { if (GameState.modData != null && GameState.modData.TryGetValue(Plugin.Guid, out string slot)) GameState.modData[Plugin.Guid] = StateCodec.Restamp(slot, CalendarHour); }
+            catch (Exception e) { Plugin.Log?.LogError("The economy of the last save could not be dated to this save; its next load may start the economy over. " + e); }
         }
         // A save whose economy fails (the user, 2026-10-20, of saving turned off until a reload: "no this is very inconvient,
         // default save time is 15min and what you do here waste player time"; then "1+2"): (1) that save waits and is tried again
@@ -229,10 +244,15 @@ namespace EconomyOverhaul
         internal static bool SaveRetryPending => retryAt >= 0;
         internal const string SaveRetryNotice = "EconomyOverhaul could not save the economy; trying again in a few seconds.";
         internal const string LastGoodNotice = "EconomyOverhaul could not save the economy; the game was saved with the economy of your last save. See BepInEx log.";
+        // The menu's Quit (QuitSavePatch): the game saves and closes at once (StartMenu.ButtonClick: SaveGame, then Application.Quit),
+        // so a save left to wait for a retry was never made and the game closed unsaved. Then a failed economy goes straight to the
+        // last good one, as at the last try (PLG-4 of the deep review of 2026-11-02, the user: "A"). Kept until a game starts or loads.
+        internal static bool Quitting;
+        internal static bool SaveWaits(int failures, bool quitting) => failures <= SaveRetries && !quitting;
         private static bool SaveFailed(Exception e, bool compressed, string when)
         {
             saveFailures++;
-            if (saveFailures <= SaveRetries)
+            if (SaveWaits(saveFailures, Quitting))
             {
                 Plugin.Log?.LogError("Economic save failed " + when + " (try " + saveFailures + " of " + (SaveRetries + 1) + "); this save waits, tried again in " + SaveRetryDelay + " s. " + e);
                 retryAt = Time.realtimeSinceStartup + SaveRetryDelay; retryCompressed = compressed;
@@ -249,11 +269,14 @@ namespace EconomyOverhaul
         {
             if (retryAt < 0 || Time.realtimeSinceStartup < retryAt) return;
             var m = SaveLoadManager.instance;
-            if (!m || !GameState.playing || GameState.currentlyLoading || !SaveLoadManager.readyToSave || GameState.inBed || GameState.currentShipyard ||
-                (saveBusy != null && (bool)saveBusy.GetValue(m))) { retryAt = Time.realtimeSinceStartup + 1f; return; }
+            if (!GameState.playing || GameState.currentlyLoading || GameRefusesSave(m)) { retryAt = Time.realtimeSinceStartup + 1f; return; }
             retryAt = -1;
             m.SaveGame(retryCompressed);
         }
+        // The game's own refusal in SaveLoadManager.SaveGame (a save running, the player in bed, not ready to save, at a shipyard):
+        // it saves nothing then, so the economy is not checked for it (ProtectSavePatch) and a waiting retry waits on (SaveRetryTick).
+        internal static bool GameRefusesSave(SaveLoadManager m) =>
+            !m || (saveBusy != null && (bool)saveBusy.GetValue(m)) || GameState.inBed || !SaveLoadManager.readyToSave || GameState.currentShipyard;
         // What the player can do while saving is off: a save this version cannot read (one from an older version) never will,
         // so start a new game; otherwise the last save was kept as it was, so reload it.
         private const string ReloadAdvice = "Reload your save", NewGameAdvice = "Start a new game";
@@ -375,7 +398,17 @@ namespace EconomyOverhaul
     }
     [HarmonyPatch(typeof(SaveLoadManager), "SaveModData")] internal static class SavePatch { static void Prefix(SaveLoadManager __instance) => World.SaveForGame(__instance); }
     [HarmonyPatch(typeof(SaveLoadManager), "LoadModData")] internal static class LoadPatch { static void Postfix() => World.Load(); }
-    [HarmonyPatch(typeof(SaveLoadManager), "SaveGame")] internal static class ProtectSavePatch { static bool Prefix(bool compressed) => Startup.RequestSave(compressed); }
+    // A save the game refuses itself is left to it, unchecked: the economy's check ran first, so a refused save counted a failed
+    // try, set a retry or left the last good economy to the next save (the deep review of 2026-11-02, Claude's fix).
+    [HarmonyPatch(typeof(SaveLoadManager), "SaveGame")] internal static class ProtectSavePatch
+    { static bool Prefix(SaveLoadManager __instance, bool compressed) => World.GameRefusesSave(__instance) || Startup.RequestSave(compressed); }
+    // The menu's Quit: its save is the last one (World.Quitting). After every other prefix, and only when the game's own click runs
+    // (Sailwind Player Model and New Beginnings skip it for their own buttons, Back and the region's confirm, never Quit; 2026-11-02).
+    [HarmonyPatch(typeof(StartMenu), "ButtonClick", new[] { typeof(StartMenuButtonType) })] internal static class QuitSavePatch
+    {
+        [HarmonyPriority(Priority.Last)]
+        static void Prefix(StartMenuButtonType button, bool __runOriginal) { if (__runOriginal && button == StartMenuButtonType.Quit) World.Quitting = true; }
+    }
 
     // ---- Settings ----
     internal static class Settings
@@ -622,6 +655,17 @@ namespace EconomyOverhaul
             if (result.version < 7) throw new InvalidDataException("Economic binary save of state version " + result.version);
             return Finish(result);
         }
+        // The last good slot a failed save keeps (World.KeepLastGood), dated to that save: the same economy with the save's hour,
+        // written as the current version. With its own older hour the next load took it for data the game had saved past without
+        // the mod (Rules.StaleSave) and started the economy over as a first installation. A slot without an hour (0, from before
+        // the hour was stored) is never stale: returned as it is.
+        internal static string Restamp(string slot, double hour)
+        {
+            var state = Decode(slot);
+            if (state.savedHour <= 0) return slot;
+            state.savedHour = hour; state.version = SaveState.Current;
+            return Encode(state);
+        }
         // For inspection only (the QA and scratchpad tools; the user's B2: no setting in the game): a slot as JSON text, a binary
         // slot read and written with Write, a JSON slot as it is.
         internal static string SlotJson(string slot) => slot != null && slot.StartsWith(BinaryPrefix, StringComparison.Ordinal) ? Write(Decode(slot)) : slot;
@@ -864,6 +908,25 @@ namespace EconomyOverhaul
             foreach (var c in World.State.cargo.Where(c => World.Removed.Contains(c.id) && !c.loan).ToArray())
             { World.State.cargo.Remove(c); World.Cargo.Remove(c.id); }
         }
+        // A destroyed item's record retires unless the item comes back. One the game caches far off (save parent -2) respawns from
+        // its ship's cached items; so does one aboard a ship that sank (-3) that the game cached, but cargo it lost in the sinking
+        // (BoatLocalItems.CacheItemsOnSinking) is destroyed at the recovery and never comes back: its record retires (PLG-5, the
+        // user, 2026-11-02: "can we remove it"; until then every -3 record was kept for good).
+        internal static bool Retires(int parent, bool comesBack) => parent != -2 && (parent != -3 || !comesBack);
+        // A copy of this item waits in a ship's cached items, or another live item has its id (the cached copy already respawned).
+        // The game destroys a sunk ship's items at the recovery's black screen, before her cached items respawn.
+        internal static bool ComesBack(SaveablePrefab save)
+        {
+            var manager = SaveLoadManager.instance; if (!manager) return true;   // not known: kept, as before
+            int id = save.instanceId;
+            foreach (var obj in manager.GetCurrentObjects())
+            {
+                var cached = obj && obj.localItems ? obj.localItems.GetCachedItems() : null;
+                if (cached != null) foreach (var data in cached) if (data != null && data.instanceId == id) return true;
+            }
+            foreach (var other in manager.GetCurrentPrefabs()) if (other && other != save && other.instanceId == id) return true;
+            return false;
+        }
     }
     [HarmonyPatch(typeof(ShipItem), "DestroyItem")]
     internal static class RetireCargoRecordPatch
@@ -872,8 +935,11 @@ namespace EconomyOverhaul
         {
             __state = 0;
             if (!World.Ready || World.Loading || GameState.currentlyLoading || World.SaveBlocked) return;
-            var save = __instance.GetComponent<SaveablePrefab>();
-            if (save && save.GetParentObject() != -2 && save.GetParentObject() != -3) __state = save.instanceId;
+            var save = __instance.GetComponent<SaveablePrefab>(); if (!save) return;
+            int parent = save.GetParentObject();
+            // the search only for a sunk item that has a record
+            bool comesBack = parent == -3 && World.Cargo.ContainsKey(save.instanceId) && CargoRecords.ComesBack(save);
+            if (CargoRecords.Retires(parent, comesBack)) __state = save.instanceId;
         }
         static void Postfix(int __state) { CargoRecords.Destroyed(__state); }
     }

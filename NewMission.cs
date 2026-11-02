@@ -461,7 +461,13 @@ namespace EconomyOverhaul
             if (delta > 0)
             {
                 int g = PrefabsDirectory.ItemToGoodIndex(r.prefab); var market = World.Market(r.destination);
-                if (market && g > 0 && g < market.currentSupply.Length) { market.currentSupply[g] += .5f * delta; Economy.Refresh(market); }
+                // a delivery lifts a demanding port's supply as a sale does, so it can end its event too (it never went through
+                // SellGood's check; the deep review of 2026-11-02, Claude's fix)
+                if (market && g > 0 && g < market.currentSupply.Length)
+                {
+                    market.currentSupply[g] += .5f * delta; Economy.Refresh(market);
+                    if (!Startup.Running) Demand.Check(r.destination, g);
+                }
                 r.creditedDeliveries = delivered;
             }
             if (delivered >= m.goodCount && !r.awarded)
@@ -789,7 +795,9 @@ namespace EconomyOverhaul
             if(mission==null||mission.missionIndex>=0)return false;
             return PlayerMissions.missions==null||PlayerMissions.GetMissionCount()<Reputations.MaxMissions(mission.originPort);
         }
-        static void Postfix(Mission mission) { if (mission != null) Missions.Accepted(mission); }
+        // Only when the game's own method ran: a refused accept (this prefix's, or another mod's) took no mission (the deep review
+        // of 2026-11-02, Claude's fix)
+        static void Postfix(Mission mission, bool __runOriginal) { if (__runOriginal && mission != null) Missions.Accepted(mission); }
     }
     [HarmonyPatch(typeof(Good), "Deliver")] internal static class DeliveryContextPatch
     {
