@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Reflection;
 using System.Reflection.Emit;
 using HarmonyLib;
 using UnityEngine;
@@ -130,6 +129,34 @@ namespace EconomyOverhaul
         // Claude's fix; the game builds its lists again after every accept, from the warehouse the crates just left).
         public static bool[] KeepAfterAccept(int[] counts, int stock) => counts.Select(c => c > 0 && c <= stock).ToArray();
         public const int NoMissionsFrom = 33;   // Saffron Island
+
+        // ---- The mission board's sort, region filter and quantity (BOARD_PLANK_DRAFT.md; the user's request of 2026-11-08) ----
+        // The sort (the user: "Per mile, Gold, Rep"): every one high to low, by real value across the coins ("Make value sorting by actual
+        // value, currently vanilla game sort with currency number, so mission paid in Emerald dragon always come up on top").
+        public enum BoardSort { PerMile, Gold, Reputation }
+        public static readonly string[] BoardSortNames = { "Gold per mile", "Gold reward", "Reputation reward" };
+        // The region filter ("another one filter region, so it only show the quest from that region"): the destination's reputation
+        // account (every offer starts at this port; Chronos' port 21 is "Chronos", its own account 3); index 0 all, 1-4 the accounts 0-3.
+        public static readonly string[] BoardRegionNames = { "All regions", "Al'Ankh", "Emerald", "Aestrin", "Chronos" };
+        // A coin amount's real value: the game turns a base price into a coin by multiplying by its rate (CurrencyMarket.currentPrices,
+        // GetSellPriceInCurrency), so the amount over the rate.
+        public static double RealValue(int amount, float rate) => rate > 0 ? amount / (double)rate : amount;
+        public static double BoardKey(BoardSort sort, double realTotal, float distance, int reputation) =>
+            sort == BoardSort.Gold ? realTotal : sort == BoardSort.Reputation ? reputation : distance > 0 ? realTotal / distance : realTotal;
+        // The board's order: the offers whose region passes (region -1: all), high to low by key, ties in list order (a stable sort).
+        public static int[] BoardOrder(double[] keys, int[] regions, int region) =>
+            Enumerable.Range(0, keys.Length).Where(i => region < 0 || regions[i] == region).OrderByDescending(i => keys[i]).ToArray();
+        // The quantity ("player can click the arrow to decide how many cargo he want to take from that mission. Reduce the reward
+        // accordingly. mission with modifier cannot change the quantity"; "Quantity minimal 1, maximum as current's quantity"; the user's
+        // answers: "Gold, rep and capacity", Fragile "No, only Bulk/Pristine/Rush"): 1 to the offered count; the gold, the reputation and the
+        // port capacity award each x chosen / offered (gold and capacity rounded to the nearest).
+        public static bool QuantityLocked(MissionModifier m) => (m & (MissionModifier.Bulk | MissionModifier.Pristine | MissionModifier.Rush)) != 0;
+        public static int ChosenCount(int chosen, int offered) => Math.Max(1, Math.Min(Math.Max(1, offered), chosen));
+        public static int ChosenShare(int whole, int chosen, int offered) =>
+            offered <= 0 || chosen >= offered ? whole : (int)Math.Round(whole * (double)Math.Max(0, chosen) / offered, MidpointRounding.AwayFromZero);
+        // The game's reputation per crate is the mission's distance / its crates x 3 (Mission.GetDeliveryRep): the same total whatever the
+        // count, so a smaller mission's figure is brought back to the offered crate's: x chosen / offered.
+        public static float RepScale(int chosen, int offered) => offered <= 0 || chosen >= offered ? 1 : Math.Max(0, chosen) / (float)offered;
 
         // ---- Mission modifiers (origin rep 3+; never on mail) ----
         public static string ModifierPrefix(MissionModifier m) =>
@@ -302,6 +329,8 @@ namespace EconomyOverhaul
     {
         // Heights in the page's own frame (+x is the screen's left; the left column at x .676).
         private const float Left = .676f, Indent = .646f, RewardX = -.306f, MapScale = .85f;
+        // shortcut: `failed` stays set for the rest of the game session (a page found without its texts once is never tried again, even a
+        // new page object); replace with a reset when `built` changes if a page ever fails only for a moment.
         private static MissionDetailsUI built; private static bool failed;
         private static TextMesh originLabel, origin, destinationLabel, destination, dueLabel, due, distance, perUnit, perMile, reward, gold;
         private static TextMesh categoryLabel, category, capacity, atOrigin, atDestination, reputation, note;
@@ -333,14 +362,15 @@ namespace EconomyOverhaul
             capacity.gameObject.SetActive(!mail); atOrigin.gameObject.SetActive(!mail); atDestination.gameObject.SetActive(!mail);
             if (!mail)
             {
-                bool world = Missions.IsWorld(mission);
-                atOrigin.text = "+" + (Rules.CapacityAward(c, world, true) + Rules.ModifierCapacity(c, mods, true)) + " at origin";
-                atDestination.text = "+" + (Rules.CapacityAward(c, world, false) + Rules.ModifierCapacity(c, mods, false)) + " at destination";
+                bool world = Missions.IsWorld(mission); int offeredCount = Missions.OfferedCount(mission);   // fewer chosen: x chosen / offered
+                atOrigin.text = "+" + Rules.ChosenShare(Rules.CapacityAward(c, world, true) + Rules.ModifierCapacity(c, mods, true), mission.goodCount, offeredCount) + " at origin";
+                atDestination.text = "+" + Rules.ChosenShare(Rules.CapacityAward(c, world, false) + Rules.ModifierCapacity(c, mods, false), mission.goodCount, offeredCount) + " at destination";
             }
             // The reward: the gold, the reputation as big under it (the game's per-unit value with every mod's rules, x the
             // count, as of today), and the note just above Accept.
             reputation.text = DeliveryRep(mission) * mission.goodCount + " reputation";
             note.text = (mods & MissionModifier.Pristine) != 0 ? "Only get increased reward\nwhen fully dry" : (mods & MissionModifier.Fragile) != 0 ? "Only get increased reward\nwhen intact" : "";
+            QuantityArrows.Show(page, mission);   // the cargo count's arrows (BOARD_PLANK_DRAFT.md, 2026-11-08)
         }
 
         private static bool Build(MissionDetailsUI page)
@@ -395,15 +425,44 @@ namespace EconomyOverhaul
         [System.Runtime.Serialization.OptionalField] public int category;
         // Its modifiers (MissionModifier flags); 0 for none and for records from before them.
         [System.Runtime.Serialization.OptionalField] public int modifiers;
+        // The offer's crates when fewer were chosen with the board's arrows (BOARD_PLANK_DRAFT.md, 2026-11-08): its reputation per crate and
+        // port capacity award are scaled by the count / this. 0 for a mission taken whole and for every record from before.
+        [System.Runtime.Serialization.OptionalField] public int offered;
     }
     internal static class Missions
     {
         private static readonly Dictionary<int, List<Mission>> offers = new Dictionary<int, List<Mission>>();
         private static readonly Dictionary<Mission, bool> sources = new Dictionary<Mission, bool>();
         private static readonly Dictionary<Mission, MissionModifier> offerModifiers = new Dictionary<Mission, MissionModifier>();
+        // Each cargo offer of this opening as offered (its crates and its gold in the destination's coin), for the board's arrows and order
+        // (BOARD_PLANK_DRAFT.md, 2026-11-08): the arrows change the offer's own goodCount and totalPrice.
+        private static readonly Dictionary<Mission, (int count, int total)> offered = new Dictionary<Mission, (int count, int total)>();
         internal static readonly HashSet<int> DeliveredItems = new HashSet<int>();
         [ThreadStatic] internal static Good Delivering;
-        internal static void Reset() { offers.Clear(); sources.Clear(); offerModifiers.Clear(); Delivering = null; }
+        internal static void Reset() { offers.Clear(); sources.Clear(); offerModifiers.Clear(); offered.Clear(); Board.Changed(); Delivering = null; }
+        // An offer's crates and gold as offered (the mission's own for one not in this opening's lists: Postal Expansion's letters, another
+        // mod's); an accepted mission's crates as offered from its record.
+        internal static int OfferedCount(Mission m)
+        {
+            if (m == null) return 0;
+            if (m.missionIndex < 0) return offered.TryGetValue(m, out var o) ? o.count : m.goodCount;
+            var r = Record(m); return r != null && r.offered > 0 ? r.offered : m.goodCount;
+        }
+        internal static int OfferedTotal(Mission m) => m != null && m.missionIndex < 0 && offered.TryGetValue(m, out var o) ? o.total : m?.totalPrice ?? 0;
+        // The arrows show on an offer of this opening that is cargo of more than one crate, without Bulk, Pristine or Rush.
+        internal static bool CanChoose(Mission m)
+        {
+            if (m == null || m.missionIndex >= 0 || Postal(m) || !offered.TryGetValue(m, out var o) || o.count <= 1) return false;
+            Info(m, out _, out var mods); return !Rules.QuantityLocked(mods);
+        }
+        // One arrow's click: the offer's crates one more or one less (1 to the offered count), its gold the offered total x chosen / offered.
+        internal static bool Choose(Mission m, int delta)
+        {
+            if (!CanChoose(m)) return false;
+            var o = offered[m]; int to = Rules.ChosenCount(m.goodCount + delta, o.count); if (to == m.goodCount) return false;
+            m.goodCount = to; m.totalPrice = Rules.ChosenShare(o.total, to, o.count); m.pricePerKm = m.totalPrice / m.distance;
+            return true;
+        }
         internal static bool Postal(Mission m)
         {
             if (m?.goodPrefab == null) return false;
@@ -427,8 +486,10 @@ namespace EconomyOverhaul
                     destination = m.destinationPort.portIndex, prefab = m.goodPrefab.GetComponent<SaveablePrefab>().prefabIndex,
                     dueDay = m.dueDay, totalPrice = m.totalPrice, world = sources.TryGetValue(m, out bool world) ? world : m.distance >= 140,
                     creditedDeliveries = m.GetDeliveredCount(), category = (int)Category(m),
-                    modifiers = offerModifiers.TryGetValue(m, out var modifiers) ? (int)modifiers : 0 });
+                    modifiers = offerModifiers.TryGetValue(m, out var modifiers) ? (int)modifiers : 0,
+                    offered = offered.TryGetValue(m, out var whole) && whole.count != m.goodCount ? whole.count : 0 });
             }
+            Board.Changed();
             // The game builds its lists again after every accept (MissionDetailsUI.ClickButton), from the warehouse the accepted
             // crates just left. The lists of this opening stay (their rolls kept): the taken offer leaves them (it was left as an
             // empty row that still counted in the pages), and each of the origin's other offers of that good, on both tabs, stays
@@ -441,7 +502,10 @@ namespace EconomyOverhaul
             if (Postal(m)) return;
             int good = GoodIndex(m); var office = m.originPort.GetComponent<IslandMissionOffice>(); var warehouse = office ? office.GetData() : null;
             var same = lists.SelectMany(l => l.Where(x => !Postal(x) && GoodIndex(x) == good)).ToArray();
-            var keep = Rules.KeepAfterAccept(same.Select(x => x.goodCount).ToArray(), warehouse == null ? 0 : warehouse.Count(x => x == good));
+            // Each kept offer judged at its offered count, not the count chosen with the arrows: Choose can raise a kept offer back to it
+            // without a stock check (the deep review of 2026-11-09: two offers of 12 rice on 12 in the warehouse, both cut to 6, one taken;
+            // the other, kept at 6, raised to 12 and taken, made 12 crates from 6).
+            var keep = Rules.KeepAfterAccept(same.Select(OfferedCount).ToArray(), warehouse == null ? 0 : warehouse.Count(x => x == good));
             var gone = new HashSet<Mission>(same.Where((x, i) => !keep[i]));
             if (gone.Count > 0) foreach (var list in lists) list.RemoveAll(gone.Contains);
         }
@@ -474,8 +538,9 @@ namespace EconomyOverhaul
             {
                 var c = (MissionCategory)r.category; var mods = (MissionModifier)r.modifiers;
                 r.awarded = true;
-                Economy.Award(r.origin, Rules.CapacityAward(c, r.world, true) + Rules.ModifierCapacity(c, mods, true));
-                Economy.Award(r.destination, Rules.CapacityAward(c, r.world, false) + Rules.ModifierCapacity(c, mods, false));
+                // fewer crates chosen than offered: the award x chosen / offered, rounded (the user, 2026-11-08: "Gold, rep and capacity")
+                Economy.Award(r.origin, Rules.ChosenShare(Rules.CapacityAward(c, r.world, true) + Rules.ModifierCapacity(c, mods, true), m.goodCount, r.offered));
+                Economy.Award(r.destination, Rules.ChosenShare(Rules.CapacityAward(c, r.world, false) + Rules.ModifierCapacity(c, mods, false), m.goodCount, r.offered));
             }
         }
         internal static MissionCategory Category(Mission m) =>
@@ -534,7 +599,8 @@ namespace EconomyOverhaul
             if (item && pristine && Ruined(item, true)) return Rules.PristineRuinedRep;
             if (item && fragile && Ruined(item, false)) return Rules.FragileRuinedRep;
             if (rep <= 0) return rep;
-            float factor = Rules.CategoryReputation(c) * ((mods & MissionModifier.Bulk) != 0 ? 2 : 1);
+            // fewer crates chosen than offered: the offered crate's figure (BOARD_PLANK_DRAFT.md, Rules.RepScale)
+            float factor = Rules.CategoryReputation(c) * ((mods & MissionModifier.Bulk) != 0 ? 2 : 1) * Rules.RepScale(m.goodCount, OfferedCount(m));
             if (!item) factor *= (pristine ? 2 : 1) * (fragile ? 2 : 1);
             else if ((pristine || fragile) && Kept(item, pristine)) factor *= 2;
             else factor *= CargoCondition.Factor(item);
@@ -560,7 +626,9 @@ namespace EconomyOverhaul
                 if (m.missionIndex >= 0 || (offerModifiers[m] & MissionModifier.Fragile) == 0) continue;
                 offerModifiers[m] &= ~MissionModifier.Fragile;
                 m.totalPrice = Mathf.RoundToInt(m.totalPrice / 2f); m.pricePerKm = m.totalPrice / m.distance;
+                if (offered.TryGetValue(m, out var o)) offered[m] = (o.count, Mathf.RoundToInt(o.total / 2f));   // as offered, for the arrows
             }
+            Board.Changed();
             foreach (var c in World.Cargo.Values) c.fragile = false;
         }
         internal static void Loaded()
@@ -669,14 +737,16 @@ namespace EconomyOverhaul
                 list = Build(office, world); offers.Add(key, list);
                 foreach (var mission in list) sources[mission] = world;
             }
-            m.GetPort().SetMissonCount(list.Count);
+            // The board's order and region (BOARD_PLANK_DRAFT.md, 2026-11-08): the game's paging and Mission Rework read this view.
+            var view = Board.View(list);
+            m.GetPort().SetMissonCount(view.Count);
             var result = new Mission[5];
-            for (int i = 0; i < 5; i++) if (page * 5 + i >= 0 && page * 5 + i < list.Count) result[i] = list[page * 5 + i];
+            for (int i = 0; i < 5; i++) if (page * 5 + i >= 0 && page * 5 + i < view.Count) result[i] = view[page * 5 + i];
             return result;
         }
         private static int GoodIndex(Mission m) => PrefabsDirectory.ItemToGoodIndex(m.goodPrefab.GetComponent<SaveablePrefab>().prefabIndex);
         // The modifiers, rolled on the tab's final list (before its pay goes into the destination's currency).
-        private static void ApplyModifiers(IslandMarket m, Port origin, int[] warehouse, List<Mission> list, int level)
+        private static void ApplyModifiers(int[] warehouse, List<Mission> list, int level)
         {
             var categories = list.Select(Category).ToArray();
             var damageable = list.Select(x => !Postal(x) && !CargoCondition.WaterProof(GoodIndex(x))).ToArray();
@@ -766,15 +836,297 @@ namespace EconomyOverhaul
             if (unworthy.Count > 0) list = list.Where(x => !unworthy.Contains(x)).ToList();
             var keep = Rules.KeepOffersByPay(list.Select(x => x.pricePerKm).ToArray(), list.Select(Postal).ToArray(), Rules.MissionListCap);
             list = list.Where((x, i) => keep[i]).ToList();
-            ApplyModifiers(m, origin, warehouse, list, level);
+            ApplyModifiers(warehouse, list, level);
             foreach (var mission in list)
             {
                 mission.totalPrice = CurrencyMarket.instance.GetSellPriceInCurrency((Currency)mission.destinationPort.region, mission.totalPrice, false);
                 mission.pricePerKm = mission.totalPrice / mission.distance;
+                if (!Postal(mission)) offered[mission] = (mission.goodCount, mission.totalPrice);   // as offered (the board's arrows)
             }
             return list;
         }
     }
+    // ---- The mission board's order and region (BOARD_PLANK_DRAFT.md; the user's request of 2026-11-08) ----
+    // The sort and the region chosen on the board's dropdowns, kept for the game session (not saved). A tab's view: its offers in that order
+    // and region, made again only after a change (a choice, an accept, a new opening, the fragile option); an offer is sorted as offered, so
+    // an arrow's click doesn't move it. Postal Expansion sorts its own list again (by the coin number): its result is put in this order too.
+    internal static class Board
+    {
+        internal static Rules.BoardSort Sort = Rules.BoardSort.PerMile;
+        internal static int Region = -1;   // -1 all regions, else the destination's reputation account 0-3 (3 Chronos)
+        private static int stamp;
+        private static readonly Dictionary<List<Mission>, (int stamp, int count, List<Mission> view)> views = new Dictionary<List<Mission>, (int, int, List<Mission>)>();
+        internal static void Changed() { stamp++; views.Clear(); }
+        // shortcut: the daily currency rate a sort reads (RealTotal; Fx.AdvanceDay sets it when the day changes) doesn't make the view
+        // again, so a board kept open past midnight keeps the order of the old rates until the next change; replace with a Changed() at
+        // the day's rate change if a player sees it.
+        internal static List<Mission> View(List<Mission> list)
+        {
+            if (list == null) return new List<Mission>();
+            if (views.TryGetValue(list, out var v) && v.stamp == stamp && v.count == list.Count) return v.view;
+            var view = Ordered(list); views[list] = (stamp, list.Count, view); return view;
+        }
+        internal static List<Mission> Ordered(List<Mission> list)
+        {
+            var items = list.Where(x => x != null && x.destinationPort).ToList();
+            // The filter's region is the reputation account (Chronos' port 21 lies in region 2 but is its own account 3, the filter's "Chronos";
+            // the deep review of 2026-11-09). Rate keeps the game's region: a mission is paid in currency[(int)destinationPort.region].
+            var keys = items.Select(Key).ToArray(); var regions = items.Select(x => Reputations.Account(x.destinationPort)).ToArray();
+            return Rules.BoardOrder(keys, regions, Region).Select(i => items[i]).ToList();
+        }
+        internal static void InPlace(List<Mission> list) { if (list == null) return; var ordered = Ordered(list); list.Clear(); list.AddRange(ordered); }
+        // A mission is paid in its destination's coin (Mission.DeliverGood).
+        internal static float Rate(int region) =>
+            CurrencyMarket.instance && CurrencyMarket.instance.currentPrices != null && region >= 0 && region < CurrencyMarket.instance.currentPrices.Length && CurrencyMarket.instance.currentPrices[region] > 0 ? CurrencyMarket.instance.currentPrices[region] : 1;
+        internal static double RealTotal(Mission m) => Rules.RealValue(Missions.OfferedTotal(m), Rate((int)m.destinationPort.region));
+        // The page's reputation figure as offered (its per-crate value with every mod's rules, Rules.RepScale bringing it to the offered crate's).
+        internal static int Reputation(Mission m) => GameRep(m) * Missions.OfferedCount(m);
+        private static readonly Func<Mission, int> GameRep = AccessTools.MethodDelegate<Func<Mission, int>>(AccessTools.Method(typeof(Mission), "GetDeliveryRep"));
+        private static double Key(Mission m) => Rules.BoardKey(Sort, RealTotal(m), m.distance, Sort == Rules.BoardSort.Reputation ? Reputation(m) : 0);
+    }
+    // The two dropdowns on the port's mission list (the user: "Mission UI now have 2 drop down list as filter"): each a plate copied from the
+    // list's back button (the game's row plate), narrower, left of the list, under the list's page buttons, so they show exactly while the port's
+    // offers do (the game hides the page buttons in the log book, Mission Rework while it shows the player's own missions). A click on a plate
+    // opens its choices as plates under it, the chosen one in the plate's own shade and the others darker; a choice closes it and the list goes
+    // back to page 1 (the game's ResetPage, which Postal Expansion takes over for its own paging).
+    internal sealed class BoardUI : MonoBehaviour
+    {
+        // In the page buttons' frame (+x the screen's left): the list's tabs stand at y .19, its rows .049 apart. X and Width (a share of the
+        // back button's width) only where the room left of the list can't be measured; else the plates fill that room (Room).
+        internal const float X = .40f, SortY = .19f, RegionY = .12f, Step = .049f, Width = .62f, Shade = .78f;
+        // Between the plates and the list, and the screen's edge kept free (a share of its width: the room is read on the plates' pivot plane, and
+        // their tilted, deep plates came out about 10 px wider there at 1280 x 720, mb-4); the narrowest plate (a share of the back button).
+        internal const float ListGap = .016f, EdgeMargin = .02f, MinWidth = .3f;
+        internal sealed class Drop
+        {
+            internal GameObject head; internal TextMesh headText; internal bool open;
+            internal readonly List<(GameObject plate, TextMesh text, Material material, LoanAction button)> choices = new List<(GameObject, TextMesh, Material, LoanAction)>();
+        }
+        internal static BoardUI Instance;
+        internal Drop SortDrop, RegionDrop;   // for tests
+        // shortcut: `failed` stays set as long as this board object lives (plates not found once are never looked for again on it); replace
+        // with a retry on the next opening if a board ever fails only for a moment.
+        private MissionListUI ui; private bool failed, narrowLogged; private float builtRoom = float.NaN;
+        private readonly List<GameObject> made = new List<GameObject>();
+        internal static void Opened(MissionListUI ui)
+        {
+            if (Startup.BlocksGameplay || !ui) return;
+            var b = ui.GetComponent<BoardUI>() ?? ui.gameObject.AddComponent<BoardUI>(); Instance = b;
+            if (b.failed) return;
+            // Fitted to the room left of the list on this screen (its shape and size): made again when that room changed (a new resolution).
+            float room = Room(ui, out float listLeft);
+            if (b.SortDrop != null && !(float.IsNaN(room) && float.IsNaN(b.builtRoom)) && !(Mathf.Abs(room - b.builtRoom) < .002f)) b.Unmake();
+            if (b.SortDrop == null && !b.Build(ui, room, listLeft)) { b.failed = true; Plugin.Log.LogWarning("EconomyOverhaul: the mission board's plates were not found; no sort or region dropdown."); return; }
+            b.Close(); b.Refresh();
+        }
+        // The room left of the list on the player's screen, in the page buttons' frame: from the list's left edge (its back button's and welcome
+        // box's) to the screen's edge where the plates stand, seen through the camera that draws the board (the game's "UI camera", its field of
+        // view fixed, found by name as MouseButtonPointer does). NaN where it can't be measured. Was a fixed place: at 1280 x 720 it ran 61 px off
+        // the screen (mb-2, 2026-11-08), and the room changes with the screen's shape (about 190 px at 16:9, little at 4:3).
+        internal static float Room(MissionListUI list, out float listLeft)
+        {
+            listLeft = 0;
+            var pages = Fields.Get<GameObject>(list, "pageButtons"); if (!pages || !pages.transform.parent) return float.NaN;
+            var frame = pages.transform; var source = OfficeUiParts.Find(frame.parent, "mission button (back)");
+            var bg = source ? source.Find("bg+trigger") : null; var r = bg ? bg.GetComponent<MeshRenderer>() : null;
+            if (!r || !r.GetComponent<MeshFilter>()) return float.NaN;
+            listLeft = BookUI.InFrameBounds(r, frame).max.x;
+            var welcome = Fields.Get<GameObject>(list, "portWelcome");
+            if (welcome) foreach (var w in welcome.GetComponentsInChildren<MeshRenderer>(true)) if (w.GetComponent<MeshFilter>()) listLeft = Mathf.Max(listLeft, BookUI.InFrameBounds(w, frame).max.x);
+            var camObject = GameObject.Find("UI camera"); var cam = camObject ? camObject.GetComponent<Camera>() : null; if (!cam) cam = Camera.main; if (!cam) return float.NaN;
+            var at = frame.TransformPoint(new Vector3(listLeft, SortY, source.localPosition.z));
+            var ray = cam.ScreenPointToRay(new Vector3(cam.pixelRect.xMin + cam.pixelWidth * EdgeMargin, cam.WorldToScreenPoint(at).y, 0));
+            if (!new Plane(frame.TransformDirection(Vector3.forward), at).Raycast(ray, out float d)) return float.NaN;
+            float edge = frame.InverseTransformPoint(ray.GetPoint(d)).x;
+            return edge - listLeft - ListGap;
+        }
+        private void Unmake()
+        {
+            foreach (var go in made) if (go) UnityEngine.Object.Destroy(go);
+            made.Clear(); SortDrop = RegionDrop = null;
+        }
+        private bool Build(MissionListUI list, float room, float listLeft)
+        {
+            ui = list;
+            var pages = Fields.Get<GameObject>(list, "pageButtons"); if (!pages || !pages.transform.parent) return false;
+            // Mission Rework moves the back button out of the page buttons (into the list's buttons): found wherever it is.
+            var source = OfficeUiParts.Find(pages.transform.parent, "mission button (back)"); if (!source) return false;
+            var sourceBg = source.Find("bg+trigger"); var sourceRenderer = sourceBg ? sourceBg.GetComponent<MeshRenderer>() : null;
+            if (!sourceRenderer || !sourceRenderer.GetComponent<MeshFilter>()) return false;
+            // The plates' width and middle: the room left of the list, at most Width of a row, at least MinWidth (then a narrow screen cuts them).
+            float full = BookUI.InFrameBounds(sourceRenderer, pages.transform).size.x, share = Width, x = X;
+            if (!float.IsNaN(room) && full > 0)
+            {
+                share = Mathf.Clamp(room / full, MinWidth, Width); x = listLeft + ListGap + full * share / 2;
+                if (room / full < MinWidth && !narrowLogged) { narrowLogged = true; Plugin.Log.LogInfo("EconomyOverhaul: little room left of the mission board on this screen (" + (room / full * 100).ToString("F0") + "% of a row): its dropdowns may run off the screen's edge."); }
+            }
+            builtRoom = room;
+            SortDrop = Make(pages.transform, source, "sort", x, SortY, share, Rules.BoardSortNames.Length, i => Pick(true, i), () => Toggle(true));
+            RegionDrop = Make(pages.transform, source, "region", x, RegionY, share, Rules.BoardRegionNames.Length, i => Pick(false, i), () => Toggle(false));
+            return SortDrop != null && RegionDrop != null;
+        }
+        private Drop Make(Transform parent, Transform source, string name, float x, float y, float share, int count, Action<int> pick, Action toggle)
+        {
+            var d = new Drop();
+            var head = Plate(parent, source, "EconomyOverhaul " + name, x, y, share, toggle); if (head.plate == null) return null;
+            made.Add(head.plate); d.head = head.plate; d.headText = head.text;
+            for (int i = 0; i < count; i++)
+            {
+                int k = i; var c = Plate(parent, source, "EconomyOverhaul " + name + " choice " + i, x, y - Step * (i + 1), share, () => pick(k)); if (c.plate == null) return null;
+                made.Add(c.plate); c.plate.SetActive(false); d.choices.Add(c);
+            }
+            return d;
+        }
+        private static (GameObject plate, TextMesh text, Material material, LoanAction button) Plate(Transform parent, Transform source, string name, float x, float y, float share, Action action)
+        {
+            var go = OfficeUiParts.Clone(source.gameObject, parent, false); go.name = name;
+            go.transform.localPosition = new Vector3(x, y, source.localPosition.z);
+            var bg = go.transform.Find("bg+trigger"); var text = go.transform.Find("text") ? go.transform.Find("text").GetComponent<TextMesh>() : null;
+            var renderer = bg ? bg.GetComponent<MeshRenderer>() : null;
+            if (!bg || !text || !renderer || !bg.GetComponent<Collider>()) { UnityEngine.Object.Destroy(go); return default; }
+            // Narrower along the plate's own width (the axis of bg+trigger that lies along the plate's x), its text fitted inside it.
+            Vector3 s = bg.localScale; int axis = 0; float most = -1;
+            for (int a = 0; a < 3; a++) { var dir = bg.localRotation * (a == 0 ? Vector3.right : a == 1 ? Vector3.up : Vector3.forward); if (Mathf.Abs(dir.x) > most) { most = Mathf.Abs(dir.x); axis = a; } }
+            s[axis] *= share; bg.localScale = s;
+            var mesh = bg.GetComponent<MeshFilter>() ? bg.GetComponent<MeshFilter>().sharedMesh : null;
+            float width = mesh ? mesh.bounds.size[axis] * s[axis] : 0;
+            // its plate's middle at x (the back button's plate may stand off its pivot)
+            if (mesh) { var p = go.transform.localPosition; p.x += x - BookUI.InFrameBounds(renderer, parent).center.x; go.transform.localPosition = p; }
+            var material = new Material(renderer.sharedMaterial); renderer.sharedMaterial = material;
+            var button = OfficeUiParts.Action(bg.gameObject, () => { OfficeUiParts.Click(); action(); }, ""); button.ownedMaterial = material;
+            text.color = Color.black; text.text = "";
+            if (width > 0) { var fit = text.GetComponent<LoanTextFit>() ?? text.gameObject.AddComponent<LoanTextFit>(); fit.originalScale = text.transform.localScale; fit.maxWidth = width * .9f; }
+            return (go, text, material, button);
+        }
+        private void Toggle(bool sort)
+        {
+            var d = sort ? SortDrop : RegionDrop; bool open = !d.open;
+            Close(); d.open = open; Refresh();
+        }
+        private void Pick(bool sort, int i)
+        {
+            if (sort) Board.Sort = (Rules.BoardSort)i; else Board.Region = i - 1;
+            Board.Changed(); Close(); Refresh();
+            if (ui && Fields.Get<PortDude>(ui, "currentPortDude")) ui.ResetPage();
+        }
+        internal void Close() { if (SortDrop != null) SortDrop.open = false; if (RegionDrop != null) RegionDrop.open = false; }
+        internal void Refresh()
+        {
+            if (SortDrop == null || RegionDrop == null) return;
+            SortDrop.headText.text = "Sort: " + Rules.BoardSortNames[(int)Board.Sort];
+            RegionDrop.headText.text = "Region: " + Rules.BoardRegionNames[Board.Region + 1];
+            Show(SortDrop, (int)Board.Sort, Rules.BoardSortNames); Show(RegionDrop, Board.Region + 1, Rules.BoardRegionNames);
+            // the sort's choices fall over the region's plate: it hides while they show
+            RegionDrop.head.SetActive(!SortDrop.open);
+        }
+        private static void Show(Drop d, int chosen, string[] names)
+        {
+            for (int i = 0; i < d.choices.Count; i++)
+            {
+                var c = d.choices[i]; c.text.text = names[i];
+                if (c.material && c.material.HasProperty("_Color")) c.material.color = i == chosen ? Color.white : new Color(Shade, Shade, Shade, 1);
+                if (c.plate.activeSelf != d.open) c.plate.SetActive(d.open);
+            }
+        }
+        // For tests: a choice clicked as the player clicks it.
+        internal void Click(bool sort, int i) { Toggle(sort); (sort ? SortDrop : RegionDrop).choices[i].button.OnActivate(); }
+    }
+    [HarmonyPatch(typeof(MissionListUI), "EnablePortMissionUI")] internal static class BoardOpenPatch
+    { static void Postfix(MissionListUI __instance) => BoardUI.Opened(__instance); }
+
+    // The quantity arrows beside the mission page's cargo count (the user: "Add 2 arrow beside mission UI's cargo quantity, player can click the
+    // arrow to decide how many cargo he want to take from that mission"): the list's own page arrows (left, fewer; right, more), at half their
+    // size, either side of the count, the count moved right by an arrow's width so the left one stands where the count stood. Shown only on an
+    // offer whose crates can be chosen (Missions.CanChoose); a click changes the offer and the page shows it at once (its texts and lines).
+    internal static class QuantityArrows
+    {
+        internal const float Size = .5f, Gap = .012f, LabelGap = .02f;
+        // shortcut: `failed` stays set for the rest of the game session (arrows not made once are never tried again, even on a new page
+        // object); replace with a reset when `built` changes if a page ever fails only for a moment.
+        private static MissionDetailsUI built; private static bool failed;
+        private static GameObject less, more; private static TextMesh amount, label; private static float amountX; private static float half, lessCentre, moreCentre;
+        private static Mission current;
+        internal static GameObject Less => less; internal static GameObject More => more;   // for tests
+        internal static void Show(MissionDetailsUI page, Mission mission)
+        {
+            if (failed || !page) return;
+            if (built != page && !Build(page)) { failed = true; Plugin.Log.LogWarning("EconomyOverhaul: the mission page's arrows were not made; the cargo count can't be chosen."); return; }
+            current = mission; bool on = Missions.CanChoose(mission);
+            var p = amount.transform.localPosition;
+            if (!on) { p.x = amountX; amount.transform.localPosition = p; less.SetActive(false); more.SetActive(false); return; }
+            // +x is the screen's left: the left arrow where the count began, or a gap right of the "Amount:" label where the count began closer to it
+            // (mb-2, 2026-11-08: the arrow's plate 2 px into the label at the count's place); the count an arrow's width and a gap to its right,
+            // the right arrow after it.
+            float from = label ? Mathf.Min(amountX, LabelRight(label, amount.transform.parent) - LabelGap) : amountX;
+            float start = from - 2 * half - Gap, width = BookUI.MeasureLine(amount, amount.text);
+            p.x = start; amount.transform.localPosition = p;
+            Place(less, from - half - lessCentre); Place(more, start - width - Gap - half - moreCentre);
+            less.SetActive(true); more.SetActive(true);
+        }
+        private static void Place(GameObject arrow, float x) { var q = arrow.transform.localPosition; q.x = x; arrow.transform.localPosition = q; }
+        // The label's right end on the screen in the count's frame (+x the screen's left, as in the label's own frame): its x less its measured
+        // width by its anchor.
+        private static float LabelRight(TextMesh text, Transform frame)
+        {
+            var a = text.anchor; float left = a == TextAnchor.UpperLeft || a == TextAnchor.MiddleLeft || a == TextAnchor.LowerLeft ? 1 : a == TextAnchor.UpperRight || a == TextAnchor.MiddleRight || a == TextAnchor.LowerRight ? 0 : .5f;
+            var lp = text.transform.localPosition; lp.x -= BookUI.MeasureLine(text, (text.text ?? "").TrimEnd()) * left;
+            return frame.InverseTransformPoint(text.transform.parent.TransformPoint(lp)).x;
+        }
+        private static bool Build(MissionDetailsUI page)
+        {
+            amount = Fields.Get<TextMesh>(page, "amount"); var list = MissionListUI.instance;
+            var root = Fields.Get<GameObject>(page, "UI"); label = root ? root.GetComponentsInChildren<TextMesh>(true).FirstOrDefault(t => (t.text ?? "").Trim() == "Amount:") : null;
+            var pages = list ? Fields.Get<GameObject>(list, "pageButtons") : null;
+            var previous = pages ? OfficeUiParts.FindStart(pages.transform, "mission button (previous") : null;
+            var next = pages ? OfficeUiParts.FindStart(pages.transform, "mission button (next") : null;
+            if (!amount || !previous || !next) return false;
+            var parent = amount.transform.parent; amountX = amount.transform.localPosition.x;
+            less = Arrow(previous, parent, "EconomyOverhaul fewer crates", -1, out lessCentre);
+            more = Arrow(next, parent, "EconomyOverhaul more crates", 1, out moreCentre);
+            if (!less || !more) return false;
+            built = page; return true;
+        }
+        // An arrow copied in its world pose and size, then halved, at the count's height; `centre`: its plate's middle from its pivot along x.
+        private static GameObject Arrow(Transform source, Transform parent, string name, int delta, out float centre)
+        {
+            centre = 0;
+            var go = OfficeUiParts.Clone(source.gameObject, parent, true); go.name = name;
+            go.transform.localScale *= Size;
+            var bg = go.transform.Find("bg+trigger"); var renderer = bg ? bg.GetComponent<MeshRenderer>() : null;
+            if (!bg || !renderer || !bg.GetComponent<Collider>()) { UnityEngine.Object.Destroy(go); return null; }
+            var p = go.transform.localPosition; p.y = amount.transform.localPosition.y; p.z = amount.transform.localPosition.z - .002f; go.transform.localPosition = p;
+            var box = BookUI.InFrameBounds(renderer, parent); half = box.extents.x; centre = box.center.x - p.x;
+            OfficeUiParts.Action(bg.gameObject, () => Clicked(delta), delta < 0 ? "Fewer" : "More");
+            go.SetActive(false);
+            return go;
+        }
+        private static void Clicked(int delta)
+        {
+            var page = built; if (!page || current == null || !Missions.Choose(current, delta)) return;
+            OfficeUiParts.Click();
+            Fields.Call(page, "UpdateTexts"); MissionPage.Show(page, current);
+        }
+        // For tests: an arrow clicked as the player clicks it.
+        internal static void Click(int delta) { var a = delta < 0 ? less : more; if (a) a.GetComponentInChildren<LoanAction>(true)?.OnActivate(); }
+    }
+
+    // Postal Expansion (1.1.x) pages the list itself and sorts it by the coin number (PostalMissionUi.GetAvailableMissions): its result is put in
+    // the board's order and region, its own letters too. Patched by hand at startup only when it is loaded (a soft dependency, loaded before
+    // this mod), as the other mods' compatibility patches are (Plugin.cs).
+    internal static class PostalBoardCompatibility
+    {
+        internal static void Install(Harmony harmony)
+        {
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("PostalExpansion.PostalMissionUi", false)).FirstOrDefault(t => t != null);
+            if (type == null) return;
+            var method = AccessTools.GetDeclaredMethods(type).FirstOrDefault(x => x.Name == "GetAvailableMissions" && x.ReturnType == typeof(List<Mission>));
+            if (method == null) { Plugin.Log?.LogWarning("Postal Expansion board compatibility unavailable: its mission list changed; its list keeps its own order."); return; }
+            harmony.Patch(method, postfix: new HarmonyMethod(typeof(PostalBoardCompatibility), nameof(Ordered)));
+            Plugin.Log?.LogInfo("Postal Expansion: its mission list takes the board's sort and region.");
+        }
+        private static void Ordered(List<Mission> __result) { if (__result != null && !Startup.BlocksGameplay) Board.InPlace(__result); }
+    }
+
     // Mission Rework (written for 1.0.3; 1.0.4 in the workspace) handles this method in its own prefix and shows the list there: the
     // offers are cleared before it runs (HarmonyBefore), and page 0 is built here so the count is set (the game fetches the same
     // page anyway).

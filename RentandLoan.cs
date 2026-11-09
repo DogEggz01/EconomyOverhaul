@@ -85,7 +85,7 @@ namespace EconomyOverhaul
         public const int RentalLevel = 3, RentalPeriod = 20;
         // A hull counts as clean when this share of its dirt texture is clean (a careful hand scrub passes).
         public const double RentalCleanShare = .95;
-        // The ship's value in the rental currency: her price in Gold Lions, at the daily rate.
+        // The ship's value in the rental currency: its price in Gold Lions, at the daily rate.
         public static double RentalValue(int price, double goldRate, double localRate) => price / goldRate * localRate;
         public static int RentalDeposit(double value) => Round(.20 * value);
         public static int RentalDaily(double value) => Round(.05 * value);
@@ -101,6 +101,16 @@ namespace EconomyOverhaul
         public static int CleaningFee(int price, float rate) => (int)Math.Round((float)((float)ShipyardBase(price) * rate) * 2.25f);
         public static int RepairFee(int price, float rate, float hullDamage, float capacity) =>
             (int)Math.Round((float)((float)((float)((float)ShipyardBase(price) * rate) * hullDamage) * capacity) * .1f);
+        // Sail Damage's yard price for mending a ship's sails (its ShipyardRepair.Cost, 1.0.4): each installed sail's new price (Sail.GetSailPrice)
+        // x the yard's rate x its option ShipyardRepairShare (0.7 by default) x the sail's hole area over its whole area (its sail area, at least 1,
+        // plus a studding sail's: StuddingCompat.FullArea), summed in single precision and rounded as it rounds (Mathf.RoundToInt: to even).
+        public struct SailHoles { public float Price, Hole, Area, Full; }
+        public static int SailRepairFee(IEnumerable<SailHoles> sails, float rate, float share)
+        {
+            float sum = 0f;
+            if (sails != null) foreach (var s in sails) sum += s.Price * rate * share * s.Hole / (Math.Max(1f, s.Area) + s.Full);
+            return (int)Math.Round((double)sum);
+        }
     }
     public struct Settlement { public int Payout, Shortfall; }
     public static partial class Rules
@@ -126,6 +136,9 @@ namespace EconomyOverhaul
             var save = item ? item.GetComponent<SaveablePrefab>() : null;
             return save && World.Cargo.TryGetValue(save.instanceId, out var c) && c.loan ? c : null;
         }
+        // By item id, for a ship's packed cargo: it exists only as data in its cache, where Find can't see it. Called by name from
+        // Shipwright and Transport, whose Sell refuses a ship with financed cargo aboard (guide.md §1; the user, 2026-11-06).
+        internal static bool Financed(int id) => World.Cargo.TryGetValue(id, out var c) && c.loan;
         internal static string BlockReason(int region, int currency = -1)
         {
             if (!World.Ready || World.SaveBlocked) return "Economy unavailable";
@@ -133,6 +146,9 @@ namespace EconomyOverhaul
             return LoanGate.Reason(region) ?? (Available(region) <= 0 ? "No available credit" : null);
         }
         internal static void Notify(string text) { if (NotificationUi.instance) NotificationUi.instance.ShowNotification(NoticeText.Wrap(text)); }
+        // For a set time: the game's own overload (its plain one shows 3 s). Its own name, not a Notify overload: the QA patches Notify by name
+        // (Regression053.cs), and a second Notify made that patch ambiguous and stopped the QA (runs ocm-3, ouh-1; EconomyOverhaul_FAILED.md).
+        internal static void NotifyFor(string text, float seconds) { if (NotificationUi.instance) NotificationUi.instance.ShowNotification(NoticeText.Wrap(text), seconds); }
         // Repayment shortfalls can take an account down to 0 reputation points, never below.
         internal static int DebtPenalty(double penalty, int region, out double remainder) =>
             Rules.RepaymentPenalty(penalty, Math.Max(0, Reputations.Points(region)), out remainder);
@@ -221,9 +237,12 @@ namespace EconomyOverhaul
         }
         internal static void Collect(CargoState loan)
         { if (loan == null || !loan.loan) return; Debit(loan.region, checked(loan.principal + loan.interest), Currency(loan)); Close(loan); }
+        // shortcut: the loan is collected before the destroy, which another mod may refuse (New Beginnings keeps its starter items through this
+        // clean-up), but no loan finances a starter item; replace it with a collect after a destroy that really ran if a mod ever refuses financed cargo.
         internal static void Cleanup(ShipItem item) { Collect(Find(item)); item.DestroyItem(); }
         internal static void Sacrifice(ShipItem item) { Collect(Find(item)); item.DestroyItem(); }
-        internal static void UnexpectedRemoval(ShipItem item)
+        // After a destroy that really ran (RemovalFallbackPatch); parent: the item's save parent read before it (DestroyItem's ExitBoat sets -1).
+        internal static void UnexpectedRemoval(ShipItem item, int parent)
         {
             CartDelivery.Detach(item);
             // Unity does not guarantee trigger-exit callbacks on destruction. Keep the native
@@ -246,7 +265,7 @@ namespace EconomyOverhaul
             if (!World.Ready || World.Loading || GameState.currentlyLoading) return;
             var save = item.GetComponent<SaveablePrefab>(); if (!save) return;
             // Both normal boat caching and sinking cache reconstruction destroy their live instances.
-            if (save.GetParentObject() == -2 || save.GetParentObject() == -3) return;
+            if (parent == -2 || parent == -3) return;
             var loan = Find(item);
             if (plundered != null && loan != null && loan.loan) { plundered.Add(loan); return; }
             if (loan != null && ReferenceEquals(loan, crewSale)) return;
@@ -267,7 +286,7 @@ namespace EconomyOverhaul
             if (World.Removed.Add(c.id)) World.State.removedCargo.Add(c.id);
         }
         // Why bankruptcy can't be declared there now (null: it can): not in the region of the ship the player rents, nor in all
-        // regions, until she is returned.
+        // regions, until it is returned.
         internal static string BankruptcyRefusal(int region)
         {
             var r = Rentals.Current;
@@ -279,6 +298,8 @@ namespace EconomyOverhaul
             var refusal = BankruptcyRefusal(region); if (refusal != null) { Notify(refusal); return; }
             bool rentalEnded = Rentals.Bankruptcy(region);
             Bottomry.Bankruptcy(region);
+            // The region's trade offices close and its treasury goes (the user's Q6; TradeOffice.cs).
+            Office.Bankruptcy(region);
             for (int r = 0; r < 4; r++) if (region < 0 || r == region) World.State.fractionalPenalty[r] = 0;
             foreach (var c in World.State.cargo.Where(c => c.loan && (region < 0 || c.region == region)).ToArray()) MarkRemoved(c);
             for (int r = 0; r < 4; r++) if (region < 0 || r == region)
@@ -352,7 +373,17 @@ namespace EconomyOverhaul
         internal static int PositiveFee(float value) => Mathf.RoundToInt(Mathf.Max(0, value));
     }
     [HarmonyPatch(typeof(EconomyUI), "SellGood")] internal static class WarehouseSalePatch { static bool Prefix(EconomyUI __instance) { Loans.Sell(__instance); return false; } }
-    [HarmonyPatch(typeof(ShipItem), "DestroyItem")] internal static class RemovalFallbackPatch { static void Prefix(ShipItem __instance) => Loans.UnexpectedRemoval(__instance); }
+    // Only when the destroy really ran: another mod's prefix may refuse it and the item stays (New Beginnings keeps its starter items through the
+    // game's 600 m clean-up while its start is armed; the deep review of 2026-11-09, question 4a: "a) fix it"). The postfix reads __runOriginal,
+    // which holds every prefix's answer whatever their order; the save parent is read in the prefix, before DestroyItem's ExitBoat sets it to -1.
+    [HarmonyPatch(typeof(ShipItem), "DestroyItem")] internal static class RemovalFallbackPatch
+    {
+        static void Prefix(ShipItem __instance, out int __state) { var save = __instance ? __instance.GetComponent<SaveablePrefab>() : null; __state = save ? save.GetParentObject() : 0; }
+        // First among the postfixes, so the loan is closed before RetireCargoRecordPatch's postfix retires the record (CargoRecords.Prune keeps a
+        // record while its loan is open), the order of the prefix this replaced.
+        [HarmonyPriority(Priority.First)]
+        static void Postfix(ShipItem __instance, int __state, bool __runOriginal) { if (__runOriginal) Loans.UnexpectedRemoval(__instance, __state); }
+    }
     [HarmonyPatch(typeof(ItemRigidbody), "FixedUpdate")] internal static class CleanupDebtPatch
     { static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => Loans.ReplaceDestroy(instructions, nameof(Loans.Cleanup)); }
     [HarmonyPatch(typeof(KiciaAltar), "OnTriggerEnter")] internal static class SacrificeDebtPatch
@@ -495,8 +526,8 @@ namespace EconomyOverhaul
         public int id, pledge, region, currency, principal, startDay, dueDay;
         public double baseRate;
     }
-    // A pledge a lender took from the player, listed until the player buys her back: the game saves the place, rig and damage
-    // of owned ships only, so she counts as owned while a save is written.
+    // A pledge a lender took from the player, listed until the player buys it back: the game saves the place, rig and damage
+    // of owned ships only, so it counts as owned while a save is written.
     [Serializable] public sealed class SeizedPledge
     {
         public int pledge;
@@ -524,20 +555,34 @@ namespace EconomyOverhaul
     // Ships and houses: every PurchasableBoat in the scene, vanilla or added by another mod.
     internal static class Pledges
     {
-        // A berth: her place across the water relative to her nearest island, and her own height (an island's height follows
-        // the horizon sinking, IslandHorizon); with no island found, her place without the world's shifts.
+        // A berth: its place across the water relative to its nearest island, and its own height (an island's height follows
+        // the horizon sinking, IslandHorizon); with no island found, its place without the world's shifts.
         private sealed class BerthPose { internal Transform island; internal Vector3 offset, real; internal Quaternion rotation; }
         private static readonly Dictionary<PurchasableBoat, BerthPose> berths = new Dictionary<PurchasableBoat, BerthPose>();
         private static PurchasableBoat[] cache; private static int cacheFrame = -1;
         // From the save manager's list, as the game's own recovery searches: while playing, the game switches off ships more
-        // than 10 km from the player, and a scene search skips switched-off objects.
+        // than 10 km from the player, and a scene search skips switched-off objects. Read once a frame; the array of the frame
+        // before is kept while it holds the same boats with the same save numbers in the same order (no LINQ walk and no new array
+        // each frame; the deep review of 2026-11-09), else a new one is made, as before.
+        private static int[] cacheIndex = new int[0];
+        private static readonly List<PurchasableBoat> found = new List<PurchasableBoat>(); private static readonly List<int> foundIndex = new List<int>();
         internal static PurchasableBoat[] All()
         {
             if (cache != null && cacheFrame == Time.frameCount) return cache;
             cacheFrame = Time.frameCount;
             var objects = SaveLoadManager.instance ? SaveLoadManager.instance.GetCurrentObjects() : null;
-            return cache = objects == null ? new PurchasableBoat[0] :
-                objects.Where(o => o && o.sceneIndex > 0).Select(o => o.GetComponent<PurchasableBoat>()).Where(b => b).ToArray();
+            if (objects == null) return cache = new PurchasableBoat[0];
+            found.Clear(); foundIndex.Clear();
+            foreach (var o in objects)
+            {
+                if (!o || o.sceneIndex <= 0) continue;
+                var b = o.GetComponent<PurchasableBoat>(); if (!b) continue;
+                found.Add(b); foundIndex.Add(o.sceneIndex);
+            }
+            bool same = cache != null && cache.Length == found.Count && cacheIndex.Length == found.Count;
+            for (int i = 0; same && i < found.Count; i++) same = ReferenceEquals(cache[i], found[i]) && cacheIndex[i] == foundIndex[i];
+            if (!same) { cache = found.ToArray(); cacheIndex = foundIndex.ToArray(); }
+            return cache;
         }
         internal static PurchasableBoat Find(int index) => All().FirstOrDefault(b => Index(b) == index);
         internal static int Index(PurchasableBoat b) => b.GetComponent<SaveableObject>().sceneIndex;
@@ -582,17 +627,31 @@ namespace EconomyOverhaul
         }
         internal static Port PortOf(Transform island) =>
             island && Port.ports != null ? Port.ports.FirstOrDefault(p => p && p.portIndex != 7 && Island(p) == island) : null;
+        // The cleat a moored rope is tied to: the object of the spring it is moored to (PickupableBoatMooringRope.mooredToSpring), or null. The
+        // game's MoorTo set the rope's parent to that spring up to 0.39.2; from 0.40 it sets it to the shifting world (rl-2, 2026-11-08: every ship
+        // read "not tied here" at a loan box), so the spring is read, as AtHomeCleats does.
+        internal static Transform MooredTo(PickupableBoatMooringRope r)
+        {
+            if (!r || !r.IsMoored()) return null;
+            var spring = Fields.Get<SpringJoint>(r, "mooredToSpring");
+            return spring ? spring.transform : null;
+        }
+        // Tied at that island: a rope's cleat stands on it by Island, the lookup TiedPort and HomePort use (the deep review of 2026-11-09, question
+        // 4b: "B) as you said"; it read the cleat's parents before, which a map mod moving a dock out of its island would make disagree).
         internal static bool TiedAt(PurchasableBoat b, Transform island)
         {
             var ropes = b ? b.GetComponent<BoatMooringRopes>() : null;
-            return ropes && island && ropes.ropes.Any(r => r && r.IsMoored() && r.transform.parent && r.transform.parent.IsChildOf(island));
+            return ropes && island && ropes.ropes.Any(r => { var cleat = MooredTo(r); return cleat && Island(cleat) == island; });
         }
         // The port island one of its ropes is tied to (the Hideout and the Onsen have no port), or null.
         internal static Transform TiedPort(PurchasableBoat b)
         {
             var ropes = b ? b.GetComponent<BoatMooringRopes>() : null; if (!ropes) return null;
             foreach (var r in ropes.ropes)
-                if (r && r.IsMoored() && r.transform.parent) { var island = Island(r.transform.parent); if (island && PortOf(island)) return island; }
+            {
+                var cleat = MooredTo(r);
+                if (cleat) { var island = Island(cleat); if (island && PortOf(island)) return island; }
+            }
             return null;
         }
         // Ties one of the ship's free ropes to a cleat (the game's own MoorTo); an occupied cleat gives way to the nearest free one
@@ -612,11 +671,11 @@ namespace EconomyOverhaul
             if (!rope) return false;
             rope.MoorTo(button); return true;
         }
-        // A ship sent to her berth is tied to her home cleats only once the player is near her island. Far away, the game
+        // A ship sent to its berth is tied to its home cleats only once the player is near its island. Far away, the game
         // switches the island's cleats off and lowers the island (the earth's curve, kilometres down); a rope tied there is
         // lost when a save made meanwhile is loaded (the game puts a saved rope back where it was and re-ties it only to a
-        // cleat that is switched on and right there; otherwise the rope end stays behind as the world shifts). Until then she
-        // waits at her berth, untied; ships the player is far from are frozen, so she cannot drift.
+        // cleat that is switched on and right there; otherwise the rope end stays behind as the world shifts). Until then it
+        // waits at its berth, untied; ships the player is far from are frozen, so it cannot drift.
         private static readonly HashSet<PurchasableBoat> waiting = new HashSet<PurchasableBoat>();
         internal static bool CleatsUp(PurchasableBoat b)
         {
@@ -640,12 +699,12 @@ namespace EconomyOverhaul
                 if (CleatsUp(b)) TieHome(b);
             }
         }
-        // Another ship lies at her berth (within 10 m of it).
+        // Another ship lies at its berth (within 10 m of it).
         internal static bool BerthTaken(PurchasableBoat b, Vector3 berth) =>
             All().Any(s => s != b && IsShip(s) && (s.transform.position - berth).sqrMagnitude < 100);
-        // Ships to move onto their berth later (saved): one sent home to a berth another ship lies at (she stays where she is
+        // Ships to move onto their berth later (saved): one sent home to a berth another ship lies at (it stays where it is
         // meanwhile), or a returned rental without home cleats left near it. Each second: once the berth is free and the
-        // player is more than 1 km from her and from it, she goes there without a black screen. A ship the player owns
+        // player is more than 1 km from the ship and from the berth, it goes there without a black screen. A ship the player owns
         // again (bought or rented) leaves the list.
         internal static void HomeLater(PurchasableBoat b) { if (b && !World.State.homeLater.Contains(Index(b))) World.State.homeLater.Add(Index(b)); }
         internal static bool GoingHomeLater(PurchasableBoat b) => b && World.State.homeLater.Contains(Index(b));
@@ -665,8 +724,8 @@ namespace EconomyOverhaul
             }
         }
         // Where each ship stood before any save loaded: its for-sale berth. Ships other mods add later are recorded when
-        // they appear (a seized ship lying elsewhere is not). Kept relative to her nearest island, so the berth moves with
-        // it: Scrambled Seas moves each island, and each unsold ship by her nearest island's offset, after this record
+        // they appear (a seized ship lying elsewhere is not). Kept relative to its nearest island, so the berth moves with
+        // it: Scrambled Seas moves each island, and each unsold ship by its nearest island's offset, after this record
         // (a new game, or every load of a scrambled save).
         internal static void RecordBerths()
         {
@@ -706,13 +765,13 @@ namespace EconomyOverhaul
             var sign = b ? Fields.Get<GameObject>(b, "purchaseUI") : null;
             return sign ? sign.GetComponentInChildren<GPButtonPurchaseBoat>(true) : null;
         }
-        // The sale sign out for a ship no longer the player's, at her price.
+        // The sale sign out for a ship no longer the player's, at its price.
         internal static void ShowSale(PurchasableBoat b)
         {
             var sign = Fields.Get<GameObject>(b, "purchaseUI"); if (sign) sign.SetActive(!Owned(b));
             var button = SaleButton(b); if (button && button.priceText) button.priceText.text = "FOR SALE\n\n" + b.price + " gold";
         }
-        // A ship back to her shipwright (taken by a lender, a rental returned): anchor up, no longer the player's, sale sign
+        // A ship back to its shipwright (taken by a lender, a rental returned): anchor up, no longer the player's, sale sign
         // out again, and no longer the ship the game recovers the player to.
         internal static void Unown(PurchasableBoat b)
         {
@@ -834,6 +893,8 @@ namespace EconomyOverhaul
         // A pledged ship inside a shipyard's range can't be repaid at a box (it could be stripped there after a seizure).
         // The shipyards found once (a search of every loaded object, about 3 ms; the page asks every half second with a loan's row
         // selected), found again each time the Bottomry page opens and after a world reset; each still checked as it is now.
+        // shortcut: a shipyard that appears while the page stays open (another mod adding one later) is not seen until the page opens
+        // again; replace with a refresh when yards appear if a mod is found adding yards mid-game.
         private static Shipyard[] yards;
         internal static void ForgetYards() => yards = null;
         internal static bool InShipyard(PurchasableBoat b)
@@ -867,11 +928,11 @@ namespace EconomyOverhaul
             Pay(l.currency, have); World.State.bottomry.Remove(l);
             Default(pledge, l, rest);
         }
-        // Her price in a currency, at the daily rate.
+        // Its price in a currency, at the daily rate.
         internal static int PriceIn(PurchasableBoat b, int currency) => Rules.Round(b.price / Fx.State.smooth[3] * Fx.State.smooth[currency]);
         // A loan (already removed) left unpaid after what its currency paid: the rest, at the lending region's own terms. A
-        // rented ship goes home with every loan on her charged (Rentals.TakenByLender). The player's own ship, unless a lender
-        // took her before, is taken by this lender and her price counts against the rest (no change given). What is still
+        // rented ship goes home with every loan on it charged (Rentals.TakenByLender). The player's own ship, unless a lender
+        // took it before, is taken by this lender and its price counts against the rest (no change given). What is still
         // owed is charged to the loan's currency, even below 0.
         internal static void Default(PurchasableBoat b, BottomryLoan l, int rest)
         {
@@ -896,7 +957,7 @@ namespace EconomyOverhaul
             if (PlayerGold.currency[l.currency] < 0 && !World.State.defaults.Any(d => d.region == l.region && d.currency == l.currency))
                 World.State.defaults.Add(new DefaultBlock { region = l.region, currency = l.currency });
         }
-        // The lender takes the pledge: listed as seized and released where she belongs (ForcedMove.Release).
+        // The lender takes the pledge: listed as seized and released where it belongs (ForcedMove.Release).
         private static void Take(PurchasableBoat b, int index)
         {
             if (Seized(index) == null) World.State.seized.Add(new SeizedPledge { pledge = index });
@@ -929,7 +990,7 @@ namespace EconomyOverhaul
         {
             foreach (var l in World.State.bottomry.Where(x => day >= x.dueDay + 11).OrderBy(x => x.dueDay).ThenBy(x => x.id).ToArray())
             {
-                if (!World.State.bottomry.Contains(l)) continue; // charged when an earlier one ended her rental
+                if (!World.State.bottomry.Contains(l)) continue; // charged when an earlier one ended its rental
                 int owed = Owed(l), paid = Math.Min(owed, Math.Max(0, PlayerGold.currency[l.currency]));
                 Pay(l.currency, paid); World.State.bottomry.Remove(l);
                 Default(Pledges.Find(l.pledge), l, owed - paid);
@@ -953,9 +1014,9 @@ namespace EconomyOverhaul
             LoanGate.StartPause();
             Loans.Notify("The " + Name(index) + " sank: its Bottomry loans are cancelled");
         }
-        // The loans a sinking acts on: none once a lender has taken her (she is no longer the player's; the other lenders' loans on her
-        // run on to their own day 11 and are charged then, as without the sinking). She can still sink: water comes into the last ship
-        // the player boarded (BoatDamage.UpdateWaterAndDrag), and a player ashore when she is taken boarded nothing since (LOAN-4 of
+        // The loans a sinking acts on: none once a lender has taken it (it is no longer the player's; the other lenders' loans on it
+        // run on to their own day 11 and are charged then, as without the sinking). It can still sink: water comes into the last ship
+        // the player boarded (BoatDamage.UpdateWaterAndDrag), and a player ashore when it is taken boarded nothing since (LOAN-4 of
         // the deep review of 2026-11-02, the user: "Fix it").
         internal static BottomryLoan[] SunkLoans(int index) => Seized(index) != null ? new BottomryLoan[0] : On(index).ToArray();
         // Bankruptcy (one region, or all with -1): each of the bankrupt lender's loans takes back what it paid out from the
@@ -987,7 +1048,7 @@ namespace EconomyOverhaul
                 b.GetComponent<SaveableObject>().extraSetting = false;
                 if (GameState.lastOwnedBoat == b.transform) GameState.lastOwnedBoat = null;
                 Pledges.ShowSale(b);
-                // Saved while waiting at her berth for the player to come near: she waits again.
+                // Saved while waiting at its berth for the player to come near: it waits again.
                 var ropes = b.GetComponent<BoatMooringRopes>();
                 if (ropes && !ropes.ropes.Any(r => r && r.IsMoored()) && Rentals.NearBerth(b, 15)) Pledges.TieHome(b);
             }
@@ -1023,7 +1084,7 @@ namespace EconomyOverhaul
         }
     }
     // For a sinking rental, the items aboard are noted first: those the game leaves behind as ghosts (parent -3) are
-    // removed when she is moved home, and her cached copies respawn there.
+    // removed when it is moved home, and its cached copies respawn there.
     [HarmonyPatch(typeof(BoatLocalItems), "CacheItemsOnSinking")] internal static class BottomrySinkingPatch
     {
         static void Prefix(BoatLocalItems __instance, out List<ShipItem> __state)
@@ -1035,9 +1096,36 @@ namespace EconomyOverhaul
         static void Postfix(BoatLocalItems __instance, List<ShipItem> __state) => Bottomry.Sinking(__instance.GetComponent<SaveableObject>(), __state);
     }
 
+    // A coroutine run with the coroutines it yields, one step at a time (the deep review's LOAN-2): Unity runs a yielded IEnumerator
+    // as a coroutine of its own, and when that one throws, the one that yielded it is never resumed nor ended, so its finally blocks
+    // never run (a forced move kept Busy and the screen black). Here an error in any of them ends them all, innermost first, each
+    // one's finally blocks run, and is reported; what they yield for Unity (null, a wait) is passed on.
+    internal static class Steps
+    {
+        internal static IEnumerator Guarded(IEnumerator root, Action<Exception> failed)
+        {
+            var stack = new Stack<IEnumerator>(); stack.Push(root);
+            while (stack.Count > 0)
+            {
+                bool more; object current = null;
+                try { more = stack.Peek().MoveNext(); if (more) current = stack.Peek().Current; }
+                catch (Exception e)
+                {
+                    stack.Pop();   // the one that threw has run its own finally blocks
+                    while (stack.Count > 0)
+                        try { (stack.Pop() as IDisposable)?.Dispose(); } catch (Exception inner) { failed?.Invoke(inner); }
+                    failed?.Invoke(e); yield break;
+                }
+                if (!more) stack.Pop();
+                else if (current is IEnumerator nested) stack.Push(nested);
+                else yield return current;
+            }
+        }
+    }
+
     // ---- Forced moves ----
-    // A ship taken from the player goes her own way: she stays where she is tied in a port, or returns to her for-sale
-    // berth; a rental always goes home. The player is moved only when aboard her: aboard their nearest own ship (near or
+    // A ship taken from the player goes its own way: it stays where it is tied in a port, or returns to its for-sale
+    // berth; a rental always goes home. The player is moved only when aboard it: aboard their nearest own ship (near or
     // far), or to the nearest port with none (a seized house: out of its door to the port). The black screen says why.
     // Everything queued in the same tick (a failed rent charge and a day 11) is one move.
     internal static class ForcedMove
@@ -1054,12 +1142,12 @@ namespace EconomyOverhaul
         private static readonly List<Trip> trips = new List<Trip>();
         private static readonly MethodInfo disembark = AccessTools.Method(typeof(PlayerEmbarkerNew), "PlayerDisembark");
         internal static bool Aboard(PurchasableBoat b) => b && GameState.currentBoat && GameState.currentBoat.IsChildOf(b.transform);
-        // Un-own a ship a lender took and put her where she belongs; the player moves if aboard her.
+        // Un-own a ship a lender took and put it where it belongs; the player moves if aboard it.
         internal static void Release(PurchasableBoat b)
         {
             if (b.isHouse)
             {
-                if (GameState.currentHouse && GameState.currentHouse.transform.IsChildOf(b.transform)) Plugin.Instance.StartCoroutine(OutOfHouse(b));
+                if (GameState.currentHouse && GameState.currentHouse.transform.IsChildOf(b.transform)) Plugin.Instance.StartCoroutine(Steps.Guarded(OutOfHouse(b), Failed));
                 b.GetComponent<SaveableObject>().extraSetting = false; Pledges.ShowSale(b);
                 return;
             }
@@ -1075,8 +1163,9 @@ namespace EconomyOverhaul
             if (!player && !ship) return;
             movePlayer |= player;
             if (ship && trips.All(t => t.ship != ship)) trips.Add(new Trip { ship = ship, sunk = sunk, restore = restore, ghosts = ghosts, dark = true });
-            if (!Busy) { Busy = true; Plugin.Instance.StartCoroutine(Run()); }
+            if (!Busy) { Busy = true; Plugin.Instance.StartCoroutine(Steps.Guarded(Run(), Failed)); }
         }
+        private static void Failed(Exception e) => Plugin.Log?.LogError("Forced move ended by an error: " + e);
         private static IEnumerator Run()
         {
             bool faded = false;
@@ -1107,9 +1196,9 @@ namespace EconomyOverhaul
         // Aboard the nearest own ship (with none, to the nearest port recovery spot), the way NANDcommand's "tpto boat" lands a
         // player (the same steps, no use of that mod): GameState.recovering stays on for the whole move, as in the game's own
         // recovery (ships held still, world shifts at once); only the player's body moves (the view follows it); it leaves the
-        // ship the player is on in the same frame as they disembark, so the game cannot board them on her again; it goes high
+        // ship the player is on in the same frame as they disembark, so the game cannot board them on that ship again; it goes high
         // over the new place first (the world shifts there and a ship the game switched off far away is switched on), then to
-        // DropPoint, from where the player drops onto her and the game's boarding does the rest.
+        // DropPoint, from where the player drops onto the ship and the game's boarding does the rest.
         internal static IEnumerator ToNearestShip()
         {
             var view = Refs.observerMirror ? Refs.observerMirror.transform : null; var body = Refs.charController ? Refs.charController.transform : null;
@@ -1144,14 +1233,14 @@ namespace EconomyOverhaul
                     if (horizon) horizon.transform.parent.gameObject.SetActive(true);
                     yield return new WaitForFixedUpdate();
                 }
-                // A ship just switched on can take a few physics steps before her walk collider answers: wait for her deck.
+                // A ship just switched on can take a few physics steps before its walk collider answers: wait for its deck.
                 for (int i = 0; ship && i < 10 && DeckDrop(ship) == null; i++) yield return new WaitForFixedUpdate();
                 PutBody(Target());
                 if (!ship) body.rotation = port.rotation;
                 yield return new WaitForSeconds(.5f);
-                // Not boarded within a second: the game boards a player when the copy of them it keeps on her walk collider touches
-                // her deck, and once in about fifty test moves it saw the player at her but never that touch. Then the game's
-                // boarding runs for her from the drop point (Board); last, once more from 10 m over her origin (NANDcommand's
+                // Not boarded within a second: the game boards a player when the copy of them it keeps on the ship's walk collider touches
+                // its deck, and once in about fifty test moves it saw the player at the ship but never that touch. Then the game's
+                // boarding runs for the ship from the drop point (Board); last, once more from 10 m over its origin (NANDcommand's
                 // point). Only while playing: nothing boards otherwise.
                 if (ship && GameState.playing)
                 {
@@ -1162,8 +1251,8 @@ namespace EconomyOverhaul
             }
             finally { GameState.recovering = recovering; }
         }
-        // The game's own boarding steps, called as its physics calls them: the player's view enters her boarding trigger (the game
-        // then keeps a copy of the player on her walk collider, where the view is over her), and that copy touches her deck.
+        // The game's own boarding steps, called as its physics calls them: the player's view enters the ship's boarding trigger (the game
+        // then keeps a copy of the player on its walk collider, where the view is over the ship), and that copy touches its deck.
         private static void Board(PurchasableBoat ship)
         {
             var embarker = UnityEngine.Object.FindObjectOfType<PlayerEmbarkerNew>();
@@ -1180,14 +1269,14 @@ namespace EconomyOverhaul
             var cc = Refs.charController; bool on = cc.enabled;
             cc.enabled = false; cc.transform.position = position; cc.enabled = on;
         }
-        // Where the player drops onto a ship from: 1.5 m over the spot of her deck nearest her middle, found on her walk collider
-        // (the copy the player walks on), linked as the game's boarding links it (her boarding collider's walkCollider, mapped
+        // Where the player drops onto a ship from: 1.5 m over the spot of its deck nearest its middle, found on its walk collider
+        // (the copy the player walks on), linked as the game's boarding links it (its boarding collider's walkCollider, mapped
         // to that collider's parent). A spot counts only where the same surface goes on 0.4 m all round, within 0.5 m of its
         // height: a cambered deck passes; a mast, yard, rail or narrow hatch does not. Spots are tried outward from the middle
-        // along both axes. With none found, 10 m over her origin (NANDcommand's "tpto boat" point).
+        // along both axes. With none found, 10 m over the ship's origin (NANDcommand's "tpto boat" point).
         // Straight up in the world from the spot, so a ship heeled over or aground is still landed on.
         internal static Vector3 DropPoint(PurchasableBoat ship) => DeckDrop(ship) ?? ship.transform.position + Vector3.up * 10;
-        // The deck spot's drop point, or null when her walk collider shows none.
+        // The deck spot's drop point, or null when the ship's walk collider shows none.
         private static Vector3? DeckDrop(PurchasableBoat ship)
         {
             var link = Link(ship);
@@ -1204,7 +1293,7 @@ namespace EconomyOverhaul
                     }
             return null;
         }
-        // Her boarding trigger that names her walk collider, the player-sized one first (the game boards from either).
+        // The ship's boarding trigger that names its walk collider, the player-sized one first (the game boards from either).
         private static BoatEmbarkCollider Link(PurchasableBoat ship) => ship.GetComponentsInChildren<BoatEmbarkCollider>(true)
             .Where(c => c.walkCollider).OrderBy(c => c.CompareTag("EmbarkColPlayer") ? 0 : 1).FirstOrDefault();
         // The top of the walk collider straight down through (x, z) of its own frame.
@@ -1214,7 +1303,7 @@ namespace EconomyOverhaul
                 .Where(h => h.collider.transform.IsChildOf(walk)).OrderBy(h => h.distance).ToArray();
             return hits.Length > 0 ? hits[0] : (RaycastHit?)null;
         }
-        // Out of the player's sight: onto her berth without a black screen.
+        // Out of the player's sight: onto its berth without a black screen.
         internal static void Home(PurchasableBoat b) { if (b && Plugin.Instance) Plugin.Instance.StartCoroutine(ToBerth(new Trip { ship = b })); }
         private static Transform NearestRecoveryPort(Vector3 from)
         {
@@ -1224,14 +1313,20 @@ namespace EconomyOverhaul
         private static IEnumerator OutOfHouse(PurchasableBoat house)
         {
             var spot = NearestRecoveryPort(house.transform.position); if (!spot) yield break;
-            yield return Blackout.FadeTo(1f, .3f);
-            Refs.observerMirror.transform.position = spot.position; Refs.observerMirror.transform.rotation = spot.rotation;
-            PutBody(spot.position); Refs.charController.transform.rotation = spot.rotation;
-            yield return new WaitForFixedUpdate();
-            yield return Blackout.FadeTo(0f, .3f);
+            bool faded = true;
+            try
+            {
+                yield return Blackout.FadeTo(1f, .3f);
+                Refs.observerMirror.transform.position = spot.position; Refs.observerMirror.transform.rotation = spot.rotation;
+                PutBody(spot.position); Refs.charController.transform.rotation = spot.rotation;
+                yield return new WaitForFixedUpdate();
+                yield return Blackout.FadeTo(0f, .3f); faded = false;
+            }
+            // an error never leaves the screen black (the deep review's LOAN-2)
+            finally { if (faded && Plugin.Instance) Plugin.Instance.StartCoroutine(Blackout.FadeTo(0f, .3f)); }
         }
         // Back to its for-sale berth and tied to its home cleats, the way the game's recovery moves a ship (and refloats a
-        // sunk one). A rental already tied at her berth stays.
+        // sunk one). A rental already tied at its berth stays.
         private static IEnumerator ToBerth(Trip trip)
         {
             var b = trip.ship;
@@ -1245,7 +1340,7 @@ namespace EconomyOverhaul
             if (trip.restore && damage) damage.hullDamage = 0;
             bool known = Pledges.Berth(b, out var position, out var rotation);
             bool stay = !trip.sunk && (!known || trip.restore && Rentals.AtHomeCleats(b));
-            // Another ship lies at her berth: she stays where she is and goes there once it is free (a sunk one is refloated anyway).
+            // Another ship lies at its berth: it stays where it is and goes there once the berth is free (a sunk one is refloated anyway).
             if (!stay && known && !trip.sunk && Pledges.BerthTaken(b, position)) { Pledges.HomeLater(b); stay = true; }
             if (!stay)
             {
@@ -1401,7 +1496,8 @@ namespace EconomyOverhaul
         internal void Opened(Component chest)
         {
             Build(); box = LoanBox.Of(chest, FxBooth.For(ui).region);
-            tab.gameObject.SetActive(World.Ready);
+            // No Bottomry at an office's box (the user's list items 2 and 4: its treasury button takes this one's place; TradeOffice.cs).
+            tab.gameObject.SetActive(World.Ready && OfficeBox.HouseOf(chest) == 0);
             if (Open) ShowExchange();
         }
         internal void Closed() { if (Open) ShowExchange(); }
@@ -1433,7 +1529,7 @@ namespace EconomyOverhaul
         }
         private void Select(int index) { selected = index; currency = -1; keptLoan = keptPledge = -1; Refresh(); }
         // Payout currency, chosen with the bottom coins (the loan currency is fixed when repaying).
-        internal void Coin(int index, Transform coin)
+        internal void Coin(int index)
         {
             if (selected >= rows.Count || rows[selected].loan != null) return;
             currency = index; Refresh();
@@ -1581,7 +1677,7 @@ namespace EconomyOverhaul
             if (function == "openUI") { BottomryPage.OpenedFrom = __instance; return true; }
             var ui = CurrencyExchangeUI.instance; var page = ui ? ui.GetComponent<BottomryPage>() : null;
             if (!page || !page.Open) return true;
-            if (function == "selectBuyCurrency") page.Coin(Fields.Get<int>(__instance, "index"), __instance.transform);
+            if (function == "selectBuyCurrency") page.Coin(Fields.Get<int>(__instance, "index"));
             else if (function == "confirm") page.Confirm();
             else if (function == "exit") return true;
             return false;
@@ -1627,7 +1723,9 @@ namespace EconomyOverhaul
             var refusal = Loans.BankruptcyRefusal(region()); if (refusal != null) { Loans.Notify(refusal); return; }
             Show(true); asked = Time.unscaledTime; until = asked + 15;
         }
-        internal void Stop() { if (yes) Show(false); }
+        // Already closed (the button and its label on, the question's four parts off): nothing to set. Asked every frame while the book
+        // or page is closed; six SetActive calls each time before (the deep review of 2026-11-09).
+        internal void Stop() { if (yes && !(button.activeSelf && buttonLabel.activeSelf && !yes.activeSelf && !yesLabel.activeSelf && !no.activeSelf && !noLabel.activeSelf)) Show(false); }
         // Called while the book is open: the question lapses after 15 seconds.
         internal void Tick() { if (Asking && Time.unscaledTime > until) Stop(); }
     }
@@ -1768,11 +1866,12 @@ namespace EconomyOverhaul
     public sealed class LoanTextFit : MonoBehaviour
     {
         internal float maxWidth; internal Vector3 originalScale;
-        private string last; private TextMesh text;
+        // Fitted again when the text or the width changes (the office scroll narrows its right title beside "Bought", the same title).
+        private string last; private float lastWidth = float.NaN; private TextMesh text;
         private void LateUpdate()
         {
             if (!text) text = GetComponent<TextMesh>();
-            if (last == text.text) return; last = text.text;
+            if (last == text.text && lastWidth == maxWidth) return; last = text.text; lastWidth = maxWidth;
             transform.localScale = originalScale;
             text.font.RequestCharactersInTexture(text.text, text.fontSize, text.fontStyle);
             float widest = 0, current = 0;
@@ -1876,6 +1975,12 @@ namespace EconomyOverhaul
         {
             if (!root) return; root.SetActive(ui.uiActive);
             if (!ui.uiActive) bankrupt.Stop(); else bankrupt.Tick();
+            // The trade office's own book: no Loan button and no loan text (the user, 2026-11-08: "Just hide the loan button and related text on
+            // office trade book. Keep the cart transport"; TradeOffice.cs OfficeBook).
+            bool officeBook = ui.uiActive && World.Ready && OfficeBook.Active(ui) != 0;
+            if (loan && loan.gameObject.activeSelf == officeBook) loan.gameObject.SetActive(!officeBook);
+            if (loanText && loanText.gameObject.activeSelf == officeBook) loanText.gameObject.SetActive(!officeBook);
+            if (info && info.gameObject.activeSelf == officeBook) info.gameObject.SetActive(!officeBook);
             if (!ui.uiActive || !World.Ready || !CurrencyMarket.instance || PlayerGold.currency == null) return;
             timer -= Time.unscaledDeltaTime; if (timer > 0) return; timer = .15f;
             var m = Fields.Get<IslandMarket>(ui, "currentIsland"); if (!m) return;
@@ -2361,8 +2466,9 @@ namespace EconomyOverhaul
         internal enum Ending { Unpaid, Sank, Lender }
         internal struct Bill
         {
-            internal int days, rent, repair, clean, deposit;
-            internal int Total => rent + repair + clean - deposit;
+            internal int days, rent, repair, sails, clean, deposit;
+            internal bool torn;   // the sails have a hole (Sail Damage), whatever its price
+            internal int Total => rent + repair + sails + clean - deposit;
         }
         internal static RentalState Current => World.State.rental;
         internal static PurchasableBoat Ship() => Current != null ? Pledges.Find(Current.ship) : null;
@@ -2373,7 +2479,7 @@ namespace EconomyOverhaul
         internal static string Coin(int currency) => currency == 0 ? "Lions" : currency == 1 ? "Dragons" : currency == 2 ? "Crowns" : "Gold";
         internal static string Money(int amount, int currency) => amount.ToString("N0") + " " + Coin(currency);
 
-        // Her home port: the port of her home cleats, or the port nearest her berth (other mods' ships without cleats, or
+        // Its home port: the port of its home cleats, or the port nearest its berth (other mods' ships without cleats, or
         // cleats on an island without a port).
         private static readonly Dictionary<PurchasableBoat, Port> homes = new Dictionary<PurchasableBoat, Port>();
         internal static Port HomePort(PurchasableBoat b)
@@ -2395,7 +2501,7 @@ namespace EconomyOverhaul
         internal static double Value(PurchasableBoat b, int currency) => Rules.RentalValue(b.price, Fx.State.smooth[3], Fx.State.smooth[currency]);
 
         internal static bool HasCleats(PurchasableBoat b) { var r = b ? b.GetComponent<BoatMooringRopes>() : null; return r && r.mooringFront && r.mooringBack; }
-        // One of her ropes is tied to this cleat.
+        // One of its ropes is tied to this cleat.
         internal static bool Tied(PurchasableBoat b, Transform cleat)
         {
             var ropes = b ? b.GetComponent<BoatMooringRopes>() : null; var button = cleat ? cleat.GetComponent<GPButtonDockMooring>() : null;
@@ -2403,8 +2509,8 @@ namespace EconomyOverhaul
         }
         internal static bool AtHomeCleats(PurchasableBoat b) { var r = b.GetComponent<BoatMooringRopes>(); return HasCleats(b) && Tied(b, r.mooringFront) && Tied(b, r.mooringBack); }
         internal static bool NearBerth(PurchasableBoat b, float metres) => Pledges.Berth(b, out var p, out _) && (b.transform.position - p).sqrMagnitude < metres * metres;
-        // Back where she was rented: tied to both home cleats (either way round); a ship without home cleats is anchored
-        // or tied within 25 m of her berth.
+        // Back where it was rented: tied to both home cleats (either way round); a ship without home cleats is anchored
+        // or tied within 25 m of its berth.
         internal static bool Moored(PurchasableBoat b)
         {
             if (!b) return false;
@@ -2412,7 +2518,7 @@ namespace EconomyOverhaul
             var ropes = b.GetComponent<BoatMooringRopes>();
             return NearBerth(b, 25) && ropes && (ropes.AnyRopeMoored() || ropes.anchor && ropes.anchor.IsSet());
         }
-        // For rent: a ship (not a house) for sale at her berth (one without home cleats within the 25 m she may be returned
+        // For rent: a ship (not a house) for sale at its berth (one without home cleats within the 25 m it may be returned
         // at), not seized from the player, worth something, and not one that sank rented and pledged.
         internal static bool ForRent(PurchasableBoat b) => Pledges.IsShip(b) && !Pledges.Owned(b) && b.price > 0 && Bottomry.Seized(Pledges.Index(b)) == null &&
             !World.State.unrentable.Contains(Pledges.Index(b)) && !Pledges.Sunk(b) && NearBerth(b, HasCleats(b) ? 15 : 25) && Pledges.SaleButton(b) && HomeRegion(b) >= 0;
@@ -2432,7 +2538,7 @@ namespace EconomyOverhaul
             if (PlayerGold.currency[currency] < deposit) return "Not enough " + Coin(currency) + " for the deposit (need " + deposit.ToString("N0") + ")";
             return null;
         }
-        // Renting: the deposit is paid, she is made usable as a purchase would (without the price or a purchase entry),
+        // Renting: the deposit is paid, the ship is made usable as a purchase would (without the price or a purchase entry),
         // repaired and cleaned; the deposit and daily rent are fixed now.
         internal static bool Rent(PurchasableBoat b)
         {
@@ -2456,11 +2562,12 @@ namespace EconomyOverhaul
                 if (mast && mast.sails != null)
                     foreach (var sail in mast.sails) { var jib = sail ? sail.GetComponent<JibAngleMaster>() : null; if (jib) jib.ResetHingeRestingRot(); }
         }
-        // Repaired, emptied and cleaned, as the shipyard leaves a hull.
+        // Repaired, emptied and cleaned, as the shipyard leaves a hull; with Sail Damage, its sails mended as its yard mends them.
         internal static void Restore(PurchasableBoat b)
         {
             var damage = b.GetComponent<BoatDamage>(); if (damage) { damage.hullDamage = 0; damage.waterLevel = 0; }
             var dirt = b.GetComponent<SaveableObject>().GetCleanable(); if (dirt) dirt.CleanFully();
+            SailDamageCompatibility.Mend(b);
         }
 
         // ---- The bill ----
@@ -2472,16 +2579,16 @@ namespace EconomyOverhaul
         internal static bool Clean(PurchasableBoat b) => !Dirtable(b) || CleanShare(b) >= Rules.RentalCleanShare;
         internal static int CleaningFee(PurchasableBoat b, int currency) => Dirtable(b) ? Rules.CleaningFee(b.price, Rate(currency)) : 0;
         internal static int DaysDue => Rules.RentalDays(Current.startDay, GameState.day, Current.charges);
-        // Rent for the days given, double the repair if the hull isn't at 100%, double the cleaning if it is less than
-        // 95% clean, the deposit credited.
-        // panel: the return panel's bill (refreshed every 0.5 s) reads her dirt from PanelClean; the bill charged reads it afresh.
+        // Rent for the days given, double the repair if the hull isn't at 100%, double the sails' repair (Sail Damage's yard price) if a sail
+        // has a hole, double the cleaning if it is less than 95% clean, the deposit credited.
+        // panel: the return panel's bill (refreshed every 0.5 s) reads the ship's dirt from PanelClean; the bill charged reads it afresh.
         internal static Bill BillFor(PurchasableBoat b, int days, bool panel = false)
         {
-            var r = Current;
-            return new Bill { days = days, rent = checked(days * r.daily), repair = Repaired(b) ? 0 : 2 * RepairFee(b, r.currency),
+            var r = Current; int sails = SailDamageCompatibility.RepairFee(b, Rate(r.currency), out bool torn);
+            return new Bill { days = days, rent = checked(days * r.daily), repair = Repaired(b) ? 0 : 2 * RepairFee(b, r.currency), sails = checked(2 * sails), torn = torn,
                 clean = (panel ? PanelClean(b) : Clean(b)) ? 0 : 2 * CleaningFee(b, r.currency), deposit = r.deposit };
         }
-        // Each dirt reading copies her dirt texture back from the GPU (a stall): the panel measures when it opens and at most every
+        // Each dirt reading copies the ship's dirt texture back from the GPU (a stall): the panel measures when it opens and at most every
         // 5 s after (the user, 2026-10-17). Display only: Return charges on a fresh reading.
         private const float PanelDirtSeconds = 5;
         private static PurchasableBoat panelBoat; private static float panelDirtAt; private static bool panelClean;
@@ -2514,7 +2621,7 @@ namespace EconomyOverhaul
             if (total > 0) Loans.Debit(r.region, total, r.currency, TransactionCategory.boat);
             else Receive(r.currency, -total);
         }
-        // When the rental ends, every Bottomry loan on her is charged to the player in its own currency, even below 0
+        // When the rental ends, every Bottomry loan on the ship is charged to the player in its own currency, even below 0
         // (Bottomry.Charge).
         private static void ChargeLoans(int index)
         {
@@ -2538,15 +2645,15 @@ namespace EconomyOverhaul
             var r = Current; var bill = BillFor(b, DaysDue);
             Settle(r, bill.Total);
             Pledges.Unown(b); Restore(b);
-            // A ship without home cleats is returned anchored or tied near her berth: she is put exactly on it out of sight.
+            // A ship without home cleats is returned anchored or tied near its berth: it is put exactly on the berth out of sight.
             if (!HasCleats(b) && !NearBerth(b, 1)) Pledges.HomeLater(b);
             World.State.rental = null;
             if (UISoundPlayer.instance) UISoundPlayer.instance.PlayGoldSound();
             return true;
         }
         // ---- Forced ends ----
-        // The rental ends without the player: the bill is charged, she is handed back and goes home to her berth, repaired
-        // and cleaned; the player is moved only if aboard her (ForcedMove).
+        // The rental ends without the player: the bill is charged, the ship is handed back and goes home to its berth, repaired
+        // and cleaned; the player is moved only if aboard it (ForcedMove).
         // The uninstall button (MIDSAVE_DRAFT.md): the rental ends as a forced end does.
         internal static void EndForUninstall()
         {
@@ -2599,7 +2706,7 @@ namespace EconomyOverhaul
                 ForcedEnd(b, Ending.Unpaid, Math.Max(Rules.RentalPeriod, DaysDue), null, "Couldn't pay the rent: the " + Name(r.ship) + " was taken back");
             }
         }
-        // She sank: the game's recovery fee from every wallet above 0, then her Bottomry loans (2 levels per lending region, then
+        // The rented ship sank: the game's recovery fee from every wallet above 0, then its Bottomry loans (2 levels per lending region, then
         // charged, the loan pause, never pledged or rented again), then the rental bill.
         internal static void Sank(SaveableObject hull, List<ShipItem> ghosts)
         {
@@ -2622,11 +2729,11 @@ namespace EconomyOverhaul
             PlayerNeeds.sleep = 100; PlayerNeeds.vitamins = 100; PlayerNeeds.protein = 100;
             ForcedEnd(b, Ending.Sank, DaysDue, ghosts, "The " + Name(index) + " sank and was taken back");
         }
-        // Her Bottomry loans as she sinks: each lending region first goes to the start of the level 2 below the one it had before the
-        // loss (Reputations.Sink), then her loans are charged, a shortfall's reputation loss coming off that start, never below 0, as
+        // The ship's Bottomry loans as it sinks: each lending region first goes to the start of the level 2 below the one it had before the
+        // loss (Reputations.Sink), then its loans are charged, a shortfall's reputation loss coming off that start, never below 0, as
         // the rental bill's after it. The two add up (LOAN-3, the user, 2026-11-02: "this should be adding up", Plan A: "Build Plan
         // A"); charged first, the drop to the level's start wiped that loss out, or gave points back when it went below.
-        // False: no loan on her.
+        // False: no loan on the ship.
         internal static bool SinkAndCharge(int index)
         {
             var levels = Reputations.Levels(Bottomry.On(index).Select(l => l.region));
@@ -2635,9 +2742,9 @@ namespace EconomyOverhaul
             ChargeLoans(index);
             return true;
         }
-        // A bankrupt lender's loans on her take back what they paid out (as on any pledge) and are forgiven; the lender takes
-        // her back (never pledged again), her other loans are charged and the rental ends with its bill. Bankruptcy in her
-        // home region, or in all regions, is refused while she is rented (Loans.BankruptcyRefusal). True: the rental ended (its
+        // A bankrupt lender's loans on the rental take back what they paid out (as on any pledge) and are forgiven; the lender takes
+        // the ship back (never pledged again), its other loans are charged and the rental ends with its bill. Bankruptcy in the ship's
+        // home region, or in all regions, is refused while it is rented (Loans.BankruptcyRefusal). True: the rental ended (its
         // notice shown).
         internal static bool Bankruptcy(int region)
         {
@@ -2649,7 +2756,7 @@ namespace EconomyOverhaul
             ForcedEnd(Ship(), Ending.Lender, DaysDue, null, "Bankruptcy in " + BookUI.RegionName(region) + ": the lender took the " + Name(r.ship) + " back");
             return true;
         }
-        // A lender takes the pledged rental (day 11, or short at a box): the rest of that loan and every other loan on her are
+        // A lender takes the pledged rental (day 11, or short at a box): the rest of that loan and every other loan on the ship are
         // charged, and the rental ends with its bill.
         internal static void TakenByLender(PurchasableBoat b, BottomryLoan l, int rest)
         {
@@ -2669,7 +2776,7 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- The small scroll on each ship: "Boat rental", or "Return boat" when she is back at her berth ----
+    // ---- The small scroll on each ship: "Boat rental", or "Return boat" when it is back at its berth ----
     public sealed class RentalSign : MonoBehaviour
     {
         // Above or beside each vanilla ship's sale sign (hull space); other ships get it just above their sign.
@@ -2684,7 +2791,7 @@ namespace EconomyOverhaul
         private GPButtonDockMooring[] marked = new GPButtonDockMooring[0];
         private float timer; private bool occupiedNoted;
 
-        // Every ship gets its scroll once her sale sign exists (other mods add ships after the scene loads); berths are
+        // Every ship gets its scroll once its sale sign exists (other mods add ships after the scene loads); berths are
         // recorded the same way.
         internal static void Poll()
         {
@@ -2732,7 +2839,7 @@ namespace EconomyOverhaul
         {
             if (!boat) { Destroy(this); return; }
             if ((timer -= Time.unscaledDeltaTime) > 0) return; timer = .25f;
-            // A copy of the ship another mod made (Dangerous Waters' pirates): with no save record she is not for sale or rent.
+            // A copy of the ship another mod made (Dangerous Waters' pirates): with no save record it is not for sale or rent.
             if (!boat.GetComponent<SaveableObject>()) { if (scroll) Destroy(scroll); Destroy(this); return; }
             Cleats();
             if (!scroll) return;
@@ -2740,19 +2847,22 @@ namespace EconomyOverhaul
             bool show = World.Ready && (rented ? Rentals.Moored(boat) : Rentals.ForRent(boat));
             if (scroll.activeSelf != show) scroll.SetActive(show);
             if (!show) return;
-            if (rented) { text.text = "RETURN BOAT\n\nmoored at her berth"; label.text = "Return"; return; }
+            // a ship is "it" on screen (the user, 2026-11-08: "i don't want to use her to mention ship")
+            if (rented) { text.text = "RETURN BOAT\n\nmoored at its berth"; label.text = "Return"; return; }
             int region = Rentals.HomeRegion(boat), currency = Rentals.Currency(region);
             text.text = Reputations.Level(region) < Rules.RentalLevel ? "BOAT RENTAL\n\nneeds " + BookUI.RegionName(region) + " rep. " + Rules.RentalLevel
                 : "BOAT RENTAL\n\n" + Rentals.Money(Rules.RentalDaily(Rentals.Value(boat, currency)), currency) + " a day";
             label.text = "Rent";
         }
-        // While the player is aboard the rental: her home cleats glow red until one of her ropes is tied there, then in
+        // While the player is aboard the rental: its home cleats glow red until one of its ropes is tied there, then in
         // the game's orange-yellow hint colour; with both tied the glow stops. Notes once when another ship holds one.
         private void Cleats()
         {
-            var ropes = boat.GetComponent<BoatMooringRopes>();
             bool aboard = World.Ready && Rentals.Is(boat) && !GameState.currentlyLoading && GameState.currentBoat && GameState.currentBoat.IsChildOf(boat.transform) && Rentals.HasCleats(boat);
-            var cleats = aboard ? new[] { ropes.mooringFront, ropes.mooringBack }.Select(c => c.GetComponent<GPButtonDockMooring>()).Where(c => c).ToArray() : new GPButtonDockMooring[0];
+            // Every ship's sign asks every 0.25 s; only the rental with the player aboard looks up its ropes and makes a list (the others
+            // share one empty list, never written to; the deep review of 2026-11-09).
+            var ropes = aboard ? boat.GetComponent<BoatMooringRopes>() : null;
+            var cleats = aboard ? new[] { ropes.mooringFront, ropes.mooringBack }.Select(c => c.GetComponent<GPButtonDockMooring>()).Where(c => c).ToArray() : NoCleats;
             foreach (var c in marked) if (c && !cleats.Contains(c)) c.enableRedOutline = false;
             marked = cleats;
             if (cleats.Length == 0) { occupiedNoted = false; return; }
@@ -2767,7 +2877,8 @@ namespace EconomyOverhaul
             if (occupied && Rentals.NearBerth(boat, 80)) { if (!occupiedNoted) Loans.Notify("Berth occupied: move the other ship"); occupiedNoted = true; }
             else if (!Rentals.NearBerth(boat, 120)) occupiedNoted = false;
         }
-        private void OnDisable() { foreach (var c in marked) if (c) c.enableRedOutline = false; marked = new GPButtonDockMooring[0]; }
+        private void OnDisable() { foreach (var c in marked) if (c) c.enableRedOutline = false; marked = NoCleats; }
+        private static readonly GPButtonDockMooring[] NoCleats = new GPButtonDockMooring[0];
     }
 
     // ---- The rental scroll near the player: the terms (Rent) or the bill (Return) ----
@@ -2778,7 +2889,9 @@ namespace EconomyOverhaul
         private TextMesh title, info, status, note, totalLabel, totalAmount, rule;
         private readonly TextMesh[] leftLabels = new TextMesh[3], leftValues = new TextMesh[3], leftNotes = new TextMesh[3];
         private readonly TextMesh[] rightLabels = new TextMesh[2], rightValues = new TextMesh[2];
-        private readonly TextMesh[] billLabels = new TextMesh[4], billAmounts = new TextMesh[4], walletLabels = new TextMesh[2], walletAmounts = new TextMesh[2];
+        // The bill's rows: 0 rent, 1 the hull's repair, 2 cleaning, 3 the deposit, and 4 the sails' repair, made only with Sail Damage present
+        // (shown between the hull's repair and cleaning, the rows closer: 0.08 apart instead of 0.10, the rule under them at 0.33 as before).
+        private readonly TextMesh[] billLabels = new TextMesh[5], billAmounts = new TextMesh[5], walletLabels = new TextMesh[2], walletAmounts = new TextMesh[2];
         private LoanAction confirm, close; private TextMesh confirmText, closeText; private Material confirmMaterial; private Color confirmColor;
         private PurchasableBoat boat; private float timer;
         internal static bool IsOpen => Instance && Instance.root && Instance.root.activeSelf;
@@ -2829,10 +2942,11 @@ namespace EconomyOverhaul
                 rightLabels[j] = Text(labelSource, rentPage.transform, "right label " + j, .02f, .70f - .34f * j, .648f, null, null, null, .85f);
                 rightValues[j] = Text(valueSource, rentPage.transform, "right value " + j, .02f, .661f - .34f * j, .648f, null, TextAnchor.UpperLeft, TextAlignment.Left, .85f);
             }
-            for (int i = 0; i < 4; i++)
+            bool sailRow = SailDamageCompatibility.Present; int[] slot = sailRow ? new[] { 0, 1, 3, 4, 2 } : new[] { 0, 1, 2, 3 }; float step = sailRow ? .08f : .10f;
+            for (int i = 0; i < slot.Length; i++)
             {
-                billLabels[i] = Text(labelSource, returnPage.transform, "bill " + i, .676f, .70f - .10f * i, .648f, null, null, null, .90f);
-                billAmounts[i] = Text(valueSource, returnPage.transform, "amount " + i, -.70f, .70f - .10f * i, .648f, null, TextAnchor.MiddleRight, TextAlignment.Right, .40f);
+                billLabels[i] = Text(labelSource, returnPage.transform, "bill " + i, .676f, .70f - step * slot[i], .648f, null, null, null, .90f);
+                billAmounts[i] = Text(valueSource, returnPage.transform, "amount " + i, -.70f, .70f - step * slot[i], .648f, null, TextAnchor.MiddleRight, TextAlignment.Right, .40f);
             }
             rule = Text(labelSource, returnPage.transform, "rule", .676f, .33f, .648f, new Vector3(.0084f, .006f, .01f), null, null, 0);
             rule.text = new string('_', 32);
@@ -2942,11 +3056,16 @@ namespace EconomyOverhaul
             billLabels[2].text = !Rentals.Dirtable(boat) ? "No hull cleaning needed" : bill.clean > 0 ? "Cleaning not done, 2 x " + (bill.clean / 2).ToString("N0") : "Clean";
             billAmounts[2].text = bill.clean.ToString("N0");
             billLabels[3].text = "Deposit refunded"; billAmounts[3].text = "-" + bill.deposit.ToString("N0");
+            if (billLabels[4])
+            {
+                billLabels[4].text = bill.sails > 0 ? "Sails not patched, 2 x " + (bill.sails / 2).ToString("N0") : bill.torn ? "Sails (almost nothing to patch)" : "Sails patched";
+                billAmounts[4].text = bill.sails.ToString("N0");
+            }
             int total = bill.Total, have = PlayerGold.currency[r.currency];
             totalLabel.text = total >= 0 ? "Total to pay" : "You receive"; totalAmount.text = Rentals.Money(Math.Abs(total), r.currency);
             walletLabels[0].text = "Your " + PlayerGold.GetCurrencyName(r.currency); walletAmounts[0].text = have.ToString("N0");
             walletLabels[1].text = "After paying"; walletAmounts[1].text = ((long)have - total).ToString("N0");
-            note.text = "Items left aboard stay on her.";
+            note.text = "Items left aboard stay on the boat.";
             var why = Rentals.ReturnRefusal(boat);
             status.text = why ?? "";
             confirmText.text = "Return"; confirm.lookText = "Return"; Enable(why == null);
@@ -2968,10 +3087,84 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- Shipyard: a rented ship may only be cleaned and repaired ----
+    // ---- Sail Damage (kap.saildamage; optional; 1.0.4, DLL 2BBD8D7B, read in its decompile) on a rented ship (RENTAL.md, "Sail repair") ----
+    // Its yard button "Patch Sails" (ShipyardButton function 1000) is allowed on a rented ship, paid at its own price as the hull's repair is (the
+    // user, 2026-11-09: "allow sail patching on rent ship"); the rental's bill charges double that price for the sails' holes as it charges double
+    // for the hull's repair and cleaning ("also make it pay double if player return the ship without repairing, like clean and hull fixing do"); and
+    // the rental hands the ship over and takes it back with its sails mended, as its hull repaired and cleaned (Rentals.Restore). Reached by name,
+    // looked up once: without Sail Damage nothing changes; if its members changed, one warning and the rental as before.
+    internal static class SailDamageCompatibility
+    {
+        internal const string Guid = "kap.saildamage";
+        internal const string PatchSails = "1000";   // its button's function as ShipyardButton.function.ToString() prints it (ShipyardRepair.PatchSails)
+        private static bool looked, warned; private static FieldInfo model, share; private static MethodInfo boatSails, holeArea, damage, patched, marks, mend, fullArea;
+        private static object Model()
+        {
+            if (!looked)
+            {
+                looked = true;
+                try
+                {
+                    if (!BepInEx.Bootstrap.Chainloader.PluginInfos.TryGetValue(Guid, out var info) || info.Instance == null) return null;
+                    var asm = info.Instance.GetType().Assembly;
+                    Type dm = asm.GetType("SailDamage.DamageModel"), stud = asm.GetType("SailDamage.StuddingCompat"), plugin = asm.GetType("SailDamage.Plugin");
+                    model = dm == null ? null : AccessTools.Field(dm, "Instance"); share = plugin == null ? null : AccessTools.Field(plugin, "ShipyardRepairShare");
+                    boatSails = dm == null ? null : AccessTools.Method(dm, "BoatSails", new[] { typeof(Transform) });
+                    holeArea = dm == null ? null : AccessTools.Method(dm, "HoleArea", new[] { typeof(Sail) });
+                    damage = dm == null ? null : AccessTools.Method(dm, "GetDamage", new[] { typeof(Sail) });
+                    patched = dm == null ? null : AccessTools.Method(dm, "GetPatched", new[] { typeof(Sail) });
+                    marks = dm == null ? null : AccessTools.Method(dm, "HasStuddingMarks", new[] { typeof(Sail) });
+                    mend = dm == null ? null : AccessTools.Method(dm, "Mend", new[] { typeof(Sail) });
+                    fullArea = stud == null ? null : AccessTools.Method(stud, "FullArea", new[] { typeof(Sail) });
+                    if (model == null || !model.IsStatic || share == null || !share.IsStatic || share.FieldType != typeof(BepInEx.Configuration.ConfigEntry<float>) || boatSails == null ||
+                        holeArea == null || damage == null || patched == null || marks == null || mend == null || fullArea == null)
+                    { model = null; Warn("its DamageModel, StuddingCompat or ShipyardRepairShare changed"); return null; }
+                    Plugin.Log.LogInfo("Sail Damage: a rented ship's sails may be patched at a shipyard; returned torn, they cost double the yard's price.");
+                }
+                catch (Exception e) { model = null; Warn(e.Message); return null; }
+            }
+            var instance = model?.GetValue(null) as UnityEngine.Object;   // its DamageModel.Instance, a live component (none at the menu)
+            return instance ? instance : null;
+        }
+        private static void Warn(string why) { if (warned) return; warned = true; Plugin.Log.LogWarning("Sail Damage rental compatibility unavailable: " + why + "."); }
+        // Its plugin is loaded (also at the start menu, before its DamageModel exists): the return panel's sails row.
+        internal static bool Present => BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(Guid);
+        private static Sail[] Installed(PurchasableBoat b) =>
+            b ? ((Sail[])boatSails.Invoke(null, new object[] { b.transform }) ?? new Sail[0]).Where(s => s && s.IsInstalled()).ToArray() : new Sail[0];
+        // The ship's sails' holes: its yard price at that rate (0 without Sail Damage), and whether there is any hole at all.
+        internal static int RepairFee(PurchasableBoat b, float rate, out bool torn)
+        {
+            torn = false; var m = Model(); if (m == null || !b) return 0;
+            try
+            {
+                var holes = new List<Rules.SailHoles>();
+                foreach (var s in Installed(b))
+                {
+                    float hole = (float)holeArea.Invoke(m, new object[] { s }); if (hole > 0f) torn = true;
+                    holes.Add(new Rules.SailHoles { Price = s.GetSailPrice(), Hole = hole, Area = s.sailArea, Full = (float)fullArea.Invoke(null, new object[] { s }) });
+                }
+                return Rules.SailRepairFee(holes, rate, ((BepInEx.Configuration.ConfigEntry<float>)share.GetValue(null)).Value);
+            }
+            catch (Exception e) { Warn((e.InnerException ?? e).Message); torn = false; return 0; }
+        }
+        // Mends every installed sail with damage, a sea patch or a studding sail's mark, as its yard's confirmed "Patch Sails" does.
+        internal static void Mend(PurchasableBoat b)
+        {
+            var m = Model(); if (m == null || !b) return;
+            try
+            {
+                foreach (var s in Installed(b))
+                    if ((float)damage.Invoke(m, new object[] { s }) > 0f || (float)patched.Invoke(m, new object[] { s }) > 0f || (bool)marks.Invoke(m, new object[] { s }))
+                        mend.Invoke(m, new object[] { s });
+            }
+            catch (Exception e) { Warn((e.InnerException ?? e).Message); }
+        }
+    }
+
+    // ---- Shipyard: a rented ship may only be cleaned and repaired (its sails patched too, with Sail Damage) ----
     internal static class RentalYard
     {
-        internal static readonly string[] Allowed = { "exitShipyard", "confirmOrder", "cancelOrder", "cleanHull", "repair", "scrollOrder" };
+        internal static readonly string[] Allowed = { "exitShipyard", "confirmOrder", "cancelOrder", "cleanHull", "repair", "scrollOrder", SailDamageCompatibility.PatchSails };
         private static readonly List<GameObject> hidden = new List<GameObject>();
         internal const string Notice = "A rented ship: only cleaning and repair";
         internal static bool Limited
@@ -3008,8 +3201,9 @@ namespace EconomyOverhaul
                     if (mast && mast.sails != null && mast.sails.Any(s => s && s.GetComponent<Sail>() && !s.GetComponent<Sail>().IsInstalled())) return false;
             return true;
         }
-        // Shipyard Expansion's own buttons (unfurl, textures, sail scale, pages) are blocked too; its other pointer objects
-        // (a ladder, a table) are not shipyard controls.
+        // Shipyard Expansion's own buttons are blocked too: every GoPointerButton class of its namespace whose name ends in "Button"
+        // (in 0.12.2: unfurl, textures, sail scale, sail unlock, the cutaway view and pages); its other pointer objects (a ladder, a
+        // table) are not shipyard controls and are left out by that name rule.
         internal static void PatchOtherYardButtons(Harmony harmony)
         {
             var prefix = new HarmonyMethod(AccessTools.Method(typeof(RentalYard), nameof(BlockOtherButton)));
@@ -3052,13 +3246,21 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(ShipyardUI), "ShowUI")] internal static class RentalYardShowPatch { static void Postfix() { if (RentalYard.Limited) RentalYard.Hide(); else RentalYard.Restore(); } }
     [HarmonyPatch(typeof(ShipyardUI), "RefreshButtons")] internal static class RentalYardRefreshPatch { static void Postfix() { if (RentalYard.Limited) RentalYard.Hide(); } }
     [HarmonyPatch(typeof(Shipyard), "DischargeShip")] internal static class RentalYardDischargePatch { static void Postfix() => RentalYard.Restore(); }
+    // Refused in the prefix, the order cancelled in the postfix, after every other mod's postfix (the deep review of 2026-11-09, C6-2): a
+    // CancelOrder inside the prefix reset the order while ConfirmOrder was running, and Sail Damage's ResetOrder postfix took that reset for
+    // a confirmed order, so its ConfirmOrder postfix mended the sails for nothing. An order another mod's prefix already handled (its
+    // original skipped: Swappable Staysail's sailmaker) is left to it.
     [HarmonyPatch(typeof(Shipyard), "ConfirmOrder")] internal static class RentalYardConfirmPatch
     {
-        static bool Prefix(Shipyard __instance)
+        private static bool refused;
+        static bool Prefix(Shipyard __instance, bool __runOriginal)
         {
-            if (!RentalYard.Limited || RentalYard.OnlyCleanAndRepair(__instance)) return true;
-            Loans.Notify(RentalYard.Notice); __instance.CancelOrder(); return false;
+            refused = false;
+            if (!__runOriginal || !RentalYard.Limited || RentalYard.OnlyCleanAndRepair(__instance)) return true;
+            refused = true; Loans.Notify(RentalYard.Notice); return false;
         }
+        [HarmonyPriority(Priority.Last)]
+        static void Postfix(Shipyard __instance) { if (!refused) return; refused = false; __instance.CancelOrder(); }
     }
 
     // ---- The loan tutorials (the user, 2026-11-01, TUTORIAL_UI_DRAFT.md §4.3 and §5) ----
@@ -3091,6 +3293,9 @@ namespace EconomyOverhaul
         // ---- The tavern's speech UI, taken once ----
         private static GameObject template; private static Vector3 atPos, atScale; private static Quaternion atTurn;
         internal static bool HasTemplate => template;
+        // The same speech UI for the trade office's clerk (TradeOffice.cs): the template and its pose under the tavern dude.
+        internal static GameObject Template => template;
+        internal static Vector3 TemplatePos => atPos; internal static Quaternion TemplateTurn => atTurn; internal static Vector3 TemplateScale => atScale;
         internal static void TakeTemplate(TavernRumorsDude dude)
         {
             if (template || !dude || !dude.speechUI || !dude.text || !dude.drinkButton || !dude.drinkButton.transform.IsChildOf(dude.speechUI.transform)) return;
@@ -3101,7 +3306,10 @@ namespace EconomyOverhaul
         }
 
         // ---- Which tutorial a port dude gives now ----
-        internal static bool HasBox(PortDude dude) => dude && dude.GetComponentsInChildren<CurrencyExchangeUIButton>(true).Any(b => Fields.Get<object>(b, "function").ToString() == "openUI");
+        // A box the player can see (the user: "the bottomry tutorial dialouge only shows up when you visit the trader with currency exchange box"). Every office's port
+        // dude holds a moneychest, on in the scene at only 8 of the 32 (TUTORIAL_UI_DRAFT.md §10), so one switched off must not count. Asked as the player walks in: a dude
+        // far off is switched off whole (IslandPerformanceSwitcher), so this reads false there.
+        internal static bool HasBox(PortDude dude) => dude && dude.GetComponentsInChildren<CurrencyExchangeUIButton>().Any(b => Fields.Get<object>(b, "function").ToString() == "openUI");
         internal static Kind Due(PortDude dude)
         {
             if (!World.Ready || World.SaveBlocked || Startup.BlocksGameplay || Uninstall.Prepared || !dude) return Kind.None;

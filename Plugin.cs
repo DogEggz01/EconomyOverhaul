@@ -40,7 +40,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "1.1.5";
+        public const string Version = "1.2.0";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -66,6 +66,8 @@ namespace EconomyOverhaul
                 catch (Exception e) { Logger.LogWarning("Scrambled Seas start compatibility unavailable: " + e.Message); }
                 try { VirtualCrewCompatibility.Install(harmony); }
                 catch (Exception e) { Logger.LogWarning("Virtual Crew compatibility unavailable: " + e.Message); }
+                try { PostalBoardCompatibility.Install(harmony); }   // the mission board's order on Postal Expansion's list (BOARD_PLANK_DRAFT.md)
+                catch (Exception e) { Logger.LogWarning("Postal Expansion board compatibility unavailable: " + e.Message); }
                 Logger.LogInfo("EconomyOverhaul " + Version + " loaded; zero starting stock for new games, experimental port economy and capacity-based purchase floors.");
             }
             catch (Exception e)
@@ -80,6 +82,7 @@ namespace EconomyOverhaul
         {
             WoodPlanks.Tick();
             RentalSign.Poll();
+            OfficeSites.Poll();
             if (!Startup.Running) BottleneckCompatibility.Poll();
             if (Startup.IsPreparing) Startup.Pump(); else { World.Tick(); TradeBook.Watch(); }
             Startup.SaveWhenReady();
@@ -199,9 +202,9 @@ namespace EconomyOverhaul
         }
         // The game's save (SaveLoadManager.DoSaveGame, through SaveModData at the end of the frame CanSave passed in): the state
         // checked again and written. Should it fail there, the game's save is stopped before its file is made (the exception ends
-        // DoSaveGame; SaveSlots.PushBackups and the file come after SaveModData), so the last save stays as it was; saving turns
-        // off as after a failed check, and the game's busy flag is cleared (the stopped coroutine never clears it, and every later
-        // save would be refused as "not ready").
+        // DoSaveGame; SaveSlots.PushBackups and the file come after SaveModData), so the last save stays as it was; the save is
+        // tried again as a failed check's is (SaveFailed; saving is never turned off for it), and the game's busy flag is cleared
+        // (the stopped coroutine never clears it, and every later save would be refused as "not ready").
         private static readonly System.Reflection.FieldInfo saveBusy = AccessTools.Field(typeof(SaveLoadManager), "busy");
         internal static void SaveForGame(SaveLoadManager manager)
         {
@@ -371,6 +374,7 @@ namespace EconomyOverhaul
             // read, StateCodec.Untable; a version-4 save's warehouses above): written as the current version (binary) from now on.
             State.version = SaveState.Current;
             Ready = true; Loading = false; Fx.Ensure(); Fx.Sync(); Fleet.BeginRegistrationGrace(); Economy.Configure(); TradeBook.Loaded(); Bottomry.Loaded(); Rentals.Loaded(); Tarps.Loaded(); Missions.Loaded();
+            OfficeFleet.Loaded();
             // Refresh each market's own current quotes after a curve upgrade. Foreign
             // reports and fleet-carried stock observations remain stale as before.
             foreach (var row in Supply.ManagedRows()) { var market = Market(row.Port); if (market) Economy.Refresh(market); }
@@ -418,6 +422,13 @@ namespace EconomyOverhaul
         internal static bool CoverHintEnabled => CoverHint?.Value ?? false;
         internal static bool CargoDamageHintEnabled => CargoDamageHint?.Value ?? true;
         internal static ConfigEntry<KeyboardShortcut> BraceKey;   // a shortcut: the configurator sets it by a key press (the user, 2026-10-13)
+        // The pole's and plank's size keys, shortcuts as the brace key (BOARD_PLANK_DRAFT.md; the user, 2026-11-08: "Add hotkey configuration
+        // for length/radius control of poles, and lenght/width/thickness control of plank in configurator"); read by RodKeys (Item.cs).
+        internal static ConfigEntry<KeyboardShortcut> PoleLongerKey, PoleShorterKey, PoleThickerKey, PoleThinnerKey,
+            PlankLongerKey, PlankShorterKey, PlankWiderKey, PlankNarrowerKey, PlankThickerKey, PlankThinnerKey;
+        // The held pole's or plank's weight on the line under the view (the user, 2026-11-08; default off), read by PoleText (Item.cs).
+        internal static ConfigEntry<bool> ShowRodWeight;
+        internal static bool RodWeightShown => ShowRodWeight?.Value ?? false;
         // Hull repair with wood planks (the user, 2026-10-27): "Hammering time: a slider ... set time to 0-20s, 1s per step, this is
         // uncaulked time" (a caulked hull half, as before), "default still 20s"; "Plank needed: 2 buttons, 1 is current (name Fixing fee
         // equivalent), another is Fixed 0.5% per plank" (the caulking rules the same in both).
@@ -464,6 +475,20 @@ namespace EconomyOverhaul
             FragileCargo.SettingChanged += (s,e) => { Missions.DropFragile(); foreach(var c in CargoCondition.Active) { c.RefreshHint(); c.RefreshAppearance(); } };
             BraceKey = config.Bind("Wood pole", "Brace key", new KeyboardShortcut(KeyCode.H),
                 "While holding a wood pole, this key braces it (held at your side, pointing forward: with the pick-up key held (the left mouse by default) it pushes boats, docks or the sea bed) or holds it loosely again.");
+            KeyboardShortcut Key(KeyCode k) => new KeyboardShortcut(k);
+            PoleLongerKey = config.Bind("Wood pole", "Longer key", Key(KeyCode.Q), "While holding a wood pole, or pointing at one attached and not nailed, this key makes it 0.1 m longer (held: it keeps lengthening). Held with the mouse wheel, the game's rotate key leans the pole instead.");
+            PoleShorterKey = config.Bind("Wood pole", "Shorter key", Key(KeyCode.E), "While holding a wood pole, or pointing at one attached and not nailed, this key makes it 0.1 m shorter (held: it keeps shortening).");
+            PoleThickerKey = config.Bind("Wood pole", "Thicker key", Key(KeyCode.O), "While holding a wood pole, or pointing at one attached and not nailed, this key makes its diameter 0.2x bigger (up to 10x).");
+            PoleThinnerKey = config.Bind("Wood pole", "Thinner key", Key(KeyCode.L), "While holding a wood pole, or pointing at one attached and not nailed, this key makes its diameter 0.2x smaller (down to 1x).");
+            PlankLongerKey = config.Bind("Wood plank", "Longer key", Key(KeyCode.Q), "While holding a wood plank in placement mode, or pointing at one attached by one end and not nailed, this key makes it 0.1 m longer (held: it keeps lengthening).");
+            PlankShorterKey = config.Bind("Wood plank", "Shorter key", Key(KeyCode.E), "While holding a wood plank in placement mode, or pointing at one attached by one end and not nailed, this key makes it 0.1 m shorter (held: it keeps shortening).");
+            PlankWiderKey = config.Bind("Wood plank", "Wider key", Key(KeyCode.O), "While holding a wood plank in placement mode, or pointing at one attached by one end and not nailed, this key makes it wider, to the next 0.05 m (up to 1 m).");
+            PlankNarrowerKey = config.Bind("Wood plank", "Narrower key", Key(KeyCode.L), "While holding a wood plank in placement mode, or pointing at one attached by one end and not nailed, this key makes it narrower, to the next 0.05 m (down to 0.05 m).");
+            PlankThickerKey = config.Bind("Wood plank", "Thicker key", Key(KeyCode.I), "While holding a wood plank in placement mode, or pointing at one attached by one end and not nailed, this key makes it thicker, to the next 0.05 m (up to 1 m).");
+            PlankThinnerKey = config.Bind("Wood plank", "Thinner key", Key(KeyCode.K), "While holding a wood plank in placement mode, or pointing at one attached by one end and not nailed, this key makes it thinner, to the next 0.05 m (down to the standard 45 mm).");
+            // The user, 2026-11-08: "also add a configurator option, default off, when enable, show the weight of the current plank/pole on the text also".
+            ShowRodWeight = config.Bind("Wood pole", "Show pole and plank weight", false,
+                "While holding a wood pole or plank, the line under the view (its size) also shows its weight in lb.");
             HammerTime = config.Bind("Wood plank", "Hammering time", 20, new ConfigDescription(
                 "Seconds of hammering for one wood plank to repair a damaged hull (0: at once). Half this when the hull is caulked with oakum.",
                 new AcceptableValueRange<int>(0, 20)));
@@ -553,9 +578,11 @@ namespace EconomyOverhaul
     }
 
     // ---- Save state ----
-    // Both serializers (DataContractJsonSerializer for the released JSON saves, BinaryFormatter since version 7) refuse a save that
-    // lacks a field unless the field is [OptionalField]: a field added after 0.8.5 (the first public release) must be, and reads 0
-    // or null when missing (no constructor runs; StateCodec.Finish fills the lists an older save lacks). StateCodec.Validate then
+    // The JSON reader (DataContractJsonSerializer, the released JSON saves) refuses a save that lacks a field unless the field is
+    // [OptionalField]; the binary one (BinaryFormatter, since version 7) read such a save and left the field 0 or null, measured on
+    // .NET Framework 4.8 on the host (BinarySave.cs; EconomyOverhaul_FAILED.md), not on the game's Mono. So a field added after 0.8.5
+    // (the first public release) must be [OptionalField], and reads 0 or null when missing (no constructor runs; StateCodec.Finish
+    // fills the lists an older save lacks). StateCodec.Validate then
     // refuses a save whose records are missing or out of range. The binary save names every class and field: never rename, retype
     // or move one (to another namespace); a change that must happen needs a mapping in StateCodec.TypeBinder and a version step.
     [Serializable] public sealed class SaveState
@@ -613,6 +640,11 @@ namespace EconomyOverhaul
         // The loan tutorials seen (TUTORIAL_UI_DRAFT.md, T5): optional, false in older saves, so each shows once there too.
         [System.Runtime.Serialization.OptionalField] public bool tutorialRespondentia;
         [System.Runtime.Serialization.OptionalField] public bool tutorialBottomry;
+        // The trade offices (TRADE_OFFICE_DRAFT.md; 2026-11-08): optional, none in older saves; made when the first house becomes an office.
+        [System.Runtime.Serialization.OptionalField] public OfficeState office;
+        // The trade offices' fleet (TRADE_OFFICE_DRAFT.md §4.5): the player's own traders, apart from the 53 (an older build skips the list
+        // instead of refusing the whole economy); null until the first ship joins.
+        [System.Runtime.Serialization.OptionalField] public List<BoatState> playerFleet;
         internal SaveState Copy() => (SaveState)MemberwiseClone();
     }
 
@@ -822,10 +854,17 @@ namespace EconomyOverhaul
             if (added > 0) Plugin.Log?.LogInfo("Economic save with " + (result.fleet.Count - added) + " traders: " + added + " added (" + string.Join(", ", result.fleet.Skip(result.fleet.Count - added).Select(b => b.group + " of " + b.home + " at port " + b.origin).ToArray()) + ").");
             Validate(result);
             if (result.version < 6) Share(result);
+            // Every report's values are the same numbers (Economy.SharedValues): a save written before they were shared gets one array, as a new game's reports hold.
+            float[] values = null;
+            void OneValues(List<ReportState> reports) { if (reports != null) foreach (var r in reports) { if (values == null) values = r.values; else if (!ReferenceEquals(r.values, values) && r.values.SequenceEqual(values)) r.values = values; } }
+            foreach (var m in result.markets) { OneValues(m.reports); OneValues(m.incoming); }
+            foreach (var b in result.fleet) OneValues(b.reports);
             // Every trader sails at its group's speed in the fleet table, also in a game saved before the table changed (the
             // user, 2026-10-18: the small and heavy buff reaches existing games), and waits its group's wait in port (the medium
             // locals' and the Happy Bay trader's since the sail plans, 2026-10-19); a trip or a wait under way keeps its time left.
-            foreach (var b in result.fleet) { var d = FleetDefinitions.Current.FirstOrDefault(x => x.Matches(b)); if (d != null) { b.speed = d.Speed; b.wait = d.Wait; } }
+            // Its hold takes the table's units when the table holds more (the regionals' 55, the user, 2026-11-07), never fewer: fewer
+            // than the goods aboard would make the save refused, and a Chronos trader of an old game keeps its 150.
+            foreach (var b in result.fleet) { var d = FleetDefinitions.Current.FirstOrDefault(x => x.Matches(b)); if (d != null) { b.speed = d.Speed; b.wait = d.Wait; b.units = Math.Max(b.units, d.Units); } }
             return result;
         }
         private static bool Finite(double n) => !double.IsNaN(n) && !double.IsInfinity(n);
@@ -914,7 +953,7 @@ namespace EconomyOverhaul
         // user, 2026-11-02: "can we remove it"; until then every -3 record was kept for good).
         internal static bool Retires(int parent, bool comesBack) => parent != -2 && (parent != -3 || !comesBack);
         // A copy of this item waits in a ship's cached items, or another live item has its id (the cached copy already respawned).
-        // The game destroys a sunk ship's items at the recovery's black screen, before her cached items respawn.
+        // The game destroys a sunk ship's items at the recovery's black screen, before its cached items respawn.
         internal static bool ComesBack(SaveablePrefab save)
         {
             var manager = SaveLoadManager.instance; if (!manager) return true;   // not known: kept, as before
@@ -928,6 +967,9 @@ namespace EconomyOverhaul
             return false;
         }
     }
+    // The record goes only when the destroy really ran: another mod's prefix may refuse it and the item stays (New Beginnings keeps its starter
+    // items through the game's 600 m clean-up while its start is armed; the deep review of 2026-11-09, question 4a: "a) fix it"). The postfix
+    // reads __runOriginal, which holds every prefix's answer whatever their order; the parent is read in the prefix, before ExitBoat sets it to -1.
     [HarmonyPatch(typeof(ShipItem), "DestroyItem")]
     internal static class RetireCargoRecordPatch
     {
@@ -941,7 +983,7 @@ namespace EconomyOverhaul
             bool comesBack = parent == -3 && World.Cargo.ContainsKey(save.instanceId) && CargoRecords.ComesBack(save);
             if (CargoRecords.Retires(parent, comesBack)) __state = save.instanceId;
         }
-        static void Postfix(int __state) { CargoRecords.Destroyed(__state); }
+        static void Postfix(int __state, bool __runOriginal) { if (__runOriginal) CargoRecords.Destroyed(__state); }
     }
 
     // ---- Startup ----
@@ -1304,6 +1346,9 @@ namespace EconomyOverhaul
             foreach (var c in World.State.cargo.Where(c => c.loan).ToList()) Loans.Collect(c);
             foreach (var l in World.State.bottomry.ToList()) { World.State.bottomry.Remove(l); Bottomry.Charge(l, Bottomry.Owed(l)); }
             Tarps.Clear();
+            // The trade offices: each region's treasury into the wallet, the office's objects gone (the user's list item 6).
+            int treasury = Office.Uninstall();
+            if (treasury > 0) Plugin.Log.LogInfo("Prepared to uninstall: " + treasury + " coins of the trade offices' treasuries paid into the wallet.");
             int removed = RemoveItems();
             // Shop stalls stop offering them (each slot is the mod's own object).
             foreach (var s in Resources.FindObjectsOfTypeAll<ShopItemSpawner>())
@@ -1317,7 +1362,7 @@ namespace EconomyOverhaul
             Loans.Notify("EconomyOverhaul removed from this game (" + removed + " items). Save, quit, then remove the mod.");
             return removed;
         }
-        // Every item 640-645: the live ones (held, in the inventory, in crates, aboard, ashore, shop stock) and the save records
+        // Every item 640-646 (Rules.ModItem): the live ones (held, in the inventory, in crates, aboard, ashore, shop stock) and the save records
         // a far ship keeps instead of live items. The game's load would fail on any of them without the mod.
         internal static int RemoveItems()
         {
@@ -1483,18 +1528,29 @@ namespace EconomyOverhaul
         internal static void Install(Harmony harmony)
         {
             if (suspended != null) return;
-            var patch = Harmony.GetPatchInfo(Sale)?.Prefixes.FirstOrDefault(p =>
-                p.owner == DizzyGuid &&
-                p.PatchMethod.DeclaringType?.FullName == "Dizzy.Fixes.EconomyUiSellGoodPatch" &&
-                p.PatchMethod.Name == "Prefix");
-            if (patch == null) return;
+            // (its own try: an exception here stopped the whole mod's start; and Dizzy loaded with its prefix not found is said, since both sale
+            // prefixes then run: the deep review of 2026-11-09, C6-5)
+            try
+            {
+                var patch = Harmony.GetPatchInfo(Sale)?.Prefixes.FirstOrDefault(p =>
+                    p.owner == DizzyGuid &&
+                    p.PatchMethod.DeclaringType?.FullName == "Dizzy.Fixes.EconomyUiSellGoodPatch" &&
+                    p.PatchMethod.Name == "Prefix");
+                if (patch == null)
+                {
+                    if (Harmony.GetPatchInfo(Sale)?.Prefixes.Any(p => p.owner == DizzyGuid) == true)
+                        Plugin.Log.LogWarning("Dizzy compatibility: Dizzy Sailwind Fixes patches the trade-book sale, but not by the prefix this mod knows (Dizzy.Fixes.EconomyUiSellGoodPatch.Prefix): both sale handlers may run.");
+                    return;
+                }
 
-            // HarmonyX can run both replacement prefixes even when one returns false.
-            // Ordering them cannot prevent duplicate sales or cancellation before repayment.
-            // Our sale handler already checks full cargo and settles the exact crate.
-            suspended = patch;
-            harmony.Unpatch(Sale, patch.PatchMethod);
-            Plugin.Log.LogInfo("Dizzy compatibility: EconomyOverhaul handles trade-book sales; only Dizzy's overlapping sale prefix is suspended.");
+                // HarmonyX can run both replacement prefixes even when one returns false.
+                // Ordering them cannot prevent duplicate sales or cancellation before repayment.
+                // Our sale handler already checks full cargo and settles the exact crate.
+                suspended = patch;
+                harmony.Unpatch(Sale, patch.PatchMethod);
+                Plugin.Log.LogInfo("Dizzy compatibility: EconomyOverhaul handles trade-book sales; only Dizzy's overlapping sale prefix is suspended.");
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Dizzy compatibility could not be checked (" + e.GetType().Name + ": " + e.Message + "); both sale handlers may run."); }
         }
 
         internal static void Restore()
@@ -1573,6 +1629,62 @@ namespace EconomyOverhaul
                 harmony.Patch(water, postfix: new HarmonyMethod(typeof(VirtualCrewCompatibility), nameof(Water)));
                 Plugin.Log?.LogInfo("Virtual Crew: the steward draws no water from a financed barrel.");
             }
+            var state = Find("SailwindVirtualCrew.CrewPayPatchState");
+            pendingSale = state == null ? null : AccessTools.Field(state, "PendingEconomySale");
+            pendingPurchase = state == null ? null : AccessTools.Field(state, "PendingEconomyPurchase");
+            instance = manager == null ? null : AccessTools.PropertyGetter(manager, "Instance");
+            recordSale = manager == null ? null : AccessTools.Method(manager, "RecordCargoSale", new[] { typeof(ShipItem), typeof(int), typeof(int) });
+            recordPurchase = manager == null ? null : AccessTools.Method(manager, "RecordCargoPurchase", new[] { typeof(ShipItem), typeof(int), typeof(int) });
+            if (pendingSale == null || !pendingSale.IsStatic || pendingPurchase == null || !pendingPurchase.IsStatic || instance == null || !instance.IsStatic || recordSale == null || recordPurchase == null)
+            {
+                pendingSale = pendingPurchase = null; instance = recordSale = recordPurchase = null;
+                Plugin.Log?.LogWarning("Virtual Crew crew pay compatibility unavailable: its CrewPayPatchState or VirtualCrewManager's cargo records changed.");
+            }
+            else
+            {
+                // Before Virtual Crew's own postfixes (First), whichever of the two mods' prefixes ran first.
+                var clear = new HarmonyMethod(typeof(VirtualCrewCompatibility), nameof(ClearPending)) { priority = Priority.First };
+                harmony.Patch(AccessTools.Method(typeof(EconomyUI), "SellGood"), postfix: clear);
+                harmony.Patch(AccessTools.Method(typeof(EconomyUI), "BuyGood"), postfix: clear);
+                Plugin.Log?.LogInfo("Virtual Crew: its crew pay counts each crate the trade book buys or sells, at this mod's price.");
+            }
+        }
+        // Its crew pay (the deep review of 2026-11-09, question 1: "B"). Virtual Crew takes the crew's share of a trade-book trade from its own
+        // patches on EconomyUI.BuyGood and SellGood, which this mod replaces (BulkBuyPatch, WarehouseSalePatch): its sale prefix guessed the
+        // warehouse's first full crate at the vanilla price and its postfix charged the share even for a sale this mod refused; its purchase record
+        // took only the first crate of a bulk buy, at the vanilla price. So its pending trade is cleared (at the start of this mod's batch, and in a
+        // postfix run before its own), and each crate this mod really buys or sells is recorded with Virtual Crew at this mod's price (Traded).
+        private static FieldInfo pendingSale, pendingPurchase; private static MethodInfo instance, recordSale, recordPurchase; private static bool payWarned;
+        internal static void ClearPending()
+        {
+            if (pendingSale == null) return;
+            try { pendingSale.SetValue(null, null); pendingPurchase.SetValue(null, null); }
+            catch (Exception e) { PayWarning(e); }
+        }
+        // After a trade-book batch is committed (BulkTrade.Execute): each crate, at its MoneyQuote.Total (in the payment coin with the FX fee, as
+        // Virtual Crew's own prices; a financed crate at its whole price, a damaged one at its damaged price). A sale's crew share comes out of the
+        // wallet then, after the sale's payout, as after the game's own sale. Its records are by the crate's save id: a sold crate is still there
+        // until the frame ends (Unity's deferred Destroy).
+        internal static void Traded(TradeBatch batch, List<Good> staged)
+        {
+            if (recordSale == null || batch == null || !batch.Valid) return;
+            try
+            {
+                var crew = instance.Invoke(null, null); if (crew == null) return;
+                bool sale = batch.Action == TradeAction.Sell;
+                for (int i = 0; i < batch.Units.Count; i++)
+                {
+                    var good = sale ? batch.Units[i].Cargo : staged != null && i < staged.Count ? staged[i] : null;
+                    var item = good ? good.GetComponent<ShipItem>() : null; if (!item) continue;
+                    (sale ? recordSale : recordPurchase).Invoke(crew, new object[] { item, batch.Units[i].Quote.Total, batch.Currency });
+                }
+            }
+            catch (Exception e) { PayWarning(e); }
+        }
+        private static void PayWarning(Exception e)
+        {
+            if (payWarned) return; payWarned = true;
+            Plugin.Log?.LogWarning("Virtual Crew: a trade-book trade's crew pay was not recorded: " + (e.InnerException ?? e).Message);
         }
         private static void Begin(ShipItem item, IslandMarket market)
         {

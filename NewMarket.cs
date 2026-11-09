@@ -802,6 +802,13 @@ namespace EconomyOverhaul
             var current = Fields.Get<IslandMarket>(ui, "currentIsland"); var port = World.Market(portIndex);
             int payment = (int)Fields.Get<Currency>(ui, "currentPlayerCurrency");
             int raw = buying ? current.knownPrices[portIndex].buyPrices[good] : current.knownPrices[portIndex].sellPrices[good];
+            // A trade office's own book on its port's market (TradeOffice.cs, OfficeBook): its own buying price.
+            if (buying && current == port && OfficeBook.Active(ui) != 0)
+            {
+                // In stock: 10% off; none in stock and not made here: from other sources if it can be unsealed; made here but sold out: as the market (none).
+                bool absent = OfficeBook.Absent(port, good);
+                if (port.HasGood(good) || absent && OfficeBook.Offered(good)) raw = OfficeBook.BuyRaw(port, good, port.currentSupply[good], absent);
+            }
             double condition = 1;
             if (!buying && current == port) { var cargo = Loans.Next(port, good); if (cargo) condition = CargoCondition.Factor(cargo.GetComponent<ShipItem>()); }
             return Quote(raw, port, payment, buying, condition, current && current.GetPortIndex() == 21);
@@ -872,7 +879,11 @@ namespace EconomyOverhaul
         internal static FxBooth For(CurrencyExchangeUI ui)
         { var b=ui.GetComponent<FxBooth>(); if(!b){b=ui.gameObject.AddComponent<FxBooth>(); b.ui=ui;} return b; }
         internal static int? OpeningAccount;
-        internal void Open() { region=OpeningAccount ?? Fx.LocalRegion(); requested=0; requestBuy=false; Refresh(); }
+        // An office's box (TradeOffice.cs): the daily rate, no fee, the live rates untouched (TRADE_OFFICE_DRAFT.md §4.4, Q20).
+        internal int office;
+        internal void Open() { region=OpeningAccount ?? Fx.LocalRegion(); office=OfficeBox.HouseOf(OfficeBox.Opening); requested=0; requestBuy=false; Refresh(); }
+        private double Fee(int a,int b) => office!=0 ? 0 : FxRules.BoothFee(a,b,Fx.Reputation(region),region==Reputations.Chronos);
+        private double[] Rates => office!=0 ? Fx.State.smooth : Fx.State.rates;
         internal void Change(int change,bool buy)
         {
             long before=buy ? Fields.Get<int>(ui,"currentBuyAmount") : Fields.Get<int>(ui,"currentSellAmount");
@@ -881,7 +892,8 @@ namespace EconomyOverhaul
         private FxExchange Calculate()
         {
             int a=Fields.Get<int>(ui,"currentSellCurrency"),b=Fields.Get<int>(ui,"currentBuyCurrency");
-            lastA=Fx.State.rates[a]; lastB=Fx.State.rates[b]; lastFee=FxRules.BoothFee(a,b,Fx.Reputation(region),region==Reputations.Chronos);
+            lastA=Rates[a]; lastB=Rates[b]; lastFee=Fee(a,b);
+            if(office!=0)return Rules.FlatExchange(Fx.State.smooth,Fx.State.rates,a,b,requested,requestBuy);
             return FxRules.Exchange(Fx.State.rates,a,b,requested,requestBuy,lastFee);
         }
         internal void Refresh()
@@ -896,13 +908,23 @@ namespace EconomyOverhaul
         internal void Text()
         {
             var label=Fields.Get<TextMesh>(ui,"textPricePanel"); if(!label)return;
+            if(office!=0&&quote.Valid){label.text="Average rate\n"+((double)quote.Received/quote.Sold).ToString("0.######")+"\nOffice: daily rate\nno fee";return;}
             label.text=quote.Valid ? "Average rate\n"+((double)quote.Received/quote.Sold).ToString("0.######")+"\nFX fee "+(lastFee*100).ToString("0.##")+"%\n"+quote.Fee.ToString("0.##")+" "+PlayerGold.GetCurrencyName(Fields.Get<int>(ui,"currentBuyCurrency"),true) : requested>0 ? quote.Error : "Choose amount";
         }
         private void Update()
         {
             if(!ui || !ui.uiActive)return;
-            int a=Fields.Get<int>(ui,"currentSellCurrency"),b=Fields.Get<int>(ui,"currentBuyCurrency");
-            if(lastA!=Fx.State.rates[a]||lastB!=Fx.State.rates[b]||lastFee!=FxRules.BoothFee(a,b,Fx.Reputation(region),region==Reputations.Chronos))Refresh();
+            int a=Currencies.Sell(ui),b=Currencies.Buy(ui);
+            if(lastA!=Rates[a]||lastB!=Rates[b]||lastFee!=Fee(a,b))Refresh();
+        }
+        // Read every frame the booth is open: field references, not reflection reads that box each int (the deep review of 2026-11-09).
+        // In a class of their own, made at their first read (its static constructor keeps it so), so a missing field fails there only,
+        // as the reflection read did.
+        private static class Currencies
+        {
+            internal static readonly AccessTools.FieldRef<CurrencyExchangeUI,int> Sell=AccessTools.FieldRefAccess<CurrencyExchangeUI,int>("currentSellCurrency"),
+                Buy=AccessTools.FieldRefAccess<CurrencyExchangeUI,int>("currentBuyCurrency");
+            static Currencies() { }
         }
         internal void Confirm()
         {
@@ -1232,6 +1254,8 @@ namespace EconomyOverhaul
         internal string Error;
         internal CargoCarrier Carrier;
         internal int CartCurrency, CartUnitFee;
+        // Bought at a trade office's own book (TradeOffice.cs, OfficeBook): its house; Absent: a good this port doesn't trade.
+        internal int Office; internal bool Absent;
         internal long SaleCartFee, StorageFee;
         internal long CartFee => Action == TradeAction.Sell ? SaleCartFee : (long)CartUnitFee * Count;
         internal long CartCharge => CartFee + StorageFee;
@@ -1278,8 +1302,10 @@ namespace EconomyOverhaul
             if(!area)return Enumerable.Empty<Good>();
             IEnumerable<Good> source=carrier ? carrier.cargo.Where(item=>item&&item.GetCurrentInventorySlot()==carrier.portIndex+100).Select(item=>item.GetComponent<Good>()) :
                 Fields.Get<List<Good>>(area,"goodsInArea").Where(g=>g&&g.GetComponent<ShipItem>().GetCurrentInventorySlot()<100);
+            // A crate bought at this port's trade office can't be sold here (TradeOffice.cs, OfficeBook; Q23). Tested after the good's
+            // index, the cheaper test (both read only; IsGoodValid still runs on the same crates; the deep review of 2026-11-09).
             return source.Where(g=>g&&g.GetComponent<ShipItem>().sold&&g.GetMissionIndex()==-1&&
-                PrefabsDirectory.ItemToGoodIndex(g.GetComponent<SaveablePrefab>().prefabIndex)==goodIndex&&(bool)Fields.Call(area,"IsGoodValid",g)).Distinct();
+                PrefabsDirectory.ItemToGoodIndex(g.GetComponent<SaveablePrefab>().prefabIndex)==goodIndex&&!OfficeBook.Marked(g,market)&&(bool)Fields.Call(area,"IsGoodValid",g)).Distinct();
         }
         internal static TradeBatch Quote(EconomyUI ui, TradeAction action, int count)
         {
@@ -1292,6 +1318,12 @@ namespace EconomyOverhaul
             var prefab=PrefabsDirectory.instance.GetGood(g);
             if(!prefab||g<=0||g==45||g==51){batch.Error="Cargo unavailable";return batch;}
             if(action!=TradeAction.Sell&&!Rules.PurchaseOriginAllowed(m.GetPortIndex(),g)){batch.Error="Saffron can only be purchased at Saffron Island";return batch;}
+            // A trade office's own book (TradeOffice.cs, OfficeBook): no loans (the user's list item 2); a good the port doesn't trade only if
+            // it can be unsealed, at most 10 a day; one it makes but has sold out waits for its stock (OfficeBook.Absent; the deep review of 2026-11-09, 3c).
+            batch.Office=OfficeBook.Active(ui); batch.Absent=batch.Office!=0&&action!=TradeAction.Sell&&OfficeBook.Absent(m,g);
+            if(batch.Office!=0&&action==TradeAction.Loan){batch.Error="No loans at the office's book";return batch;}
+            if(batch.Absent&&!OfficeBook.Offered(g)){batch.Error="The office can't get this cargo";return batch;}
+            if(batch.Absent&&OfficeBook.Left(batch.Office)<count){batch.Error=OfficeBook.Left(batch.Office)==0?"No more today: 10 a day from other sources":"Only "+OfficeBook.Left(batch.Office)+" more today from other sources";return batch;}
             if(action==TradeAction.Loan){batch.Error=Loans.BlockReason(batch.Region,batch.Currency);if(batch.Error!=null)return batch;}
             long[] wallets=PlayerGold.currency.Select(x=>(long)x).ToArray();
             double credit=Loans.Available(batch.Region),stock=m.currentSupply[g];
@@ -1320,9 +1352,9 @@ namespace EconomyOverhaul
                 }
                 for(int i=0;i<count;i++){
                     bool buy=action!=TradeAction.Sell;
-                    if(buy&&stock<m.supplyPurchaseLimit){batch.Error="Not enough stock for the full batch";return batch;}
+                    if(buy&&!batch.Absent&&stock<m.supplyPurchaseLimit){batch.Error="Not enough stock for the full batch";return batch;}
                     float basePrice=m.GetGoodPriceAtSupply(g,(float)(stock+(buy?0:1)));
-                    int raw=Mathf.RoundToInt(basePrice*(1+(buy?1:-1)*(float)Rules.Spread(basePrice)));
+                    int raw=buy&&batch.Office!=0?OfficeBook.BuyRaw(m,g,stock,batch.Absent):Mathf.RoundToInt(basePrice*(1+(buy?1:-1)*(float)Rules.Spread(basePrice)));
                     var cargo=buy?null:eligible[i];
                     var u=new TradeUnit {Cargo=cargo,Quote=Fx.Quote(raw,m,batch.Currency,buy,cargo?CargoCondition.Factor(cargo.GetComponent<ShipItem>()):1)};
                     if(action==TradeAction.Loan){
@@ -1346,7 +1378,7 @@ namespace EconomyOverhaul
                         wallets[batch.Currency]+=u.Payout;
                     }
                     if(wallets.Any(v=>v<int.MinValue||v>int.MaxValue)){batch.Error="Wallet limit exceeded";return batch;}
-                    batch.Units.Add(u);stock+=(buy?-1:1);
+                    batch.Units.Add(u);stock+=(buy?(batch.Absent?0:batch.Office!=0?-.5:-1):1);
                 }
             } catch(OverflowException){batch.Error="Price or wallet limit exceeded";}
             return batch;
@@ -1354,6 +1386,7 @@ namespace EconomyOverhaul
         internal static void Execute(EconomyUI ui,TradeAction action,int count)
         {
             Fx.AdvanceDay(GameState.day);
+            VirtualCrewCompatibility.ClearPending();   // Virtual Crew's guess of this trade, before its purchase record can match a crate below
             var batch=Quote(ui,action,count);
             if(!batch.Valid){Loans.Notify(batch.Error??"Cargo unavailable");ui.RefreshPage();return;}
             var m=batch.Market;int g=batch.Good,currency=batch.Currency;
@@ -1400,7 +1433,10 @@ namespace EconomyOverhaul
                     }else{
                         item=staged[i].GetComponent<ShipItem>();
                         if(action==TradeAction.Loan){var loan=CargoCondition.Track(item);loan.loan=true;loan.region=batch.Region;loan.goldLoan=currency==3;loan.principal=u.Principal;loan.interest=u.Interest;loan.rate=Rules.Interest(Reputations.Level(batch.Region));loan.reservation=u.Principal/Loans.Rate(currency);loan.financedPort=m.GetPortIndex()+1;}
+                        float supplyBefore=m.currentSupply[g];
                         PlayerGold.currency[currency]-=u.Quote.Total-u.Principal;m.PurchaseGood(g);
+                        // A trade office's book: half the supply drop, none for a good the port doesn't trade; the crate marked for this port.
+                        if(batch.Office!=0){m.currentSupply[g]=batch.Absent?supplyBefore:supplyBefore-.5f;var record=CargoRecords.Of(item);if(record!=null)record.officePort=m.GetPortIndex()+1;}
                         Fx.RememberPurchase(item,currency,Fx.Record(currency,u.Quote.Gross,true,TradeSource.Cargo));
                     }
                 }
@@ -1412,6 +1448,8 @@ namespace EconomyOverhaul
                 }
                 throw;
             }finally{Economy.BatchDepth--;}
+            if(batch.Absent)OfficeBook.Count(batch.Office,count);
+            VirtualCrewCompatibility.Traded(batch,staged);   // each crate's crew pay with Virtual Crew, at this mod's price (its own try/catch)
             // Receipt/audio callbacks are presentation, after the complete commit.
             // A failed display must not roll back already logged transaction units.
             try{
@@ -1502,7 +1540,7 @@ namespace EconomyOverhaul
             if(cartRoot)cartRoot.SetActive(ui&&ui.uiActive);
             if(!ui||!ui.uiActive||World.Loading){cartSelected=false;return;}
             if(!ui||!ui.uiActive||!World.Ready||Startup.BlocksGameplay)return;
-            int key=BulkTrade.HeldQuantity(),hover=ButtonHover.IsOver(buy)?1:ButtonHover.IsOver(sell)?2:ButtonHover.IsOver(loan)?3:0;
+            int key=BulkTrade.HeldQuantity(),hover=ButtonHover.Which(buy,sell,loan);
             timer-=Time.unscaledDeltaTime;
             if(key!=previousKey||hover!=previousHover||timer<=0){previousKey=key;previousHover=hover;timer=.15f;Refresh();}
         }
@@ -1527,7 +1565,9 @@ namespace EconomyOverhaul
                 int stock=Mathf.FloorToInt(Mathf.Max(0,current.currentSupply[ui.currentSelectedGood]-current.supplyPurchaseLimit+1));
                 if(!Rules.PurchaseOriginAllowed(current.GetPortIndex(),ui.currentSelectedGood))stock=0;
                 int available=CartSelected ? (carrier?BulkTrade.SaleGoods(current,ui.currentSelectedGood,carrier).Count():0) : current.currentPlayerGoods[ui.currentSelectedGood];
-                amounts.text=stock+"\n"+available;
+                // At a trade office's book, a good it brings in from other sources: today's 10 left, in dark blue (TradeOffice.cs, OfficeBook).
+                bool other=OfficeBook.FromOtherSources(ui,current,ui.currentSelectedGood,out int office);
+                amounts.text=(other?"<color="+OfficeBook.LeftColor+">"+OfficeBook.Left(office)+"</color>":stock.ToString())+"\n"+available;
                 if(storageLabel)storageLabel.text=CartSelected?storageLabelText.Replace("storage area","hired cart"):storageLabelText;
             }
             Apply(buy,TradeAction.Buy,BulkTrade.Quantity(buy));Apply(sell,TradeAction.Sell,BulkTrade.Quantity(sell));Apply(loan,TradeAction.Loan,BulkTrade.Quantity(loan));
@@ -1603,18 +1643,38 @@ namespace EconomyOverhaul
         {
             if (!button || !button.gameObject.activeInHierarchy) return false;
             if (!GameState.inCursorMenu) return button.IsLookedAt();
+            return UnderCursor() == button;
+        }
+        // Which of three buttons the pointer is over (1, 2 or 3 in that order; 0 none), each tested as IsOver tests it, with the cursor
+        // menu's rays cast once for all three instead of once a button (the bulk labels ask every frame; the deep review of 2026-11-09).
+        internal static int Which(GoPointerButton a, GoPointerButton b, GoPointerButton c)
+        {
+            bool cursor = GameState.inCursorMenu, cast = false; GoPointerButton under = null;
+            bool Over(GoPointerButton x)
+            {
+                if (!x || !x.gameObject.activeInHierarchy) return false;
+                if (!cursor) return x.IsLookedAt();
+                if (!cast) { under = UnderCursor(); cast = true; }
+                return under == x;
+            }
+            return Over(a) ? 1 : Over(b) ? 2 : Over(c) ? 3 : 0;
+        }
+        // In a cursor menu: the button the mouse (or the controller's pointer) is on, through the UI camera first, then the world's;
+        // null for none.
+        private static GoPointerButton UnderCursor()
+        {
             var pointer = MouseButtonPointer.instance;
-            if (!pointer) return false;
+            if (!pointer) return null;
             var uiCamera = Fields.Get<Camera>(pointer, "uiCam");
             var worldCamera = Camera.main;
-            if (!uiCamera || !worldCamera) return false;
+            if (!uiCamera || !worldCamera) return null;
             bool mouse = Fields.Get<bool>(pointer, "trackMouse");
             Vector3 uiScreen = mouse ? Input.mousePosition : uiCamera.WorldToScreenPoint(pointer.controllerPointer.position);
             Vector3 worldScreen = mouse ? Input.mousePosition : worldCamera.WorldToScreenPoint(pointer.controllerPointer.position);
             RaycastHit hit;
             if (!Physics.Raycast(uiCamera.ScreenPointToRay(uiScreen), out hit, 160f, 32) &&
-                !Physics.Raycast(worldCamera.ScreenPointToRay(worldScreen), out hit, 160f, 8388608)) return false;
-            return hit.collider.GetComponent<GoPointerButton>() == button;
+                !Physics.Raycast(worldCamera.ScreenPointToRay(worldScreen), out hit, 160f, 8388608)) return null;
+            return hit.collider.GetComponent<GoPointerButton>();
         }
     }
 

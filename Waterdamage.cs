@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using Crest;
 using HarmonyLib;
 using UnityEngine;
@@ -85,6 +84,10 @@ namespace EconomyOverhaul
         // mark blue outline if it's not fully covered"): water at ImmersionStart or more, or rain on a top not fully covered once its
         // cover is known. Wet cargo out of the water and the rain is not.
         public static bool WettingNow(bool damagingWater, double rain, bool coverKnown, double exposed) => damagingWater || coverKnown && rain > 0 && exposed > 0;
+        // No water damage counted for this long after a load or a wake (the user, 2026-11-06, LOAD_WAKE_COVER_DRAFT.md: "let water
+        // damage start counting after 5 sec player load into game or wake up from sleep", then "make the water immune time to 10 sec
+        // instead"): seconds at the game's normal speed.
+        public const float WaterHoldSeconds = 10;
         // Opened cargo (the user, 2026-10-30, EVENT_REACH_WATER_DRAFT.md §3: "If player unseal or drink from the cargo. the cargo will
         // get their water damage turned off and resume their original looks"): a barrel holding fewer units, or a crate fewer
         // items, than its prefab. Read from the units, so a sip, a pour, a spill or another mod's drink all count.
@@ -126,6 +129,35 @@ namespace EconomyOverhaul
         }
     }
 
+    // Whether water damage is held after a load or a wake (Rules.WaterHoldSeconds). Held while the game is loading or just started (its
+    // own flags: until the fade-in after F is over), then the seconds count down; a wake (the game's justWokeUp coming on) starts them again.
+    public sealed class WaterHoldClock
+    {
+        private float left; private bool wasWoken;
+        public bool Holding => left > 0;
+        public void Step(float seconds, bool starting, bool justWoke)
+        {
+            if (starting || justWoke && !wasWoken) left = Rules.WaterHoldSeconds;
+            else if (left > 0) left = Math.Max(0, left - Math.Max(0, seconds));
+            wasWoken = justWoke;
+        }
+    }
+    // Read from the game's flags, so no patch on its sleep or load code. Time.time, not the real clock: its seconds are the physics'
+    // (the hitches of a load's first frames are capped), and the sleep's x16 is over by the time justWokeUp comes on.
+    internal static class WaterHold
+    {
+        private static readonly WaterHoldClock clock = new WaterHoldClock();
+        private static int frame = -1; private static float last;
+        internal static bool Active => clock.Holding;
+        // Every crate's LateUpdate starts here (the first in a frame steps it), so the flags are seen even while crates wait on a load.
+        internal static void Step()
+        {
+            if (frame == Time.frameCount) return;
+            frame = Time.frameCount;
+            clock.Step(Time.time - last, GameState.currentlyLoading || GameState.justStarted, GameState.justWokeUp); last = Time.time;
+        }
+    }
+
     // ---- Cargo condition ----
     [Serializable] public sealed class CargoState
     {
@@ -151,6 +183,8 @@ namespace EconomyOverhaul
         [System.Runtime.Serialization.OptionalField] public int financedPort;
         // Opened (Rules.Opened): water damage off, its condition kept as it was then. False in a save from before (set again at load).
         [System.Runtime.Serialization.OptionalField] public bool opened;
+        // Bought at a trade office's book (TradeOffice.cs): its port + 1, where it can't be sold (Q23); 0 for every other crate.
+        [System.Runtime.Serialization.OptionalField] public int officePort;
     }
     public sealed class CargoCondition : MonoBehaviour
     {
@@ -158,7 +192,7 @@ namespace EconomyOverhaul
         private static readonly HashSet<int> Immune = new HashSet<int> { 3, 20, 21, 22, 23, 33, 34, 35, 48, 55, 56, 57, 61 };
         // Barrelled liquids (water and alcohol) never dry and keep full value until condition 0.
         // Not named Liquids: the game has a static Liquids class for drink effects.
-        private static readonly HashSet<int> LiquidCargo = new HashSet<int> { 10, 11, 12, 13, 36, 58 };
+        internal static readonly HashSet<int> LiquidCargo = new HashSet<int> { 10, 11, 12, 13, 36, 58 };   // also the office book's drinkable barrels (TradeOffice.cs, OfficeBook.Offered)
         private const int CoverGrid = 5;                                  // 5x5 rays over the top face
         private static readonly int[] CoverFirst = { 0, 4, 20, 24, 12 };  // corner cells and centre cell
         // Rays start this far above the cargo: under the invisible ceilings the cities have for the player (Gold Rock City's
@@ -336,7 +370,22 @@ namespace EconomyOverhaul
         {
             if (c == null || !Settings.FragileEnabled) return false;
             if (Rules.FragileGood(c.good) || c.fragile) return true;
-            var mission = item ? item.GetComponent<Good>()?.GetAssignedMission() : null;
+            return FragileMission(c, item ? item.GetComponent<Good>() : null);
+        }
+        // The same for this crate, with its Good kept from the last look (RefreshHint asks every frame per crate, a GetComponent
+        // each time; the deep review of 2026-11-09): looked up again whenever the kept one is gone, as before.
+        private bool FragileNow()
+        {
+            if (state == null || !Settings.FragileEnabled) return false;
+            if (Rules.FragileGood(state.good) || state.fragile) return true;
+            if (!item) return FragileMission(state, null);
+            if (!good) good = item.GetComponent<Good>();
+            return FragileMission(state, good);
+        }
+        private Good good;
+        private static bool FragileMission(CargoState c, Good g)
+        {
+            var mission = g?.GetAssignedMission();
             if (mission == null) return false;
             Missions.Info(mission, out _, out var mods);
             return c.fragile = (mods & MissionModifier.Fragile) != 0;
@@ -422,13 +471,23 @@ namespace EconomyOverhaul
         // corner of the cargo's turned box, a barrel rolled under a low deck read the rays ending above the deck, open (swt-1: 0%
         // rolled 45 degrees, 100% at 0). A cell whose line misses the cargo (a round barrel's box corners) is left out. Corners
         // and centre first: if those on the cargo agree (open deck or a full roof) the rest take the same value, unless something
-        // was just set on top, when all are cast so a small item still counts. A scan aboard (other than the one the boat's
+        // was just set on top, when all are cast so a small item still counts. Aboard, "down" is the ship's own (F1,
+        // LOAD_WAKE_COVER_DRAFT.md): the reading is kept, so it must not hold the ship's tilt of the moment. A scan aboard (other than the one the boat's
         // own move asks for) is checked once more after the boat has gone 100 m: a pier or a cliff it found may be behind.
+        // The ship roofs' cloth points are read once for the whole scan (Tarps.BeginScan; the deep review of 2026-11-09).
         private void ScanCover(bool full, bool afterMove = false)
         {
+            Tarps.BeginScan();
+            try { ScanCoverOnce(full, afterMove); }
+            finally { Tarps.EndScan(); }
+        }
+        private void ScanCoverOnce(bool full, bool afterMove)
+        {
             var boat = item.currentActualBoat; var walk = item.currentWalkCol;
-            // Straight up in the world: whatever lies above the cargo counts, whatever the boat's heel or the cargo's tilt.
-            Vector3 up = Vector3.up;
+            // Whatever lies above the cargo counts, whatever its tilt. Aboard along the ship's own up, so its heel of the moment isn't read (the
+            // user, 2026-11-06, "Implement F1 only": a load or a sleep at sea read cargo at a cover's edge at 96% against 80%, kept until a
+            // put-down; cl-5c). Past 45 degrees, or a hull whose frame isn't upright, straight up in the world. On land always the world's.
+            Vector3 up = boat && boat.up.y > .7f ? boat.up : Vector3.up;
             moveRecheck = boat && !afterMove; if (moveRecheck) moveFrom = Real(boat.position);
             Bounds local = LocalMeshBounds();
             Matrix4x4 m = transform.localToWorldMatrix;
@@ -446,7 +505,7 @@ namespace EconomyOverhaul
                 Vector3 p = ends[n].Value;
                 return Covered(p, up, ~excluded, null) || Covered(p, up, 1 << 2, null, itemsOnly: true) ||
                     boat && walk && Covered(walk.TransformPoint(boat.InverseTransformPoint(p)), walkUp, ~PlayerOnlyLayers, walk) ||
-                    Tarps.CoverAbove(p, CoverRayHeight);   // canvas tarps and the ships' cloth roofs (no colliders)
+                    Tarps.CoverAbove(p, up, CoverRayHeight);   // canvas tarps and the ships' cloth roofs (no colliders)
             }
             var rays = new bool[CoverGrid * CoverGrid];
             var first = CoverFirst.Where(n => ends[n].HasValue).ToArray();
@@ -542,7 +601,7 @@ namespace EconomyOverhaul
                 if (itemsOnly && !copy) continue;
                 if (hit.transform.IsChildOf(transform) || copy == item.itemRigidbodyC) continue;
                 if (CoverEvents.NotCover(hit.collider)) continue;   // an item in a hand, the inventory or the cart is never a roof
-                // nor the player's own body (aboard on her walk copy, layer 11; the deep review of 2026-11-02, Claude's fix)
+                // nor the player's own body (aboard on the ship's walk copy, layer 11; the deep review of 2026-11-02, Claude's fix)
                 if (Refs.charController && hit.collider.transform.IsChildOf(Refs.charController.transform)) continue;
                 return true;
             }
@@ -550,6 +609,7 @@ namespace EconomyOverhaul
         }
         private void LateUpdate()
         {
+            WaterHold.Step();
             if (!World.Ready || World.Loading || Startup.BlocksGameplay || GameState.currentlyLoading) { ResetConditionClock(); return; }
             if (state == null || !World.Cargo.TryGetValue(save.instanceId, out var current) || current != state) Restore();
             if (state == null) { ResetConditionClock(); return; }
@@ -576,6 +636,9 @@ namespace EconomyOverhaul
             // Immune or opened cargo tracks where it rests too, so cargo under it is rescanned when it is pushed off.
             UpdateExposure();
             if (WaterOff) { Wetting = false; ResetConditionClock(); return; }
+            // After a load or a wake nothing is counted for Rules.WaterHoldSeconds: water, sea, rain or drying (the ship's physics is rough then); its cover is
+            // still scanned above. The clock starts from 0 when the hold ends.
+            if (WaterHold.Active) { Wetting = false; ResetConditionClock(); return; }
             // Crest's asynchronous height queries must be submitted every frame to
             // receive the previous frame's result; quarter-second polling never settles.
             bool loose = !item.currentActualBoat;
@@ -641,7 +704,7 @@ namespace EconomyOverhaul
             int cover = Settings.WaterEnabled && Settings.CoverHintEnabled && !WaterOff && state.exposure != 0
                 ? Mathf.RoundToInt(100 * Mathf.Clamp01(coveredFraction)) : -1;
             // Fragile cargo's damage line (-1 for none) counts too: a hull hit changes only it (fragile goods are water-proof).
-            int damage = Settings.CargoDamageHintEnabled && Fragile(item, state) ? Rules.DamagePercent(state.impact) : -1;
+            int damage = Settings.CargoDamageHintEnabled && FragileNow() ? Rules.DamagePercent(state.impact) : -1;
             if (hintPercent == percent && hintCover == cover && hintDamage == damage && hintLoan == state.loan && item.description == hintDescription && hintLookText == item.lookText) return;
             // Never replace vanilla mission/name/fullness information.
             if (!string.IsNullOrEmpty(suffix) && item.description != null && item.description.EndsWith(suffix, StringComparison.Ordinal))
@@ -658,7 +721,7 @@ namespace EconomyOverhaul
             // Water: goods water can damage. Cracks: fragile cargo with impact damage, on the crates that have crack marks.
             float health = Settings.WaterEnabled && !WaterOff ? state.health : 100;
             var sources = SourceRenderers();
-            int grain = state.impact > 0 && Fragile(item, state) ? CargoStainMaterial.CrackGrain(sources) : -1;
+            int grain = state.impact > 0 && FragileNow() ? CargoStainMaterial.CrackGrain(sources) : -1;
             var cracks = grain >= 0 ? CargoStainMaterial.CrackTexture() : null;
             bool looked = health < 100 || cracks;
             bool stale = !BindingsMatch(sources);
