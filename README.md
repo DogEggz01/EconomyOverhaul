@@ -185,6 +185,7 @@
 - Cart Contract: Cart service become free in office's port. Include the service from trade book. There will be a new cart guy show up beside your office.
 - Trade fleet: Require Shipwright and Transportation mod 0.2.0 or higher. Manage at office UI.
   - Assign ships in your storage to your trader fleet, assign it's route and it earn gold for you
+    - Only built copy can be assign, you cannot assign original vanilla ship as trader.
   - It will become new visible trader on map, and it will look like how your donated ship is.
     - Fisherman's Staysail is not supported, since it require custom script that trader don't know how to use.
   - There will be a short freeze when new trader is created (game adding new ship).
