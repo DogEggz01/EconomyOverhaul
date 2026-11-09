@@ -69,6 +69,11 @@
 - Fragile cargo mission (see below for fragile cargo) will receive another x2 reward bonus. Tools have 50% chance to spawn as fragile mission cargo.
   - Tools from trade good is never fragile.
 - Cargo mission can now be assign to every port, if the route is profitable enough.
+- Add sorting function, you can now sort with highest profit per miles, highest raw gold reward and highest reputation
+- Gold reward is now sorted by actual value, so Emerald dragon don't always show as best profit.
+- Add regional filtering, you can filter to show certain region's mission
+- Add Mission cargo quantity selection. You can adjust the quanitity on mission UI, the reward will be adjust accordingly.
+  - Mission with modifier cannot change quantity.
 ## Dynamic demand event
 <img width="3840" height="2160" alt="2055B7~1" src="https://github.com/user-attachments/assets/d6cd7eb1-4666-4b58-aa23-87264cf41192" />
 <img width="3840" height="2160" alt="207EA9~1" src="https://github.com/user-attachments/assets/fde7aba9-68da-496c-b578-20155284f5c3" />
@@ -89,7 +94,7 @@
 - Background trader amount is increase to accommodate for increase production/demand, and it's no longer background, you can see it sailing in the world.
 - Visible trader can be toggle off in configurator, it will have performance impact, even if there is no visble trader nearby.
   - Current NPC trade fleet
-    - Small local trader: Each region 7, FFL 2. Move at 5 knots. Stop at port for 2.5h.
+    - Small local trader: Al'ankh 8, other region 7, FFL 2. Move at 5 knots. Stop at port for 2.5h.
       - Regional small boat, 5 Default rigging and 2 special rigging.
       - Dhow: Topsail gaff sloop.
       - Cog: Caravel.
@@ -117,7 +122,10 @@
 - All trader speed is faster, but wait in port longer.
 - On trader's deck they will show the one cargo they carry the most, so you can take a guess what they are shipping.
 - Between traders there is no collision, but they will collide with player ship.
-- Trader will curse you if you hit their ship (or when they hit you, they are sailors *Shurg*)
+- Trader behave differently according to your local reputation
+  - Rep 0-3: Don't yield way unless in narrow waterway. Curse you when you hit them (even if it's them hit you)
+  - Rep 4-6: Trader will greet you, steer clear of your way, but still curse you when you hit them.
+  - Rep 7-10: Trader will praise and look highly on you, stop to let you pass or even back away. Apologize when you hit them. When you enter port, the trader park near the trade office will move to anchorage to let you moor close to trade office.
 - They use simplified physic, so they will still sail in iron with their square blow back and move differently on water than normal ship
 - Their speed will be affect by wind strength and directions.
 - Tavern sailor now will prioritize to tell you latest depart ship with more precise time and ship infos. 
@@ -158,6 +166,42 @@
 - Add a toggle option in trade book to make bought/loaned cargo directly goes into cart, you will need to hire cart service first
   - Cart Transportation fee will be 10x if using this function
 - Same toggle option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
+## Establish Trade office
+<img width="3840" height="2160" alt="20DAA3~1" src="https://github.com/user-attachments/assets/f06930f4-6917-474e-be98-77daf2c2c824" />
+<img width="3840" height="2160" alt="202611~2" src="https://github.com/user-attachments/assets/8b8ddb90-f0b7-4354-b45a-b6de5f6ab5b1" />
+
+- Unlock after rep 6.
+- Once you bought the house, there will be a option to pay 10% additional to turn it into trade office.
+- A table will be added and mission scroll on top of it. This is your access to Trade office feature.
+- In Trade office UI, you can pick upgrade to invest in, unlocking various feature
+- Treasury: Basis of your operation. All what your office earn and spend will be taken from here (upgrade take from your own money)
+  - Provide free exchange currency service.
+  - Shared within region. For example GRC treasury and Oasis Treasury will access to same one.
+- Clerk: Hire a clerk to manage office for you. You need this to unlock all future update. You need to pay clerk salary
+  - Clerk will provide you Tavern Sailor's info when you click him/her.
+  - Clerk take salary from treasury, you cannot access to Office UI if you default it's salary. After 30 days of default clerk will quit
+  - With player model mod, you can customlized your clerk apperance. Without the mod it will assign random one for you.
+  - You can move clerk to any position you like, even outside of office. Press Q/E to rotate the clerk.
+- Cart Contract: Cart service become free in office's port. Include the service from trade book. There will be a new cart guy show up beside your office.
+- Trade fleet: Require Shipwright and Transportation mod 0.2.0 or higher. Manage at office UI.
+  - Assign ships in your storage to your trader fleet, assign it's route and it earn gold for you
+  - It will become new visible trader on map, and it will look like how your donated ship is.
+    - Fisherman's Staysail is not supported, since it require custom script that trader don't know how to use.
+  - There will be a short freeze when new trader is created (game adding new ship).
+  - Each office can support 3 ship. So each region could get 6 ship total.
+  - There will be a new tab in treasury UI to see trade fleet's statistic.
+- Local office cooperation: Add trade book to your office
+  - Everything this port produce will be 10% cheaper if you buy from here (it still spawn at other office's spawning area). 
+  - You cannot sell back the goods you bought here to local port.
+  - You can buy all unsealable crate here with a higher price, even if it is not produce locally, but there is a 10 crate/day limit.
+    - Good sold in this way will have their stock number be Dark Blue
+  - You cannot loaned in office tradebook. 
+- Unique Item purchase: Allow you to purchase item in office with a 10% increase price. Access from office UI. Require Local office cooperation.
+  - 3 category: vaniila unique item, regional varient and modded item.
+  - Vanilla unique item like big lamp, blue lantern, big spyglass, potions, totems, plant
+  - Regional varient: Buy regional furniture, navigation tools and knifes
+  - Modded Item: Most of the modded item should be here.
+- Crew recruitment: Require Crew mod. You can hire crew here, it will be a different pool from other office.
 ## Taking Loan
 <img width="3840" height="2160" alt="208E48~1" src="https://github.com/user-attachments/assets/9866c668-7421-4560-92a7-5f5f60a0a645" />
 
