@@ -10,6 +10,7 @@
   - Increase all port's production and demand, separate port into 4 levels, and make it grows overtime(no visual change)
   - Dynamic demand events, creating more variety and profitable trade route, but NPC trader will compete with you. 
   - Visible trading ship trading in the world, increase the sense of competition and make world more alive.
+  - Establish your own trade office. Hire your own visible trader to earn for you on map, along with other QoL upgrade.
   - Tradebook QoL change: allow bulk trading, loading into/selling from cart service
   - Ship renting, Cargo loaning and Ship/house loaning system, replace the not-working vanilla reputation price discount.
   - Water damage and Fragile goods system, provide more decision for cargo placement and shipment.
