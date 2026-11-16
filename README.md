@@ -441,6 +441,6 @@
 - Uninstall preparation: Click this before you remove this mod mid-save.
 - Blue outline for wet cargo: toggle on/off.
 - Plank hammer time: 0s - 20s. Default 20s.
-- Plank repair amount: fixing fee equivelent(default) or 0.5% per plank.
+- Plank repair amount: fixing fee equivelent(default) or x% per plank(slider).
 - Plank/pole dimension adjustment hotkey change
 - Plank/pole weight hint: Default off.
