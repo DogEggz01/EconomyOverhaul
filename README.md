@@ -204,6 +204,13 @@
   - Regional varient: Buy regional furniture, navigation tools and knifes
   - Modded Item: Most of the modded item should be here.
 - Crew recruitment: Require Crew mod. You can hire crew here, it will be a different pool from other office.
+- Office Wharf: Your own pier beside office with shipyard function, and storage/transport/assign ship to trader function if Shipwright and Transportation mod installed.
+  - Only available in non captial office.
+  - All the office trade book's cargo will now spawn at office wharf instead, you can also place your cargo here and it can be sold from office tradebook or original office trade book.
+  - The pier also act as shipyard, there will be a wharfmaster spawn on the pier, you can click the shipyard document to enter shipyard.
+  - Cleaning and repairing is free in office wharf
+  - You can customlized how wharfmaster looks, just like clerk, but cannot move it's position.
+  
 ## Taking Loan
 <img width="3840" height="2160" alt="208E48~1" src="https://github.com/user-attachments/assets/9866c668-7421-4560-92a7-5f5f60a0a645" />
 
@@ -425,6 +432,7 @@
 ## Configurator options
 - Water damage: toggle on/off. Default on
 - Water damage hint: show when pointing at cargo. Default on
+- Water damage speed and Drying speed options.
 - Cargo Cover ratio: show when pointing at cargo. Default off
 - Fragile cargo damage: Toggle on/off. Default on.
 - Fragile cargo hint: default on.
