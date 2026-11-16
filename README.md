@@ -208,7 +208,7 @@
   - Only available in non captial office.
   - All the office trade book's cargo will now spawn at office wharf instead, you can also place your cargo here and it can be sold from office tradebook or original office trade book.
   - The pier also act as shipyard, there will be a wharfmaster spawn on the pier, you can click the shipyard document to enter shipyard.
-  - Cleaning and repairing is free in office wharf
+  - Cleaning, repairing and shipyard fee is free in office wharf. If Shipwright and Transportation is installed, storage fee is also free.
   - You can customlized how wharfmaster looks, just like clerk, but cannot move it's position.
   
 ## Taking Loan
