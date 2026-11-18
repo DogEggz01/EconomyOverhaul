@@ -8,18 +8,17 @@ using Object = UnityEngine.Object;
 
 namespace EconomyOverhaul
 {
-    // ---- Trade office (the user's request of 2026-11-06; TRADE_OFFICE_DRAFT.md: the user's answers in §3A and §3B, the design as built in §4) ----
+    // ---- Trade office ----
     // A bought house turned into an office: a sign beside the door, the port's own office table with its paper (the office's scroll), and
-    // the upgrades bought there. Every part hangs on the port's island at a fixed island-local pose (§3B "The office's spots", the poses of
-    // run os-22), built while the player is near and gone when far, so nothing runs away from the island.
+    // the upgrades bought there. Every part hangs on the port's island at a fixed island-local pose, built while the player is near and gone
+    // when far, so nothing runs away from the island.
     public static partial class Rules
     {
-        // Converting needs reputation 6 in the house's region at that moment (Q4); the office keeps working if it falls later.
+        // Converting needs reputation 6 in the house's region at that moment; the office keeps working if it falls later.
         public const int OfficeLevel = 6;
-        // 10% of the house's price (the user's Q31), in Gold, rounded up: 17 to 130.
+        // 10% of the house's price, in Gold, rounded up: 17 to 130.
         public static int OfficePrice(int housePrice) => Math.Max(1, (int)Math.Ceiling(housePrice * .1));
-        // Moving the clerk (ClerkPlacer): Q/E held turn him at 60 degrees a second (the user, 2026-11-09: "this is too fast, 60 degree a second",
-        // in place of Claude's 90); dir -1 left (Q), +1 right (E); the heading kept in [0, 360).
+        // Moving the clerk (ClerkPlacer): Q/E held turn him at 60 degrees a second; dir -1 left (Q), +1 right (E); the heading kept in [0, 360).
         public const float ClerkTurnRate = 60f;
         public static float ClerkTurn(float yaw, int dir, float seconds)
         {
@@ -33,25 +32,29 @@ namespace EconomyOverhaul
             double h = yaw * Math.PI / 360.0;
             return new Quaternion(0f, (float)Math.Sin(h), 0f, (float)Math.Cos(h));
         }
-        // The move's hint in the user's words (2026-11-09: "Aim at where clerk stand. Left click or R to place. Q/E to rotate. Right click or F to
-        // cancel. Make this notification show for 5 sec."), naming the player's own keys (the game's bindings; null when one is unbound or a mouse
-        // button: that part drops out). Shown ClerkMoveHintSeconds.
+        // The move's hint, naming the player's own keys (the game's bindings; null when one is unbound or a mouse button: that part drops out).
+        // Shown ClerkMoveHintSeconds.
         public const float ClerkMoveHintSeconds = 5f;
         public static string ClerkMoveHint(string place, string cancel, string turnLeft, string turnRight) =>
             "Aim at where clerk stand. Left click" + (place != null ? " or " + place : "") + " to place. " +
             (turnLeft != null && turnRight != null ? turnLeft + "/" + turnRight + " to rotate. " : turnLeft != null ? turnLeft + " to rotate. " : turnRight != null ? turnRight + " to rotate. " : "") +
             "Right click" + (cancel != null ? " or " + cancel : "") + " to cancel.";
-        // The upgrades' prices in Gold (Q31: treasury 100, fleet 200, unique items 500; the others as proposed).
+        // The upgrades' prices in Gold.
         public const int TreasuryPrice = 100, ClerkPrice = 50, CartPrice = 100, CooperationPrice = 500, CrewPrice = 100, FleetPrice = 200, ItemsPrice = 500;
-        // The clerk's salary: about 1 gold-equivalent a day (Q31), in the region's coin at the daily rate, at least 1 coin.
+        // The office's wharf: 1,500 Gold, only at the offices not in a main city: Serpent Isle (204), Oasis (205), Firefly Grotto (206).
+        public const int WharfPrice = 1500;
+        public static bool WharfHouse(int house) => house == 204 || house == 205 || house == 206;
+        // What a ship leaving the trade fleet pays into the treasury (OfficeFleet.Leave): 80% of its hull's price in Gold, nothing for an original kept in
+        // Shipwright and Transport's storage, which goes back to it.
+        public static int FleetLeavePay(int hullPrice, bool kept) => kept ? 0 : (int)Math.Floor(hullPrice * .8);
+        // The clerk's salary: about 1 gold-equivalent a day, in the region's coin at the daily rate, at least 1 coin.
         public const double ClerkSalaryValue = 1 / FxRules.Gold;
         public static int ClerkSalary(double dailyRate) => Math.Max(1, (int)Math.Round(ClerkSalaryValue * dailyRate));
-        // His wages add up for at most 30 days; unpaid for 30 days, he quits and the clerk must be bought again (the user, 2026-11-08: "up to 30
-        // days, if after 30 days not paid, clerk quit and you need to re unlock the clerk").
+        // His wages add up for at most 30 days; unpaid for 30 days, he quits and the clerk must be bought again.
         public const int ClerkOwedDays = 30;
         // The cooperation book's "a good the port doesn't trade" (sold from other sources, if it can be unsealed): not in stock now and not made
-        // there (production over 0, the game's own test in IslandMarket.EconCycle). The user (the deep review of 2026-11-09, question 3c): "judge by
-        // what port makes": a good the port makes but has sold out is not sold from other sources; it waits for the port's own stock.
+        // there (production over 0, the game's own test in IslandMarket.EconCycle). A good the port makes but has sold out is not sold from other
+        // sources; it waits for the port's own stock.
         public static bool OfficeAbsent(bool inStock, float production) => !inStock && !(production > 0f);
         // A fleet ship's whole-life tally (OfficeState.fleetPorts, fleetGoods): "index:count" pairs spaced. Tally adds to an index's count; Most is
         // the index with the largest count (the first of equals in the tally's order; -1 and 0 when empty); an unreadable pair is skipped.
@@ -61,6 +64,30 @@ namespace EconomyOverhaul
             var ic = System.Globalization.CultureInfo.InvariantCulture;
             return string.Join(" ", d.Select(kv => kv.Key.ToString(ic) + ":" + kv.Value.ToString(ic)).ToArray());
         }
+        // A trade office's wharf berth for this ship: a trade fleet ship in port (arrived, not yet left: destination -1) at that port, where a wharf of one of
+        // the player's offices stands; any office's, at every stay.
+        public static bool WharfBerthFor(bool fleetShip, int destination, int origin, int port, IEnumerable<int> wharfPorts) =>
+            fleetShip && destination < 0 && origin == port && port >= 0 && wharfPorts != null && wharfPorts.Contains(port);
+        // The order's lines free at an office wharf's yard: the game's "N: hull cleaning", "N: hull repair" and "N: shipyard fee" (Shipyard.UpdateOrder) and
+        // Sail Damage's "N: sail repair", each as its maker wrote it.
+        internal static readonly string[] WharfFreeLines = { "hull cleaning", "hull repair", "sail repair", "shipyard fee" };
+        // Each such line rewritten "0: <name>" in place; the amounts taken off, summed (read from the lines, so exactly what was added to the order's
+        // total). changed: each rewritten line's old and new text, for the order's text.
+        public static int FreeAtWharf(IList<string> lines, IList<string[]> changed = null)
+        {
+            int off = 0;
+            for (int i = 0; lines != null && i < lines.Count; i++)
+            {
+                string line = lines[i]; int c = line != null ? line.IndexOf(": ", StringComparison.Ordinal) : -1;
+                if (c <= 0 || Array.IndexOf(WharfFreeLines, line.Substring(c + 2)) < 0) continue;
+                if (!int.TryParse(line.Substring(0, c), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int n) || n == 0) continue;
+                string free = "0: " + line.Substring(c + 2);
+                off += n; lines[i] = free; changed?.Add(new[] { line, free });
+            }
+            return off;
+        }
+        // The order's total line as the game writes it (Shipyard.UpdateOrder: a total below 0 is a refund).
+        public static string OrderTotalLine(int total, string coin) => total < 0 ? "TOTAL: " + -total + " " + coin + " refund" : "TOTAL: " + total + " " + coin;
         public static Dictionary<int, int> ReadTally(string tally)
         {
             var d = new Dictionary<int, int>(); if (string.IsNullOrEmpty(tally)) return d;
@@ -78,7 +105,7 @@ namespace EconomyOverhaul
             foreach (var kv in ReadTally(tally)) if (kv.Value > count) { count = kv.Value; best = kv.Key; }
             return best;
         }
-        // The office's box: the daily rate, no fee, the live rates untouched (Q20). Sold coins are worth x / smooth[sold] in value, bought
+        // The office's box: the daily rate, no fee, the live rates untouched. Sold coins are worth x / smooth[sold] in value, bought
         // coins value x smooth[bought]; the live rates come back unchanged, so the booth's own confirm writes nothing new.
         public static FxExchange FlatExchange(double[] smooth, double[] live, int sold, int bought, int amount, bool requestBuy)
         {
@@ -94,14 +121,128 @@ namespace EconomyOverhaul
             q.Valid = true; q.Error = null; q.Sold = (int)x; q.Received = (int)receipt; q.GrossReceived = gross; q.Fee = 0; q.SellRate = live[sold]; q.BuyRate = live[bought];
             return q;
         }
+
+        // ---- The painted path at Oasis from the office's door to its wharf's ramp (the runtime is OasisPath) ----
+        // The line, island-local (x, z) pairs on Oasis's island root (scale 0.5, no turn), 126.41 m from the office door to the ramp's foot.
+        public static readonly float[] OasisPathLine = { -26.628f, -93.229f, -21f, -101f, -20f, -127f, -6f, -157f, -6f, -191f, 18f, -230f, 29f, -241f, 41f, -262f, 43f, -266f,
+            43f, -274f, 47f, -284f, 66.4647f, -320.456f };
+        // In world metres: full paint within OasisPathHalf of the line, then a smoothstep edge OasisPathSoft wide (Oasis House Fix's own road rule); the grass
+        // taken off where the paint is over OasisPathGrassOver (its rule); stone footsteps where it is OasisPathStoneOver or more (the path's middle 2.7 m).
+        public const float OasisPathHalf = .9f, OasisPathSoft = .9f, OasisPathGrassOver = .45f, OasisPathStoneOver = .5f;
+        // With Oasis House Fix's drive, paths and roads on, the path starts at J, OasisPathJ metres along the line, where that mod's road 7 turns east to the
+        // market (its roads cover the line before J).
+        // shortcut: J copied from Oasis House Fix 1.4.6's road list; read it from that mod's roads if a later version moves them.
+        public const float OasisPathJ = 32.4f;
+        // The game's own TerrainLayer painted (texture Brick_05, tile 12 m), found once by name, and the paint grid the path is drawn at: Oasis House Fix's
+        // 1024, which the mod makes itself when no other mod has.
+        public const string OasisPathLayer = "Cobblestone Chaotic Red";
+        public const int OasisPathGrid = 1024;
+        // The line's length, a point s along it and the line from s0 on ((x, z) as Vector2, any one frame).
+        public static float PathLength(IList<Vector2> p) { float s = 0f; for (int i = 1; i < p.Count; i++) s += (p[i] - p[i - 1]).magnitude; return s; }
+        public static Vector2 PathAt(IList<Vector2> p, float s)
+        {
+            for (int i = 1; i < p.Count; i++) { float L = (p[i] - p[i - 1]).magnitude; if (s <= L || i == p.Count - 1) return Vector2.Lerp(p[i - 1], p[i], L > 0f ? Mathf.Clamp01(s / L) : 0f); s -= L; }
+            return p.Count > 0 ? p[p.Count - 1] : Vector2.zero;
+        }
+        public static List<Vector2> PathFrom(IList<Vector2> p, float s0)
+        {
+            var r = new List<Vector2> { PathAt(p, s0) }; float s = 0f;
+            for (int i = 1; i < p.Count; i++) { s += (p[i] - p[i - 1]).magnitude; if (s > s0 + .01f) r.Add(p[i]); }
+            return r;
+        }
+        // How far along the line its nearest point to (x, z) lies (the path's lamps before J, OfficeWharves.PathLampShown).
+        public static float PathAlong(IList<Vector2> p, float x, float z)
+        {
+            float best = float.MaxValue, along = 0f, s = 0f;
+            for (int i = 1; i < p.Count; i++)
+            {
+                float x0 = p[i - 1].x, z0 = p[i - 1].y, dx = p[i].x - x0, dz = p[i].y - z0, L2 = dx * dx + dz * dz;
+                float t = L2 > 0f ? Mathf.Clamp01(((x - x0) * dx + (z - z0) * dz) / L2) : 0f, ex = x0 + dx * t - x, ez = z0 + dz * t - z, d = ex * ex + ez * ez, L = (float)Math.Sqrt(L2);
+                if (d < best) { best = d; along = s + t * L; }
+                s += L;
+            }
+            return along;
+        }
+        // The parts of a wharf's pier pieces drawn twice in one place (OfficeWharves.DropDoubled): the pieces are laid end to end as long as their pole pairs
+        // stand apart, so each joint holds two identical pairs whose tops fight over depth and flicker. Of the parts of one kind (one mesh) standing within 5 cm
+        // of each other, turned within 1 degree and at one scale, the first is kept; the indices of the later ones are returned.
+        public const float DoubledDistance = .05f, DoubledDegrees = 1f;
+        public static List<int> Doubled(IList<int> kinds, IList<Vector3> places, IList<Quaternion> turns, IList<Vector3> scales)
+        {
+            var drop = new List<int>(); var kept = new List<int>();
+            for (int i = 0; i < places.Count; i++)
+            {
+                bool twin = false;
+                foreach (int k in kept)
+                {
+                    if (kinds[k] != kinds[i] || (places[k] - places[i]).magnitude > DoubledDistance || (scales[k] - scales[i]).magnitude > .005f) continue;
+                    float dot = Math.Min(1f, Math.Abs(Quaternion.Dot(turns[k], turns[i])));
+                    if (2f * (float)Math.Acos(dot) * Mathf.Rad2Deg <= DoubledDegrees) { twin = true; break; }
+                }
+                if (twin) drop.Add(i); else kept.Add(i);
+            }
+            return drop;
+        }
+        public static float PathDistance(IList<Vector2> p, float x, float z)
+        {
+            float best = float.MaxValue;
+            for (int i = 1; i < p.Count; i++)
+            {
+                float x0 = p[i - 1].x, z0 = p[i - 1].y, dx = p[i].x - x0, dz = p[i].y - z0, L2 = dx * dx + dz * dz;
+                float t = L2 > 0f ? Mathf.Clamp01(((x - x0) * dx + (z - z0) * dz) / L2) : 0f, ex = x0 + dx * t - x, ez = z0 + dz * t - z;
+                best = Math.Min(best, ex * ex + ez * ez);   // squared; one root at the end gives the same float (the root is monotonic)
+            }
+            return best == float.MaxValue ? best : (float)Math.Sqrt(best);
+        }
+        public static float PathWeight(float distance)
+        {
+            float d = distance - OasisPathHalf, w = d <= 0f ? 1f : Mathf.Clamp01(1f - d / OasisPathSoft);
+            return w * w * (3f - 2f * w);
+        }
+        // A cell of a paint array ([y, x, layer], each cell's layers summing to 1) painted to w in layer li, the others scaled so the sum stays 1. False when
+        // the cell holds that much already (within 1/250).
+        public static bool PaintCell(float[,,] a, int y, int x, int li, float w)
+        {
+            float was = a[y, x, li]; if (w <= was + .004f) return false;
+            float k = was < .999f ? (1f - w) / (1f - was) : 0f; int L = a.GetLength(2);
+            for (int l = 0; l < L; l++) a[y, x, l] = l == li ? w : a[y, x, l] * k;
+            return true;
+        }
+        // A cell's painted share taken off (the put-back): layer li back to its weight o, the share given to the other layers in proportion to their mix in the
+        // copy taken before the paint (mix, a weight a layer), so the sum stays 1. Never by scaling the others up by (1 - o) / (1 - c): the terrain keeps 8-bit
+        // weights, and a cell painted to 254/255 keeps its last 1/255 in one layer, which that scaling hands the whole cell.
+        public static void TakeOff(float[,,] a, int y, int x, int li, float o, float[] mix)
+        {
+            int L = a.GetLength(2); float share = a[y, x, li] - o; if (share <= 0f) return;
+            float s = 0f; for (int l = 0; l < L; l++) if (l != li) s += mix[l];
+            for (int l = 0; l < L; l++) if (l != li) a[y, x, l] += s > 0f ? share * mix[l] / s : share / Math.Max(1, L - 1);
+            a[y, x, li] = o;
+        }
+        // The paint grid made twice as fine (the mod's own, when no other mod has made Oasis's grid OasisPathGrid): each fine cell bilinear from the four
+        // coarse cells round its centre, as Oasis House Fix 1.4.6 resamples but without its firming of the sand (that firming is its own roads' look), so the
+        // ground looks as before and every cell still sums to 1. Pure arrays: run on a worker thread.
+        public static float[,,] FinerGrid(float[,,] a)
+        {
+            int n = a.GetLength(0), L = a.GetLength(2), m = n * 2; var b = new float[m, m, L];
+            for (int i = 0; i < m; i++)
+            {
+                float fi = (i + .5f) * .5f - .5f; int i0 = Math.Min(n - 1, Math.Max(0, (int)Math.Floor(fi))), i1 = Math.Min(n - 1, i0 + 1); float ti = Mathf.Clamp01(fi - i0);
+                for (int j = 0; j < m; j++)
+                {
+                    float fj = (j + .5f) * .5f - .5f; int j0 = Math.Min(n - 1, Math.Max(0, (int)Math.Floor(fj))), j1 = Math.Min(n - 1, j0 + 1); float tj = Mathf.Clamp01(fj - j0);
+                    float w00 = (1f - tj) * (1f - ti), w01 = tj * (1f - ti), w10 = (1f - tj) * ti, w11 = tj * ti;
+                    for (int l = 0; l < L; l++) b[i, j, l] = a[i0, j0, l] * w00 + a[i0, j1, l] * w01 + a[i1, j0, l] * w10 + a[i1, j1, l] * w11;
+                }
+            }
+            return b;
+        }
     }
 
-    // The offices' save (§3B "The save and the freeze": arrays, not lists of a new class; an office's upgrades one int of bits; a treasury
-    // int[]; nothing that only grows). Optional on SaveState: an older save has none, read back as no office.
-    // Most of its fields have no [OptionalField]: no released save holds an office yet (only test saves do), and the binary reader leaves a
-    // field missing from the data null or 0 (measured on the host: EconomyOverhaul.Tests' BinarySave.cs), which the code reads as noted at
-    // each field. A field added after the office's first release needs [OptionalField] (the save rule, SaveState's comment); BinarySave.cs
-    // records each field's flag.
+    // The offices' save: arrays, not lists of a new class; an office's upgrades one int of bits; a treasury int[]; nothing that only grows.
+    // Optional on SaveState: an older save has none, read back as no office.
+    // Its fields from before the office's first release (1.2.0) have no [OptionalField] (no released save held them), and the binary reader leaves a
+    // field missing from the data null or 0, which the code reads as noted at each field. A field added after the office's first release
+    // needs [OptionalField] (SaveState's comment); EconomyOverhaul.Tests' BinarySave.cs records each field's flag.
     [Serializable] public sealed class OfficeState
     {
         public int version = 1;
@@ -113,65 +254,65 @@ namespace EconomyOverhaul
         // Per house: the clerk's unpaid wages, in the region's coin; the last day his salary was settled.
         public int[] wages = new int[6];
         public int[] salaryDay = new int[6];
-        // Per house: the day his wages first went unpaid, plus 1 (0: none owed); after 30 days of it he quits (the user, 2026-11-08). Null in
-        // a test save made before it (no [OptionalField]: see the class's comment), read as none owed.
+        // Per house: the day his wages first went unpaid, plus 1 (0: none owed); after 30 days of it he quits. Null in a test save made before it
+        // (no [OptionalField]: see the class's comment), read as none owed.
         public int[] owedSince;
         // Per house: the clerk's outfit (the game's NPC outfits, TraderHulls.Outfits), plus 1; 0 until one is picked.
         public int[] clerkOutfit = new int[6];
-        // Per house, 7 floats: where the player put the clerk (Q18), his island-local position and turn (a quaternion); all 0 until moved.
+        // Per house, 7 floats: where the player put the clerk, his island-local position and turn (a quaternion); all 0 until moved.
         public float[] clerkSpot;
-        // Per house: his look from Player Model's screen (Q16, "only B"), as that mod writes it; null until edited. And the player's own look
+        // Per house: his look from Player Model's screen, as that mod writes it; null until edited. And the player's own look
         // while the screen edits the clerk's (put back at the next load if the game stopped in between).
         public string[] clerkLook;
         public string playerLook;
-        // Per house: the crew candidates hired (bits 0-4) in the 7-day period crewPeriod (§4.8: the candidates come from a seed of the office and
-        // the period, so only these bits are saved).
+        // Per house: the wharf keeper's look from Player Model's screen, as clerkLook; null until edited. Added after 1.2.1, so [OptionalField]: a save
+        // without it reads none.
+        [System.Runtime.Serialization.OptionalField] public string[] keeperLook;
+        // Per house: the crew candidates hired (bits 0-4) in the 7-day period crewPeriod (the candidates come from a seed of the office and the
+        // period, so only these bits are saved).
         public int[] crewHired;
         public int[] crewPeriod;
-        // Per house: the crates not on the local market bought at its book on day coopDay (at most 10 a day, Q22).
+        // Per house: the crates not on the local market bought at its book on day coopDay (at most 10 a day).
         public int[] coopDay;
         public int[] coopCount;
-        // The trade fleet (§4.5), per ship in the order of SaveState.playerFleet: its office's house, hull, kind (OfficeFleet.Kinds), its name
+        // The trade fleet, per ship in the order of SaveState.playerFleet: its office's house, hull, kind (OfficeFleet.Kinds), its name
         // (Shipwright's), its rig as trader plan text (null: the stock rig), the trip under way's cost and its last trip's share (value units),
         // its lifetime share, 30 day sums for the estimate (30 a ship) and the day of the newest, the day it joined, whether it waits for its fee.
-        // Its kind is -1 (OfficeFleet.NotAssigned) until the player sets its route (the user, 2026-11-08: "newly add trader shouldn't be auto assign
-        // route, it should be assign by player then start trading").
+        // Its kind is -1 (OfficeFleet.NotAssigned) until the player sets its route.
         public int[] fleetHouse, fleetHull, fleetKind, fleetCost, fleetLast, fleetLife, fleetSums, fleetSumDay, fleetJoined, fleetHeld;
         // Each ship's day its route was first set (the estimate counts the ship's days from it, not the days it waited for a route); 0 before, and
         // in a test save made before routes waited for the player (no [OptionalField]: see the class's comment).
         public int[] fleetStart;
-        // Each ship's last trips with a sale (OfficeFleet.TripLog a ship, newest first; the user, 2026-11-08: "the bottom show the trade history (where
-        // he sold, how much profit earned that trip(the share that gave to you)"): the day, the port the ship sold at plus 1 (0: none), the coin and
-        // the signed coins of its share.
+        // Each ship's last trips with a sale (OfficeFleet.TripLog a ship, newest first): the day, the port the ship sold at plus 1 (0: none), the
+        // coin and the signed coins of its share.
         public int[] fleetTripDay, fleetTripPort, fleetTripCoin, fleetTripCoins;
-        // Beside them, each logged trip's cargo of the most value (the user, 2026-11-08 evening: "At the history between port and profit, add traded
-        // cargo also, show cargo with most value and it's quantity"): its good plus 1 (0: none) and its crates of it.
+        // Beside them, each logged trip's cargo of the most value: its good plus 1 (0: none) and its crates of it.
         [System.Runtime.Serialization.OptionalField] public int[] fleetTripGood, fleetTripCrates;
-        // Each ship's whole life in the fleet (the user, the same evening: "most visited port, most sold goods and biggest profit trip(show destination
-        // and trip profit)"; asked whether the whole life or the trips kept: "Whole life"): its arrivals by port and its crates sold by good, as
-        // "index:count" pairs spaced; its biggest trip by the share's value: the port plus 1 (0: none yet), the coin, the signed coins, the value units.
+        // Each ship's whole life in the fleet: its arrivals by port and its crates sold by good, as "index:count" pairs spaced; its biggest trip by
+        // the share's value: the port plus 1 (0: none yet), the coin, the signed coins, the value units.
         [System.Runtime.Serialization.OptionalField] public string[] fleetPorts, fleetGoods;
         [System.Runtime.Serialization.OptionalField] public int[] fleetBestPort, fleetBestCoin, fleetBestCoins, fleetBestValue;
-        // Each ship's last trip in the coin it was paid in (the user, 2026-11-08: "Last trip show the last local currency it earn"): the coin and
-        // the signed coins of its share.
+        // Each ship's last trip in the coin it was paid in: the coin and the signed coins of its share.
         public int[] fleetLastCoin, fleetLastCoins;
         public string[] fleetName, fleetRig;
-        // The next fleet ship's id (§4.5: never reused, as a reused id leaves a stale departure); 0 before the first.
+        // Each ship's original kept hidden in Shipwright and Transport's storage while it trades: the original's save index; 0 for a copy, which joined as a
+        // sale. Added after 1.2.1, so [OptionalField]: a save without it reads 0.
+        [System.Runtime.Serialization.OptionalField] public int[] fleetKept;
+        // The next fleet ship's id (never reused, as a reused id leaves a stale departure); 0 before the first.
         public int fleetNextId;
         // The treasury's records (OfficeRecords, the Treasury book's right page), newest last: the day, the office (house), what (RecordKind), the
         // coin and the signed amount. Null in a test save made before them (no [OptionalField]: see the class's comment).
         public int[] recDay, recHouse, recKind, recCoin, recAmount;
     }
 
-    [Flags] internal enum OfficeUpgrade { None = 0, Office = 1, Treasury = 2, Clerk = 4, Cart = 8, Cooperation = 16, Crew = 32, Fleet = 64, Items = 128 }
+    [Flags] internal enum OfficeUpgrade { None = 0, Office = 1, Treasury = 2, Clerk = 4, Cart = 8, Cooperation = 16, Crew = 32, Fleet = 64, Items = 128, Wharf = 256 }
 
     internal static class Office
     {
         internal static readonly int[] Houses = { 201, 202, 203, 204, 205, 206 };
         internal const string TransportGuid = "DogEggz.ShipwrightTransport";
-        // Only the trade fleet needs Shipwright and Transport (its ships join from that mod's storage); the office and its other upgrades don't
-        // (the user, 2026-11-08: "make only trader fleet locked behind shipwright mod, other feature don't require it"). A fleet made earlier keeps
-        // sailing without it (Q2).
+        // Only the trade fleet needs Shipwright and Transport (its ships join from that mod's storage); the office and its other upgrades don't.
+        // A fleet made earlier keeps sailing without it.
         internal static bool Enabled => BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(TransportGuid);
         internal static bool CrewInstalled => BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey("com.zorkinian.virtualcrew");
         internal static int Slot(int house) => house >= 201 && house <= 206 ? house - 201 : -1;
@@ -205,7 +346,7 @@ namespace EconomyOverhaul
             if (ports.TryGetValue(house, out var p) && p) return p;
             var b = Pledges.Find(house); if (!b || Port.ports == null) return null;
             // Across the water only: a far island sinks with its distance from the player (IslandHorizon), its port kilometres under the house
-            // that doesn't (ocart-1: from Fort Aestrin, Firefly Grotto's house found Fort Aestrin's port).
+            // that doesn't (from Fort Aestrin, Firefly Grotto's house would find Fort Aestrin's port).
             p = Port.ports.Where(x => x).OrderBy(x => Flat(x.transform.position - b.transform.position)).FirstOrDefault();
             if (p) ports[house] = p;
             return p;
@@ -235,12 +376,9 @@ namespace EconomyOverhaul
         }
 
         internal sealed class UpgradeInfo { internal OfficeUpgrade Bit, Needs; internal string Name, Text; internal int Price; internal bool Built; }
-        // In the scroll's order, top to bottom (the user, 2026-11-08: "Treasury / clerk / Cart Contrct / Trade fleet / Local office cooperation /
-        // Unique item purchase / Office wharf(after we build it) / Crew recruitment, only draw this option when Crew mod is installed"). The treasury
-        // comes first so the clerk's salary is paid from it; everything after the clerk needs him; unique items need the cooperation. The wharf
-        // waits for its own build (choice 9: "add later is fine after we build wharf"). Texts in the user's words (2026-11-08), their spelling
-        // corrected at their word ("correct the spelling for me"; "unsealable" kept: the design's word for crates that can be opened), wrapped to the
-        // scroll when shown; the clerk's {0} {1} his wage and the region's coin.
+        // In the scroll's order, top to bottom. The treasury comes first so the clerk's salary is paid from it; everything after the clerk needs him;
+        // unique items and the wharf need the cooperation. Texts wrapped to the scroll when shown ("unsealable": a crate that can be opened); the
+        // clerk's {0} {1} his wage and the region's coin.
         internal static readonly UpgradeInfo[] Upgrades =
         {
             new UpgradeInfo { Bit = OfficeUpgrade.Treasury, Needs = OfficeUpgrade.Office, Name = "Treasury", Price = Rules.TreasuryPrice, Built = true,
@@ -255,14 +393,19 @@ namespace EconomyOverhaul
                 Text = "The office's own trade book, connected to the local market. You can buy goods here with 10% off. It also provides all the unsealable trade goods, even if the local port doesn't produce them. They will be at a higher price, with a limit of 10 crates per day." },
             new UpgradeInfo { Bit = OfficeUpgrade.Items, Needs = OfficeUpgrade.Cooperation, Name = "Unique item purchase", Price = Rules.ItemsPrice, Built = true,
                 Text = "Buy unique items, regional variant items and modded items sold at other ports, at a 10% higher price." },
+            new UpgradeInfo { Bit = OfficeUpgrade.Wharf, Needs = OfficeUpgrade.Cooperation, Name = "Office wharf", Price = Rules.WharfPrice, Built = true,
+                Text = "A pier by the office with a shipyard. Cargo bought at the office's trade book is delivered there." },
             new UpgradeInfo { Bit = OfficeUpgrade.Crew, Needs = OfficeUpgrade.Clerk, Name = "Crew recruitment", Price = Rules.CrewPrice, Built = true,
                 Text = "Requires the Virtual Crew mod. A separate pool to recruit crew from." },
         };
         internal static UpgradeInfo Info(OfficeUpgrade u) => Upgrades.First(x => x.Bit == u);
-        // The upgrades the scroll lists: crew recruitment only with Virtual Crew loaded (the user: "only draw this option when Crew mod is installed").
-        internal static UpgradeInfo[] Listed => CrewInstalled ? Upgrades : Upgrades.Where(u => u.Bit != OfficeUpgrade.Crew).ToArray();
-        // An upgrade at work: bought and the office live; those that need the clerk only while he works there (the user, 2026-11-08, when he
-        // quits: "Debt gone, upgrades paused": they stay bought and work again once a clerk is bought).
+        // The upgrades a house's scroll lists: crew recruitment only with Virtual Crew loaded, the wharf only at the three offices not in a main city
+        // (Rules.WharfHouse). At most 8 rows (the scroll's).
+        internal static UpgradeInfo[] ListedAt(int house) => ListedAt(house, CrewInstalled);
+        internal static UpgradeInfo[] ListedAt(int house, bool crew) =>
+            Upgrades.Where(u => (u.Bit != OfficeUpgrade.Crew || crew) && (u.Bit != OfficeUpgrade.Wharf || Rules.WharfHouse(house))).ToArray();
+        // An upgrade at work: bought and the office live; those that need the clerk only while he works there (when he quits they stay bought and
+        // work again once a clerk is bought).
         internal static bool Working(int house, OfficeUpgrade u) => Live(house) && Has(house, u) && (u == OfficeUpgrade.Office || u == OfficeUpgrade.Treasury || u == OfficeUpgrade.Clerk || Has(house, OfficeUpgrade.Clerk));
         // Why the house can't become an office now (null: it can).
         internal static string ConvertRefusal(int house)
@@ -297,6 +440,7 @@ namespace EconomyOverhaul
             if (!Live(house)) return "Not available";
             if (Has(house, u)) return "Bought";
             if (!info.Built) return "Not ready in this build";
+            if (u == OfficeUpgrade.Wharf && !Rules.WharfHouse(house)) return "Not at this office";
             if (u == OfficeUpgrade.Fleet && !Enabled) return "Needs Shipwright and Transport";
             if (!Has(house, info.Needs)) return "Needs " + Info(info.Needs == OfficeUpgrade.Office ? OfficeUpgrade.Treasury : info.Needs).Name.ToLowerInvariant().Insert(0, "the ");
             if (u == OfficeUpgrade.Crew && !CrewInstalled) return "Needs the Virtual Crew mod";
@@ -319,7 +463,7 @@ namespace EconomyOverhaul
             return true;
         }
 
-        // ---- The treasury: one per region, its coins shared by the region's offices (the user's text) ----
+        // ---- The treasury: one per region, its coins shared by the region's offices ----
         internal static int Treasury(int region, int coin) { var s = World.State?.office; return s?.treasury != null && region >= 0 && region < 3 && coin >= 0 && coin < 4 ? s.treasury[region * 4 + coin] : 0; }
         // Coins from the wallet into the treasury of the office's region, or back, recorded under the office; null when done, else why not.
         internal static string Move(int house, int coin, int amount, bool deposit)
@@ -349,7 +493,7 @@ namespace EconomyOverhaul
             return null;
         }
 
-        // ---- The clerk's salary (Q17): due at midnight from the region's treasury; what it can't pay adds up as wages owed ----
+        // ---- The clerk's salary: due at midnight from the region's treasury; what it can't pay adds up as wages owed ----
         internal static int Salary(int house) => Rules.ClerkSalary(Fx.State.smooth[Coin(house)]);
         internal static int Wages(int house) { var s = World.State?.office; int i = Slot(house); return s?.wages != null && i >= 0 ? s.wages[i] : 0; }
         internal static void Midnight(int day)
@@ -359,7 +503,7 @@ namespace EconomyOverhaul
             foreach (int house in Houses)
             {
                 int i = Slot(house); if (!Has(house, OfficeUpgrade.Clerk)) continue;
-                // A seized office pays no salary (Q5); the days it was taken aren't owed later.
+                // A seized office pays no salary; the days it was taken aren't owed later.
                 if (!Live(house)) { if (s.owedSince != null && i < s.owedSince.Length && s.owedSince[i] > 0) s.owedSince[i] += Math.Max(0, day - s.salaryDay[i]); s.salaryDay[i] = day; continue; }
                 int days = Mathf.Clamp(day - s.salaryDay[i], 0, Rules.ClerkOwedDays); s.salaryDay[i] = day;
                 if (days == 0) continue;
@@ -379,8 +523,7 @@ namespace EconomyOverhaul
         internal static int OwedDays(int house, int day) { var s = World.State?.office; int i = Slot(house); return s?.owedSince != null && i >= 0 && i < s.owedSince.Length && s.owedSince[i] > 0 ? Math.Max(0, day - (s.owedSince[i] - 1)) : 0; }
         // He quits (unpaid for 30 days): his debt goes with him, the clerk is no longer bought, and the upgrades after him pause until a clerk is
         // bought again (Working). His place stays; his look doesn't: the next clerk gets an outfit picked anew, and Player Model's look is cleared
-        // so the player can design him again (the user, 2026-11-08: "reroll the clerk appearance, If player model mod installed, let player
-        // redesign it").
+        // so the player can design him again.
         internal static void Quit(int house)
         {
             var s = State; int i = Slot(house);
@@ -404,9 +547,9 @@ namespace EconomyOverhaul
             return null;
         }
 
-        // ---- Bankruptcy (Q6, the user: "bankrupt make your office closed also (reset and house not owned anymore)") ----
+        // ---- Bankruptcy ----
         // The region's treasury to 0 and its offices closed: upgrades reset, each office's house no longer the player's, pledged or not. A house
-        // with no office keeps today's rule. Called after the lenders' own part (Bottomry.Bankruptcy), so a house a lender took is already gone.
+        // with no office is left alone here. Called after the lenders' own part (Bottomry.Bankruptcy), so a house a lender took is already gone.
         internal static void Bankruptcy(int region)
         {
             var s = World.State?.office; if (s == null) return;
@@ -424,9 +567,9 @@ namespace EconomyOverhaul
                 Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(house) + " closed by the bankruptcy.");
             }
         }
-        // A closed office's own record, all of it: its upgrades, the clerk's wages and their days, and (the deep review of 2026-11-09, question 3b:
-        // "reset those 5 too") the clerk's place, his outfit, his Player Model look, the crew hired there and today's cooperation count. The player's
-        // own look kept while Player Model's screen edits the clerk (playerLook) is the player's, not the office's: left.
+        // A closed office's own record, all of it: its upgrades, the clerk's wages and their days, the clerk's place, his outfit, his Player Model look, the
+        // crew hired there and today's cooperation count; and the wharf keeper's Player Model look (a wharf bought again starts in his region's outfit). The
+        // player's own look kept while Player Model's screen edits the clerk or the keeper (playerLook) is the player's, not the office's: left.
         internal static void ClearHouse(OfficeState s, int i)
         {
             if (s == null || i < 0 || i >= 6) return;
@@ -435,8 +578,9 @@ namespace EconomyOverhaul
             Zero(s.crewHired); Zero(s.crewPeriod); Zero(s.coopDay); Zero(s.coopCount);
             if (s.clerkSpot != null) for (int k = i * 7; k < i * 7 + 7 && k < s.clerkSpot.Length; k++) s.clerkSpot[k] = 0f;
             if (s.clerkLook != null && i < s.clerkLook.Length) s.clerkLook[i] = null;
+            if (s.keeperLook != null && i < s.keeperLook.Length) s.keeperLook[i] = null;
         }
-        // ---- "Prepare to uninstall" (the user's list item 6): the treasuries paid into the wallet, the office's objects gone, its data dropped ----
+        // ---- "Prepare to uninstall": the treasuries paid into the wallet, the office's objects gone, its data dropped ----
         internal static int Uninstall()
         {
             var s = World.State?.office; int paid = 0;
@@ -448,6 +592,7 @@ namespace EconomyOverhaul
                         long room = (long)int.MaxValue - PlayerGold.currency[c]; int moved = (int)Math.Min(v, room);   // a wallet below 0 (charged first) can't wrap
                         PlayerGold.currency[c] += moved; s.treasury[i] -= moved; paid += moved;
                     }
+            OfficeWharves.RemoveAll();   // the wharves' cleats too, a ship moored there let go first
             OfficeSites.Clear();
             OfficeCarts.Restore(); OfficeCarts.EmptySerpentIsle();
             World.State.office = null; World.State.playerFleet = null;
@@ -455,14 +600,13 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- The cart contract (§4.6, Q21): free carts at the office's port ----
+    // ---- The cart contract: free carts at the office's port ----
     // The port's carrier priced at 0 for transport and storage, as vanilla Sunspire's is (every fee scales from them: the cart's own, its storage,
     // and the trade book's cart delivery, NewMarket.cs CartDelivery). Not saved: set while the contract is live, put back otherwise (a seized or
-    // closed office, "Prepare to uninstall"). Serpent Isle has no carrier (its dude is switched off, §2.9): the office adds one for island 22,
-    // only where it is wanted (the user, 2026-11-08: "no carrier should only show up after you upgrade the cart contract"): while Serpent Isle's
-    // office holds the cart contract, and at a load whose save has an item stored in it (the game puts a saved item back into its cart two frames
-    // after the load, SaveablePrefab.PutInInventory, and throws on a slot with no carrier); its fees the common 2 and 1, in Dragons. Dropped again,
-    // when empty, once no contract holds it. "Prepare to uninstall" empties it 1 m in front of the player.
+    // closed office, "Prepare to uninstall"). Serpent Isle has no carrier (its dude is switched off): the office adds one for island 22, only
+    // while Serpent Isle's office holds the cart contract, and at a load whose save has an item stored in it (the game puts a saved item back
+    // into its cart two frames after the load, SaveablePrefab.PutInInventory, and throws on a slot with no carrier); its fees the common 2 and 1,
+    // in Dragons. Dropped again, when empty, once no contract holds it. "Prepare to uninstall" empties it 1 m in front of the player.
     internal static class OfficeCarts
     {
         internal const int SerpentIsle = 22, SerpentIsleHouse = 204;
@@ -485,7 +629,7 @@ namespace EconomyOverhaul
             var go = new GameObject("EconomyOverhaul cart carrier 22"); go.SetActive(false); UnityEngine.Object.DontDestroyOnLoad(go);
             var c = go.AddComponent<CargoCarrier>(); c.portIndex = SerpentIsle; c.currency = (Currency)1; c.transportPriceMult = 2f; c.storagePriceMult = 1f;
             // Kept at the camera: an item in a cart sits at its cart, and the game destroys an owned item over 600 m from the camera that no ship
-            // or house holds (ItemRigidbody.FixedUpdate; ocart-3: the added cart at the world's origin lost its item once the player sailed off).
+            // or house holds (ItemRigidbody.FixedUpdate: the added cart at the world's origin would lose its item once the player sails off).
             go.AddComponent<CarrierAtCamera>();
             go.SetActive(true); added = c;
             Plugin.Log.LogInfo("Trade office: a cart carrier added for Serpent Isle (island 22), which has none.");
@@ -518,8 +662,8 @@ namespace EconomyOverhaul
             foreach (var kv in original) { var c = Carrier(kv.Key); if (c) { c.transportPriceMult = kv.Value.x; c.storagePriceMult = kv.Value.y; } }
             original.Clear();
         }
-        // Serpent Isle's added carrier emptied (uninstall): each item out of it, made whole again, 1 m in front of the player and stacked up (ocart-4:
-        // put at the office's drop point while far off, an item lands where the far island sinks and the game's 600 m clean-up takes it).
+        // Serpent Isle's added carrier emptied (uninstall): each item out of it, made whole again, 1 m in front of the player and stacked up (put
+        // at the office's drop point while far off, an item lands where the far island sinks and the game's 600 m clean-up takes it).
         internal static int EmptySerpentIsle()
         {
             var c = Carrier(SerpentIsle); if (!c || c.cargo == null || c.cargo.Count == 0) return 0;
@@ -548,8 +692,8 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- Crew recruitment (§4.8, Q24: 5 candidates at every office with the hub's role odds, refreshed every 7 days; no legendary crew; Virtual
-    // Crew's own limit and pay) ----
+    // ---- Crew recruitment: 5 candidates at every office with the hub's role odds, refreshed every 7 days; no legendary crew; Virtual
+    // Crew's own limit and pay ----
     // Virtual Crew 0.2.3 is called by name (no reference; its soft dependency stays). Its HireCrew needs the player at a port dude (away from one its
     // check clears the port's pool), so the office adds the crewman to its list as HireCrew itself does (VirtualCrewManager.Crew.Add), after its
     // limit: at most 2 First Officers (FirstOfficerCount). Pay, shares and saving walk that list, as in the mod. A candidate is made with the mod's
@@ -601,7 +745,7 @@ namespace EconomyOverhaul
         private static string Stats(object c)
         {
             var parts = new List<string>();
-            // Its advertised stats (AdvStrength ... AdvCharisma, public get: Virtual Crew 0.2.3's Crewman; ocrew-1 found none under shorter names).
+            // Its advertised stats (AdvStrength ... AdvCharisma, public get: Virtual Crew 0.2.3's Crewman, which has none under shorter names).
             foreach (var s in new[] { "Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma" })
             {
                 var m = (MemberInfo)AccessTools.Property(crewman, "Adv" + s) ?? AccessTools.Field(crewman, "Adv" + s);
@@ -641,33 +785,33 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- Local office cooperation (§4.7; the user's text, Q22, Q23, list item 2) ----
-    // A copy of the port dude's own trade book on the office's table (it keeps its dude, so it opens that port's market: officeparts). While it is
-    // the book open (marked at its click, cleared when the book closes), on that port's market: a good the port trades costs 10% less and its
-    // purchase moves supply half as much; a crate a player can unseal that the port doesn't trade (none in stock and not made there: Absent) is priced as at supply -50% of capacity, with no
-    // discount, moves no supply, at most 10 a day per office. No loans at this book (its Loan button hidden). Its crates carry a mark and can't be sold at this port; selling here
-    // otherwise pays the market's normal price (Q23). The cargo still lands in the port's own cargo area (CargoPlacement, unchanged).
+    // ---- Local office cooperation ----
+    // A copy of the port dude's own trade book on the office's table (it keeps its dude, so it opens that port's market). While it is the book
+    // open (marked at its click, cleared when the book closes), on that port's market: a good the port trades costs 10% less and its purchase
+    // moves supply half as much; a crate a player can unseal that the port doesn't trade (none in stock and not made there: Absent) is priced
+    // as at supply -50% of capacity, with no discount, moves no supply, at most 10 a day per office. No loans at this book (its Loan button
+    // hidden). Its crates carry a mark and can't be sold at this port; selling here otherwise pays the market's normal price. The cargo lands
+    // in the port's own cargo area (CargoPlacement), or on the pier of a working wharf (OfficeWharves.Delivers).
     internal static class OfficeBook
     {
-        // AbsentSupply: -50% of capacity (the user, 2026-11-09: "All unsealable crate sold in office trade book will price at -50% capacity instead
-        // of -20%"); the drinkable barrels share the rule (Offered).
+        // AbsentSupply: -50% of capacity; the drinkable barrels share the rule (Offered).
         internal const float Discount = .9f, AbsentSupply = -.5f;
         internal const int DailyLimit = 10;
         internal static int Opening, Current;
-        // Unsealable: a crate with something in it (§8, "Cooperation book": ShipItemCrate with amount over 0), read from the good's prefab.
+        // Unsealable: a crate with something in it (ShipItemCrate with amount over 0), read from the good's prefab.
         internal static bool Unsealable(int g)
         {
             var p = PrefabsDirectory.instance ? PrefabsDirectory.instance.GetGood(g) : null; var c = p ? p.GetComponent<ShipItemCrate>() : null;
             return c && c.amount > 0f;
         }
         // What the office brings in from other sources when the port doesn't trade it: a crate the player can unseal, or a drinkable barrel (water,
-        // rum, wine, beer, mead and cider, CargoCondition.LiquidCargo; the user, 2026-11-09: "i also want all drinkable barrel to be able to bought"),
-        // under the same rules (the price at -50% of capacity, no 10% off, no supply drop, the same 10 a day).
+        // rum, wine, beer, mead and cider, CargoCondition.LiquidCargo), under the same rules (the price at -50% of capacity, no 10% off, no supply
+        // drop, the same 10 a day).
         internal static bool Offered(int g) => Unsealable(g) || CargoCondition.LiquidCargo.Contains(g);
-        // Such a good's count on the book's page is how many of today's 10 are left, in dark blue (the user, 2026-11-09: "Make it show quantity in
-        // dark blue color, so player know this one is from 10 crate/day limit"); its row in the goods list drawn available while any are left.
-        // The game's text shader brightens a colour by its gamma curve (drawn = 255 x (v / 255)^(1 / 2.2): #14287A drew at 79, 110, 184, a mid blue, in
-        // obdc-2's picture; Unavailable's note), so the ink is the dark blue it should draw as, 20, 40, 122, taken back through that curve.
+        // Such a good's count on the book's page is how many of today's 10 are left, in dark blue, so it reads as the 10 a day limit; its row in the
+        // goods list drawn available while any are left. The game's text shader brightens a colour by its gamma curve (drawn = 255 x (v / 255)^(1 / 2.2):
+        // #14287A draws at 79, 110, 184, a mid blue; Unavailable's note), so the ink is the dark blue it should draw as, 20, 40, 122, taken back
+        // through that curve.
         internal const string LeftColor = "#010432";
         internal static bool FromOtherSources(EconomyUI ui, IslandMarket m, int g, out int office)
         {
@@ -699,7 +843,7 @@ namespace EconomyOverhaul
             st.coopCount[i] += n;
         }
         // A unit's raw price at this book: the market's buy price at this supply with the trade book's spread, 10% off; a good the port doesn't
-        // trade at -50% of capacity (AbsentSupply), with no discount (the user, 2026-11-08: "Make the unsealable good don't receive 10% discount").
+        // trade at -50% of capacity (AbsentSupply), with no discount.
         internal static int BuyRaw(IslandMarket m, int g, double stock, bool absent)
         {
             float p = absent ? m.GetGoodPriceAtSupply(g, AbsentSupply * Economy.PricingCap(m, g)) : m.GetGoodPriceAtSupply(g, (float)stock);
@@ -720,74 +864,69 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(EconomyUI), "OpenUI")] internal static class OfficeBookOpenPatch { static void Prefix() => OfficeBook.Current = OfficeBook.Opening; }
     [HarmonyPatch(typeof(EconomyUI), "CloseUI")] internal static class OfficeBookClosePatch { static void Postfix() => OfficeBook.Current = 0; }
     // The goods list draws a good the port doesn't have grey (EconomyUI.RefreshGoodsList reads HasGood); at the office's book a good it brings in
-    // from other sources is drawn available while any of today's 10 are left (its count: BulkTradeUI.RefreshLabels).
+    // from other sources is drawn available while any of today's 10 are left (its count: BulkTradeUI.RefreshLabels). At either book of a port with
+    // a wharf, a good the port buys lying on its deck is drawn as the game draws a good in the port's cargo area (OfficeWharves.AtPort).
     [HarmonyPatch(typeof(EconomyUI), "RefreshGoodsList")] internal static class OfficeBookListPatch
     {
         static void Postfix(EconomyUI __instance)
         {
-            if (OfficeBook.Active(__instance) == 0) return;
             var m = Fields.Get<IslandMarket>(__instance, "currentIsland"); var buttons = Fields.Get<EconomyUIButton[]>(__instance, "goodsListButtons");
             var materials = Fields.Get<Material[]>(__instance, "buttonMaterials"); if (!m || buttons == null || materials == null || materials.Length == 0) return;
+            bool book = OfficeBook.Active(__instance) != 0;
+            var deck = materials.Length > 3 ? OfficeWharves.AtPort(m).ToList() : new List<Good>(); var area = deck.Count > 0 ? m.GetWarehouseArea() : null;
+            if (!book && !area) return;
             foreach (var b in buttons)
             {
                 if (!b) continue; int g = b.index;
                 if (g == __instance.currentSelectedGood || g <= 0 || g >= m.currentPlayerGoods.Length || m.currentPlayerGoods[g] > 0) continue;
-                if (OfficeBook.FromOtherSources(__instance, m, g, out int office) && OfficeBook.Left(office) > 0) b.SetButtonMaterial(materials[0]);
+                if (area && BulkTrade.Sellable(deck, m, g, area).Any()) b.SetButtonMaterial(materials[3]);
+                else if (book && OfficeBook.FromOtherSources(__instance, m, g, out int office) && OfficeBook.Left(office) > 0) b.SetButtonMaterial(materials[0]);
             }
         }
     }
 
-    // ---- The trade fleet (§4.5; the user's text, Q8-Q15, and their decisions of 2026-11-07 in §3B) ----
+    // ---- The trade fleet ----
     // A ship joins from Shipwright and Transport's storage (its button calls OfficeFleetApi by name, from that mod's Plugin.cs) and
     // becomes one of the player's traders: an ordinary trader record in SaveState.playerFleet, shaped by its kind as the NPC traders of that kind
-    // (FleetDefinitions: speed, wait, slots, mass, network; Baghlah and Jong always 130 slots and 13,000 lb, the user's), sailing in the same
+    // (FleetDefinitions: speed, wait, slots, mass, network; Baghlah and Jong always 130 slots and 13,000 lb), sailing in the same
     // simulation (Fleet.Tick), left out of the trade book (its reports stay its own), and drawn as it was rigged (VisibleTraders.cs, TraderHulls' fleet part).
-    // Earnings (the user's 2026-11-07 decisions): its trip's real profit (what it sold for less what it paid, in value units at the daily rates)
-    // times its kind's share, in the sale port's coin, into its office region's treasury; a losing trip takes the same share of the loss from it,
-    // never below 0 (Q11). Its route's fee each midnight from that treasury in the region's coin; unpaid, the ship waits in port; a seized office's
-    // ships wait with no fee (Q5). "About X gold a day" before the fee: its shares of the last 30 days over the days it sailed in them.
+    // Earnings: its trip's real profit (what it sold for less what it paid, in value units at the daily rates) times its kind's share, in the
+    // sale port's coin, into its office region's treasury; a losing trip takes the same share of the loss from it, never below 0. Its route's
+    // fee each midnight from that treasury in the region's coin; unpaid, the ship waits in port; a seized office's ships wait with no fee.
+    // "About X gold a day" before the fee: its shares of the last 30 days over the days it sailed in them.
     internal static class OfficeFleet
     {
-        // TripLog: the trips a ship's trade history keeps (the user, 2026-11-08: "you should have page to see all the trade history"; 6 before, the
-        // page's rows; 100 while they were away; then "only keep last 35 trip", TRADE_OFFICE_DRAFT.md §3B "The whole trade history"), the oldest
-        // dropped beyond.
+        // TripLog: the trips a ship's trade history keeps, the oldest dropped beyond.
         internal const int PerOffice = 3, Window = 30, FirstId = 100000, TripLog = 35;
-        // The kinds' short names (the Treasury book's Trader type column, the log): the user, 2026-11-08 night: "treasure book: change independent to free,
-        // regional to inter-region" (were "Regional", "Independent").
+        // The kinds' short names (the Treasury book's Trader type column, the log).
         internal static readonly string[] Kinds = { "Local small", "Local medium", "Inter-region", "Free", "Chronos" };
         private static readonly string[] Groups = { "small", "medium", "regional", "independent", "chronos" };
-        // The fee a day by route, in gold (the user: "small local = 0.5 per day / medium local = 2.5 / regional long range = 6 / Independant long range = 7 / Chronos = 15").
+        // The fee a day by kind (Kinds' order), in gold.
         internal static readonly float[] Fees = { .5f, 2.5f, 6f, 7f, 15f };
-        // The share of a trip's profit by kind, set on the early game (the user: "Early game"): (the kind's target kept a day + its fee) / its profit a
-        // day on days 91-180 of the study, rounded to 0.5%. The targets since 2026-11-08 evening (the user: "make local small target 2 gold, regional 55
-        // slot to 8, independant 70 to 10, regional 130 slot to 14. indepent 130 to 16. Chronos to 25"; local medium 4 as before): 6%, 6%, regional 55
-        // 24%, regional 130 15.5%, independent 70 16.5%, independent 130 13.5%, Chronos 40.5% (§3B "The fleet's targets raised"; were 3.5%, 6%, 20.5%,
-        // 14%, 14.5%, 13%, 35%). Never shown.
+        // The share of a trip's profit by kind, set on the early game: (the kind's target kept a day + its fee) / its measured profit a day on game
+        // days 91-180, rounded to 0.5%. The targets kept a day, in gold: local small 2, local medium 4, regional 55 slots 8, regional 130 slots 14,
+        // independent 70 slots 10, independent 130 slots 16, Chronos 25; the shares 6%, 6%, 24%, 15.5%, 16.5%, 13.5%, 40.5%. Never shown.
         internal static float Share(int kind, int units) => kind < 0 ? 0f : kind == 0 ? .06f : kind == 1 ? .06f : kind == 2 ? (units >= 130 ? .155f : .24f) : kind == 3 ? (units >= 130 ? .135f : .165f) : .405f;
-        // The kinds a hull may take (the user's lists; the Brig in both: §4.5's union): Dhow 10, Cog 40, Kakam 90 local small; Sanbuq 20, Junk 80
-        // local medium, regional, independent; Brig 50 those and Chronos; Baghlah 30, Jong 70 regional, independent, Chronos.
+        // The kinds a hull may take: Dhow 10, Cog 40, Kakam 90 local small; Sanbuq 20, Junk 80 local medium, regional, independent; Brig 50 those
+        // and Chronos; Baghlah 30, Jong 70 regional, independent, Chronos.
         internal static int[] Allowed(int hull) => hull == 10 || hull == 40 || hull == 90 ? new[] { 0 } : hull == 20 || hull == 80 ? new[] { 1, 2, 3 } : hull == 50 ? new[] { 1, 2, 3, 4 } : hull == 30 || hull == 70 ? new[] { 2, 3, 4 } : new int[0];
         internal static int Capital(int region) => region == 0 ? 0 : region == 1 ? 9 : 15;
         internal static List<BoatState> Ships => World.State.playerFleet ?? (World.State.playerFleet = new List<BoatState>());
         internal static int IndexOf(BoatState b) { var l = World.State?.playerFleet; return l == null || b == null ? -1 : l.IndexOf(b); }
         internal static bool Is(BoatState b) => IndexOf(b) >= 0;
-        // A ship that joined waits at its office's port, trading nothing and paying no fee, until the player sets its route on the Fleet tab (the user,
-        // 2026-11-08: "newly add trader shouldn't be auto assign route, it should be assign by player then start trading"; "No fee"; "Assign route button").
+        // A ship that joined waits at its office's port, trading nothing and paying no fee, until the player sets its route on the Fleet tab.
         internal const int NotAssigned = -1;
         internal static bool Assigned(int i) { var s = World.State?.office; return s?.fleetKind != null && i >= 0 && i < s.fleetKind.Length && s.fleetKind[i] >= 0; }
         internal static bool Unassigned(int i) { var s = World.State?.office; return s?.fleetKind != null && i >= 0 && i < s.fleetKind.Length && s.fleetKind[i] < 0; }
-        // The route's name on screen (the user, 2026-11-08 night: "the route name should be: Local small trader, Local medium trader, <region name> inter
-        // region trader, free inter region trader, Chronos trader"; then "change the text inter region to inter-region"): the regional named by its
-        // office's region. Kinds stays the short name, for the Treasury book's narrow Trader type column (KindShort) and the log.
+        // The route's name on screen, the regional named by its office's region. Kinds stays the short name, for the Treasury book's narrow Trader
+        // type column (KindShort) and the log.
         internal static string RouteName(int kind, int region) => kind == 0 ? "Local small trader" : kind == 1 ? "Local medium trader" :
             kind == 2 ? BookUI.RegionName(region) + " inter-region trader" : kind == 3 ? "Free inter-region trader" : kind == 4 ? "Chronos trader" : "Not assigned";
         internal static string KindName(int i) => Assigned(i) ? RouteName(Mathf.Clamp(Office.State.fleetKind[i], 0, 4), Office.Region(Office.State.fleetHouse[i])) : "Not assigned";
         internal static string KindShort(int i) => Assigned(i) ? Kinds[Mathf.Clamp(Office.State.fleetKind[i], 0, 4)] : "Not assigned";
-        // On screen a ship is "it", never "her" (the user, 2026-11-08 evening: "Show non until it's route is set. i don't want to use her to mention ship").
+        // Shown while a ship has no route yet.
         internal const string NoRouteYet = "none until its route is set";
-        // A ship's summary, the same rows on the office scroll's Fleet tab and the Treasury book's Trade fleet page (the user, 2026-11-08: "please match the
-        // text from trade office fleet control to the trade fleet summary"; the book's words: "change "about" to "estimated profit"", "Route fee ->
-        // Maintenance fee , and it should show it's local currency", "Change position text to Location"). Location last.
+        // A ship's summary, the same rows on the office scroll's Fleet tab and the Treasury book's Trade fleet page. Location last.
         internal static readonly string[] SummaryLabels = { "Hull", "Trader type", "Maintenance fee", "Estimated profit", "Last trip", "Lifetime profit", "Office", "Joined", "Location" };
         internal static string[] SummaryValues(int i)
         {
@@ -809,6 +948,7 @@ namespace EconomyOverhaul
             s.fleetTripDay = I(s.fleetTripDay, TripLog); s.fleetTripPort = I(s.fleetTripPort, TripLog); s.fleetTripCoin = I(s.fleetTripCoin, TripLog); s.fleetTripCoins = I(s.fleetTripCoins, TripLog);
             s.fleetTripGood = I(s.fleetTripGood, TripLog); s.fleetTripCrates = I(s.fleetTripCrates, TripLog); s.fleetPorts = S(s.fleetPorts); s.fleetGoods = S(s.fleetGoods);
             s.fleetBestPort = I(s.fleetBestPort); s.fleetBestCoin = I(s.fleetBestCoin); s.fleetBestCoins = I(s.fleetBestCoins); s.fleetBestValue = I(s.fleetBestValue);
+            s.fleetKept = I(s.fleetKept);
         }
         // Whether every per-ship array holds the fleet (a save made before an array was added has it null or short: Fit then).
         private static bool Fitted()
@@ -817,7 +957,7 @@ namespace EconomyOverhaul
             bool I(int[] a, int per = 1) => a != null && a.Length >= n * per; bool S(string[] a) => a != null && a.Length >= n;
             return I(s.fleetLastCoin) && I(s.fleetLastCoins) && I(s.fleetStart) && I(s.fleetTripDay, TripLog) && I(s.fleetTripPort, TripLog) && I(s.fleetTripCoin, TripLog) &&
                 I(s.fleetTripCoins, TripLog) && I(s.fleetTripGood, TripLog) && I(s.fleetTripCrates, TripLog) && S(s.fleetPorts) && S(s.fleetGoods) && I(s.fleetBestPort) &&
-                I(s.fleetBestCoin) && I(s.fleetBestCoins) && I(s.fleetBestValue);
+                I(s.fleetBestCoin) && I(s.fleetBestCoins) && I(s.fleetBestValue) && I(s.fleetKept);
         }
         private static void RemoveAt(int i)
         {
@@ -830,7 +970,20 @@ namespace EconomyOverhaul
             s.fleetTripDay = I(s.fleetTripDay, TripLog); s.fleetTripPort = I(s.fleetTripPort, TripLog); s.fleetTripCoin = I(s.fleetTripCoin, TripLog); s.fleetTripCoins = I(s.fleetTripCoins, TripLog);
             s.fleetTripGood = I(s.fleetTripGood, TripLog); s.fleetTripCrates = I(s.fleetTripCrates, TripLog); s.fleetPorts = S(s.fleetPorts); s.fleetGoods = S(s.fleetGoods);
             s.fleetBestPort = I(s.fleetBestPort); s.fleetBestCoin = I(s.fleetBestCoin); s.fleetBestCoins = I(s.fleetBestCoins); s.fleetBestValue = I(s.fleetBestValue);
+            s.fleetKept = I(s.fleetKept);
             l.RemoveAt(i);
+        }
+        // Whether the ship keeps an original in Shipwright and Transport's storage (OfficeState.fleetKept; a save without it: a copy).
+        internal static bool Keeps(int i) { var s = World.State?.office; return s?.fleetKept != null && i >= 0 && i < s.fleetKept.Length && s.fleetKept[i] != 0; }
+        // Whether a fleet ship keeps the original of this save index (OfficeFleetApi.Kept): 1 one does, 0 none does (Shipwright and Transport frees it
+        // then), -1 while the world isn't loaded (the start menu, a load under way): never read as freed before the save's fleet is in.
+        internal static int Kept(int saveIndex)
+        {
+            if (!World.Ready) return -1;
+            var s = World.State?.office; var l = World.State?.playerFleet;
+            if (saveIndex == 0 || s?.fleetKept == null || l == null) return 0;
+            for (int i = 0; i < l.Count && i < s.fleetKept.Length; i++) if (s.fleetKept[i] == saveIndex) return 1;
+            return 0;
         }
         // The ship's record shaped by its kind, as the NPC traders of that kind are (FleetDefinitions), from its office's region.
         private static bool Shape(BoatState b, int house, int hull, int kind)
@@ -848,7 +1001,7 @@ namespace EconomyOverhaul
             var s = Office.State; int id = Math.Max(FirstId, Math.Max(s.fleetNextId, Ships.Count == 0 ? FirstId : Ships.Max(x => x.id) + 1));
             s.fleetNextId = id + 1; return id;
         }
-        // The region's office with room for one more (the yard's region, Q15), or why not.
+        // The region's office with room for one more (the yard's region), or why not.
         // shortcut: the first office in Office.Houses' order with room takes the ship (201 before 205, 202 before 204, 203 before 206), not the
         // player's choice or the yard's nearest office; replace if the player should pick the office (or the nearest should take it).
         internal static int Room(int region, out string why)
@@ -881,8 +1034,11 @@ namespace EconomyOverhaul
             }
             return null;
         }
-        internal static int Add(int region, int hull, string name, string rig)
+        // kept: the save index of an original Shipwright and Transport keeps hidden in its storage while it trades (OfficeFleetApi.AddKept); 0 for a copy.
+        internal static int Add(int region, int hull, string name, string rig, int kept = 0)
         {
+            // an original once only: a second trader for it would leave it free while one still trades
+            if (kept < 0 || kept != 0 && Kept(kept) != 0) { Plugin.Log?.LogInfo("Trade office: a ship not added to the fleet: its original (" + kept + ") is already kept for it, or the world isn't loaded."); return -1; }
             var why = Refusal(region, hull); if (why != null) { Loans.Notify(why); return -1; }
             // a rig with a sail a trader copy can't draw (Rules.FleetSailRefused), whoever asks
             string refused = RefusedSail(rig); if (refused != null) { Plugin.Log.LogInfo("Trade office: a ship not added to the fleet: its rig has " + refused + "."); return -1; }
@@ -891,23 +1047,27 @@ namespace EconomyOverhaul
             var b = new BoatState { id = NextId(), origin = port.portIndex, remaining = 1.25 };
             // shaped meanwhile by its hull's first kind (its size and harbour for its berth and drawing), its kind itself not set (NotAssigned)
             if (!Shape(b, house, hull, shape)) return -1;
-            // The ship starts in the office's port (the user, 2026-11-08: "always start at the port of the office, and start with port waiting time";
-            // drawn, its berth is taken as any trader's) and waits there, trading nothing and paying no fee, until the player sets its route (the user,
-            // the same day: "newly add trader shouldn't be auto assign route, it should be assign by player then start trading"); its port wait starts
-            // then (SetKind).
-            // shortcut: the office's port, not its wharf; replace when the wharf is built (the user: "If wharf is unlocked for the office, trader
-            // spawn at office wharf").
+            // The ship starts in the office's port with its port waiting time (drawn, its berth is taken as any trader's) and waits there, trading nothing and
+            // paying no fee, until the player sets its route; its port wait starts then (SetKind). At an office whose wharf stands it starts at the wharf: its
+            // berth there taken first while free, as WharfBerth allows.
             b.remaining = Math.Max(1.25, b.wait);
             foreach (int p in b.network) { var m = World.Market(p); if (!m) continue; var r = Fleet.Report(World.MarketData(p).reports, p); if (r != null) Fleet.PutReport(b.reports, r); }
             Ships.Add(b); Fit();
             var s = Office.State; int i = Ships.Count - 1;
             s.fleetHouse[i] = house; s.fleetHull[i] = hull; s.fleetKind[i] = NotAssigned; s.fleetName[i] = string.IsNullOrEmpty(name) ? Pledges.Name(hull) : name; s.fleetRig[i] = WithHull(rig, hull); s.fleetJoined[i] = GameState.day; s.fleetSumDay[i] = GameState.day;
+            s.fleetKept[i] = kept;
             Loans.Notify(s.fleetName[i] + " joined the " + Pledges.Name(house) + "'s trade fleet: set its route at the office");
-            Plugin.Log.LogInfo("Trade office: " + s.fleetName[i] + " (hull " + hull + ") joined the " + Pledges.Name(house) + "'s fleet, trader " + b.id + ", waiting for its route.");
+            Plugin.Log.LogInfo("Trade office: " + s.fleetName[i] + " (hull " + hull + ") joined the " + Pledges.Name(house) + "'s fleet, trader " + b.id + ", waiting for its route" +
+                (kept != 0 ? "; its original (" + kept + ") kept in Shipwright and Transport's storage." : "."));
             return b.id;
         }
+        // Whether the ship may take a wharf berth at this port (Data/lanes.txt's F record): a ship of the trade fleet in port at a port where a wharf of one of
+        // the player's offices stands, at every stay (Rules.WharfBerthFor). The berth is taken first while free (VisibleTraders' BerthTaken and WharfFirst); a
+        // player's ship in it or another fleet ship holding it sends it to the port's berths; an NPC trader never takes it.
+        internal static bool WharfBerth(BoatState b, int port) =>
+            b != null && Rules.WharfBerthFor(Is(b), b.destination, b.origin, port, OfficeWharves.StandingPorts());
         // The ship's rig's plan line given its hull as Add was told it: RigOf writes the boat's own save number, and Transport's copies have their own
-        // (1010 and up: its CopyEngine.Spawn sets a copy's sceneIndex to its block; found by Transport's chat, 2026-11-08).
+        // (1010 and up: its CopyEngine.Spawn sets a copy's sceneIndex to its block).
         internal static string WithHull(string rig, int hull)
         {
             if (string.IsNullOrEmpty(rig)) return rig;
@@ -915,8 +1075,8 @@ namespace EconomyOverhaul
             if (f.Length >= 3 && f[0] == "plan") { f[2] = hull.ToString(System.Globalization.CultureInfo.InvariantCulture); lines[0] = string.Join(" ", f); }
             return string.Join("\n", lines);
         }
-        // The ship's kind set or changed at the office (Q: "assign what trader behavior they will adopt"): at once in port, else when it next arrives
-        // (§4.5). The first time (a ship waiting for its route) it starts trading: its kind's time in port first, then its first trip.
+        // The ship's kind set or changed at the office: at once in port, else when it next arrives. The first time (a ship waiting for its route)
+        // it starts trading: its kind's time in port first, then its first trip.
         internal static string KindRefusal(int i, int kind)
         {
             var s = World.State?.office; if (s == null || i < 0 || i >= Ships.Count) return "No ship";
@@ -936,30 +1096,30 @@ namespace EconomyOverhaul
             Loans.Notify(s.fleetName[i] + "'s route: " + RouteName(kind, Office.Region(s.fleetHouse[i])) + ". It sails after its time in port");
             Plugin.Log.LogInfo("Trade office: " + s.fleetName[i] + " (trader " + b.id + ") given its route, " + Kinds[kind] + ", on day " + GameState.day + ".");
         }
-        // Dismissed (Q15): 80% of its hull's price into the treasury, in Gold; the ship leaves the fleet.
+        // Dismissed: 80% of its hull's price into the treasury, in Gold; the ship leaves the fleet. An original kept in storage goes back to it.
         internal static void Dismiss(int i)
         {
-            string name = i >= 0 && i < Ships.Count ? Office.State.fleetName[i] : null; int paid = Leave(i, RecordKind.Dismissed);
-            if (paid >= 0) Loans.Notify(name + " dismissed: " + paid + " gold into the treasury");
+            string name = i >= 0 && i < Ships.Count ? Office.State.fleetName[i] : null; bool kept = Keeps(i); int paid = Leave(i, RecordKind.Dismissed);
+            if (paid >= 0) Loans.Notify(name + " dismissed: " + (kept ? "back in Shipwright's storage" : paid + " gold into the treasury"));
         }
-        // The ship leaves the fleet with 80% of its hull's price in Gold paid into its office's region's treasury (Dismiss; the user, 2026-11-08, for a ship
-        // removed with Shipyard Expansion: "80% like Dismiss"). The gold paid; -1: no such ship.
+        // The ship leaves the fleet with 80% of its hull's price in Gold paid into its office's region's treasury (Dismiss, or a rig whose mod is gone),
+        // nothing for an original kept in Shipwright and Transport's storage (Rules.FleetLeavePay; that mod frees it once Kept reads 0). The gold paid; -1: no
+        // such ship.
         private static int Leave(int i, RecordKind kind)
         {
             var s = Office.State; if (i < 0 || i >= Ships.Count) return -1;
-            int house = s.fleetHouse[i], region = Office.Region(house); var hull = Pledges.Find(s.fleetHull[i]);
-            int paid = hull ? (int)Math.Floor(hull.price * .8) : 0;
+            bool kept = Keeps(i);
+            int house = s.fleetHouse[i], region = Office.Region(house); var hull = kept ? null : Pledges.Find(s.fleetHull[i]);
+            int paid = Rules.FleetLeavePay(hull ? hull.price : 0, kept);
             s.treasury[region * 4 + 3] = (int)Math.Min(int.MaxValue, (long)s.treasury[region * 4 + 3] + paid);
             OfficeRecords.Add(house, kind, 3, paid);
             RemoveAt(i);
             return paid;
         }
-        // A game loaded (World.Load): a ship whose rig needs a mod this game doesn't have leaves the fleet, paid as dismissed (the user, 2026-11-08: "if
-        // player remove the shipyard expansion is remove mid save, remove that trader from trader fleet too"; their answers: every ship rigged with it,
-        // 80% like Dismiss). Shipyard Expansion's rigs say so (OfficeFleetApi.RigOf's "needs" line, on a hull it changed): its parts at the end of
-        // the hull's list, its options at the end of a part's and its longer masts, so the game's LoadData can't put the ship's rig on the hull without it.
-        // So does a rig with another mod's sail no longer in the game (RigOf's "modsail" line; the user, 2026-11-09, asked what happens to such a ship:
-        // "Leaves the fleet, 80% paid"); the sail mods add their sails in PrefabsDirectory.Start, before any save loads.
+        // A game loaded (World.Load): a ship whose rig needs a mod this game doesn't have leaves the fleet, paid as dismissed. Shipyard Expansion's rigs say so
+        // (OfficeFleetApi.RigOf's "needs" line, on a hull it changed): its parts at the end of the hull's list, its options at the end of a part's and its
+        // longer masts, so the game's LoadData can't put the ship's rig on the hull without it. So does a rig with another mod's sail no longer in the game
+        // (RigOf's "modsail" line); the sail mods add their sails in PrefabsDirectory.Start, before any save loads.
         // shortcut: a sail of the game's own on another mod's mast (Unstayed Junk Sail Mast's 96-127, MoreSailwindSails' 128 and up) isn't checked
         // here: without that mod the ship stays and is drawn on its hull's stock rig (StartFleet's Check); replace if such ships should leave too.
         internal static void Loaded()
@@ -970,14 +1130,14 @@ namespace EconomyOverhaul
             {
                 var missing = TraderRigs.Missing(s.fleetRig[i]); if (missing.Count == 0) continue;
                 string name = s.fleetName[i], mods = string.Join(", ", missing.Select(g => g == TraderRigs.ShipyardExpansionGuid ? "Shipyard Expansion" : g).ToArray());
-                int paid = Leave(i, RecordKind.Removed);
-                Loans.Notify(name + " left the trade fleet: its rig needs " + mods + ". " + paid + " gold into the treasury");
-                Plugin.Log.LogInfo("Trade office: " + name + " left the fleet at the load: its rig needs " + mods + ", not loaded; " + paid + " gold (80% of its hull) into the treasury.");
+                bool kept = Keeps(i); int paid = Leave(i, RecordKind.Removed);
+                Loans.Notify(name + " left the trade fleet: its rig needs " + mods + ". " + (kept ? "Back in Shipwright's storage" : paid + " gold into the treasury"));
+                Plugin.Log.LogInfo("Trade office: " + name + " left the fleet at the load: its rig needs " + mods + ", not loaded; " +
+                    (kept ? "its original back in Shipwright and Transport's storage, nothing paid." : paid + " gold (80% of its hull) into the treasury."));
             }
         }
-        // A save whose trade histories hold another number of trips a ship (6 before 2026-11-08's "all the trade history", then 100 until "only keep
-        // last 35 trip"; the trade office not released, so only test saves): each ship's trips put at its place for TripLog, as many as fit, newest
-        // first as they were (the newest kept).
+        // A save whose trade histories hold another number of trips a ship (6 or 100, test saves made before TripLog): each ship's trips put at its place
+        // for TripLog, as many as fit, newest first as they were (the newest kept).
         private static void Restride()
         {
             var s = World.State?.office; int n = World.State?.playerFleet?.Count ?? 0; if (s == null || n == 0) return;
@@ -1036,8 +1196,8 @@ namespace EconomyOverhaul
             // (a trip logged with no port would end the ship's history rows there: TripRows stops at port 0)
             if (b.goods != null && b.goods.Length > 0 && b.destination >= 0)
             {
-                // "Last trip" is the last trip with cargo, as the history: one with none (Depart's fallback to the closest port) left it at
-                // 0 and the Fleet tab read "none yet" (the deep review of 2026-11-09)
+                // "Last trip" is the last trip with cargo, as the history: one with none (Depart's fallback to the closest port) would set it to 0 and
+                // the Fleet tab would read "none yet"
                 s.fleetLast[i] = (int)Math.Round(share); s.fleetLastCoin[i] = coin; s.fleetLastCoins[i] = signed;
                 LogTrip(i, b.destination, coin, signed, top, top >= 0 ? byGood.Crates[top] : 0);
                 int value = (int)Math.Max(int.MinValue, Math.Min(int.MaxValue, Math.Round(share)));
@@ -1080,8 +1240,7 @@ namespace EconomyOverhaul
             ShipItem item = null; try { item = PrefabsDirectory.instance ? PrefabsDirectory.instance.GetGood(g) : null; } catch { }
             return item ? item.name : "good " + g;
         }
-        // The page's three rows from the ship's whole life in the fleet (the user, 2026-11-08 evening: "most visited port, most sold goods and biggest
-        // profit trip(show destination and trip profit)"; "Whole life"): the port it arrived at most, the good it sold most crates of, its trip
+        // The page's three rows from the ship's whole life in the fleet: the port it arrived at most, the good it sold most crates of, its trip
         // with the biggest share by value (that trip's port and share in its coin); "none yet" before.
         internal static string[] LifeRows(int i)
         {
@@ -1105,8 +1264,8 @@ namespace EconomyOverhaul
             for (int d = last + 1; d <= day && d <= last + Window; d++) s.fleetSums[i * Window + d % Window] = 0;
             s.fleetSumDay[i] = day;
         }
-        // About this many gold a day before the fee (the user's "real time profit estimate"): the ship's shares of the last 30 days over the days it
-        // sailed in them (at least one), in gold at a coin's base value (value x 0.006, as the study reads it).
+        // About this many gold a day before the fee: the ship's shares of the last 30 days over the days it sailed in them (at least one), in gold
+        // at a coin's base value (value x 0.006).
         internal static double Estimate(int i)
         {
             var s = World.State?.office; if (s?.fleetSums == null || i < 0) return 0;
@@ -1115,19 +1274,18 @@ namespace EconomyOverhaul
             int from = Math.Max(s.fleetJoined[i], s.fleetStart != null && i < s.fleetStart.Length ? s.fleetStart[i] : 0);
             int days = Mathf.Clamp(GameState.day - from + 1, 1, Window), sum = 0;
             for (int k = 0; k < Window; k++) sum += s.fleetSums[i * Window + k];
-            // Before its first sale, its kind's early-game figure (§4.5's table, the study's 18 fleet ships on days 91-180).
+            // Before its first sale, its kind's early-game figure (Early).
             if (sum == 0 && s.fleetLast[i] == 0 && s.fleetLife[i] == 0 && i < Ships.Count) return Early(s.fleetKind[i], Ships[i].units);
             return sum * FxRules.Gold / days;
         }
-        // Share x the kind's profit a day on days 91-180 (§3B "The fleet's targets raised"), before the fee.
+        // Share x the kind's measured profit a day on game days 91-180, before the fee.
         internal static double Early(int kind, int units) => kind == 0 ? 2.6 : kind == 1 ? 6.3 : kind == 2 ? (units >= 130 ? 19.7 : 13.9) : kind == 3 ? (units >= 130 ? 23.0 : 17.0) : 40.2;
         internal static double Gold(int value) => value * FxRules.Gold;
         // The ship's daily maintenance fee in its office port's coin at today's rate (its kind's fee in gold; at least 1 coin): what Midnight takes and
-        // what the summaries show (the user, 2026-11-08: "Route fee -> Maintenance fee , and it should show it's local currency").
+        // what the summaries show.
         internal static int FeeCoins(int house, int kind) => Math.Max(1, (int)Math.Ceiling(Fees[Mathf.Clamp(kind, 0, 4)] / FxRules.Gold * Fx.State.smooth[Office.Coin(house)] - 1e-9));
-        // "/day", not "a day", and the coin without its region ("257 Lions/day", as the trade history writes coins), the estimate without "before the
-        // fee" (the user, 2026-11-08 night: "change the fleet menu a day to /day to see if it can shorten it to 1 line only"; on obk-18's pictures, "/day"
-        // alone left both on two lines: "shorten both").
+        // "/day", not "a day", and the coin without its region ("257 Lions/day", as the trade history writes coins), the estimate without "before
+        // the fee", so each fits on one line of the Fleet tab.
         internal static string FeeText(int i) { var s = Office.State; return FeeCoins(s.fleetHouse[i], s.fleetKind[i]).ToString("N0") + " " + OfficeUiParts.ShortCoin(Office.Coin(s.fleetHouse[i])) + "/day"; }
         // The ship's last trip's share in the coin it was paid in ("Last trip show the last local currency it earn"); none before its first sale.
         internal static string LastTripText(int i)
@@ -1136,23 +1294,21 @@ namespace EconomyOverhaul
             if (!has || s.fleetLastCoins[i] == 0 && s.fleetLast[i] == 0) return "none yet";
             return (s.fleetLastCoins[i] > 0 ? "+" : "") + s.fleetLastCoins[i].ToString("N0") + " " + PlayerGold.GetCurrencyName(Mathf.Clamp(s.fleetLastCoin[i], 0, 3));
         }
-        // Where the ship is (the Fleet tab, and the Traders tab's row the user asked for: "add a row for ship position behind the trader route"):
-        // sailing and how far along its leg (trip and remaining count the same traffic units), or in port and when it sails (its wait, in traffic
-        // units of 0.008 game hours: NewTraders.cs Wait), or waiting there and why.
+        // Where the ship is (the Fleet tab and the Traders tab's row): sailing and how far along its leg (trip and remaining count the same traffic units), or
+        // in port and when it sails (its wait, in traffic units of 0.008 game hours: NewTraders.cs Wait), or waiting there and why.
         internal static string Position(int i)
         {
             if (i < 0 || i >= Ships.Count) return "unknown";
             var b = Ships[i];
-            string P(int p) { var port = p >= 0 && Port.ports != null && p < Port.ports.Length ? Port.ports[p] : null; return port ? port.GetPortName() : "port " + p; }
             if (b.destination >= 0)
             {
                 int done = b.trip > 0 ? Mathf.Clamp((int)Math.Round(100 * (1 - b.remaining / b.trip)), 0, 100) : -1;
-                return "sailing from " + P(b.origin) + " to " + P(b.destination) + (done >= 0 ? ", " + done + "% of the way" : "");
+                return "sailing from " + PortName(b.origin) + " to " + PortName(b.destination) + (done >= 0 ? ", " + done + "% of the way" : "");
             }
             var s = World.State?.office; int house = s?.fleetHouse != null && i < s.fleetHouse.Length ? s.fleetHouse[i] : 0;
-            if (Held(b)) return "in port at " + P(b.origin) + ", waiting: " + (Unassigned(i) ? "its route is not set" : !Office.Live(house) ? "the office is closed" : !Office.Working(house, OfficeUpgrade.Fleet) ? "no clerk" : "the fee is unpaid");
+            if (Held(b)) return "in port at " + PortName(b.origin) + ", waiting: " + (Unassigned(i) ? "its route is not set" : !Office.Live(house) ? "the office is closed" : !Office.Working(house, OfficeUpgrade.Fleet) ? "no clerk" : "the fee is unpaid");
             double hours = b.remaining * .008;
-            return "in port at " + P(b.origin) + (hours >= .5 ? ", sails in about " + Math.Round(hours) + " h" : "");
+            return "in port at " + PortName(b.origin) + (hours >= .5 ? ", sails in about " + Math.Round(hours) + " h" : "");
         }
         // Midnight: each ship's route fee from its office region's treasury, in the region's coin at the daily rate; unpaid, the ship waits in port.
         // shortcut: a ship held for its fee resumes only at the next midnight's charge, even when the treasury is filled sooner; replace if the
@@ -1162,10 +1318,9 @@ namespace EconomyOverhaul
             var s = World.State?.office; var l = World.State?.playerFleet; if (s?.fleetHouse == null || l == null) return;
             for (int i = 0; i < l.Count && i < s.fleetHouse.Length; i++)
             {
-                // A seized or closed office's ships pay nothing (Q5); paused without a clerk they wait in port and still pay (the user, 2026-11-08:
-                // "Trader still need to pay fee in port").
+                // A seized or closed office's ships pay nothing; paused without a clerk they wait in port and still pay.
                 int house = s.fleetHouse[i]; if (!Office.Live(house) || !Office.Has(house, OfficeUpgrade.Fleet)) { s.fleetHeld[i] = 0; continue; }
-                // no route set yet: no fee (the user, 2026-11-08: "No fee"; the fee is by route), waiting for it holds the ship (Held)
+                // no route set yet: no fee (the fee is by route), waiting for it holds the ship (Held)
                 if (Unassigned(i)) { s.fleetHeld[i] = 0; Roll(i, day); continue; }
                 int coin = Office.Coin(house), t = Office.Region(house) * 4 + coin;
                 int fee = FeeCoins(house, s.fleetKind[i]);
@@ -1173,22 +1328,28 @@ namespace EconomyOverhaul
                 Roll(i, day);
             }
         }
-        // A region's bankruptcy (Q6): its offices' traders go, with nothing paid.
+        // A region's bankruptcy: its offices' traders go, with nothing paid.
         internal static void Bankruptcy(int region)
         {
             var s = World.State?.office; var l = World.State?.playerFleet; if (s?.fleetHouse == null || l == null) return;
             for (int i = l.Count - 1; i >= 0; i--) if (i < s.fleetHouse.Length && (region < 0 || Office.Region(s.fleetHouse[i]) == region)) RemoveAt(i);
         }
     }
-    // What Shipwright and Transport calls by name for its "Add to trade fleet" button (§4.5; keep these names stable, guide.md §1): why a ship of a
-    // hull can't join from a yard of a region (null: it can), and the joining itself (the ship's id, or -1).
+    // What Shipwright and Transport calls by name for its "Add to trade fleet" button (these names stay stable for it): why a ship of a hull can't join
+    // from a yard of a region (null: it can), and the joining itself (the ship's id, or -1).
     public static class OfficeFleetApi
     {
         public static string Refusal(int region, int hull) { try { return OfficeFleet.Refusal(region, hull); } catch (Exception e) { return e.Message; } }
         public static int Add(int region, int hull, string name, string rig) { try { return OfficeFleet.Add(region, hull, name, rig); } catch (Exception e) { Plugin.Log.LogWarning("Trade office: a ship not added to the fleet: " + e.Message); return -1; } }
+        // An original joining while Shipwright and Transport keeps it hidden in its storage: as Add, the fleet ship remembering the original's save index
+        // (OfficeState.fleetKept). The trader's id, or -1 (also for a save index under 1 and for an original a fleet ship already keeps).
+        public static int AddKept(int region, int hull, string name, string rig, int saveIndex) { try { return saveIndex < 1 ? -1 : OfficeFleet.Add(region, hull, name, rig, saveIndex); } catch (Exception e) { Plugin.Log.LogWarning("Trade office: a ship not added to the fleet: " + e.Message); return -1; } }
+        // 1 while a fleet ship keeps that original, 0 when none does (Shipwright and Transport frees it then), -1 while this mod's world isn't loaded
+        // (a load under way never reads as freed) or on an error.
+        public static int Kept(int saveIndex) { try { return OfficeFleet.Kept(saveIndex); } catch (Exception) { return -1; } }
         // Why the ship's sails keep it out of the fleet (the parked ship, before its fee is charged), else null: a sail a trader copy can't draw,
-        // MoreSailwindSails' Fisherman sails (Rules.FleetSailRefused; the user, 2026-11-09: "refuse sail from this mod to be admit to trader fleet.").
-        // Two lines of at most 24 characters (Shipwright and Transport's scroll). Added 2026-11-09; an older Transport doesn't ask (Add refuses too).
+        // MoreSailwindSails' Fisherman sails (Rules.FleetSailRefused). Two lines of at most 24 characters (Shipwright and Transport's scroll).
+        // An older Transport doesn't ask (Add refuses too).
         public static string SailRefusal(GameObject boat)
         {
             try
@@ -1200,10 +1361,9 @@ namespace EconomyOverhaul
             catch (Exception e) { return e.Message; }
         }
         // The ship's rig as it stands (Transport's parked ship), the text Add takes: Data/trader_rigs.txt's form, so TraderRigs.Parse reads it. Its part
-        // options carry the hull's options as well as the masts' (the user's list item 5: "Trade fleet's ship should save the hull option also, not
-        // only rig"; again 2026-11-08: "remember the hull option need to be copy also"). Heights on the game's own masts: Shipyard Expansion's
-        // added length taken off, as TraderRigs.PutOn adds it back. null when the ship has no rig record. The plan line's hull is the boat's save
-        // number here (a Transport copy's is its block, 1010 and up); Add puts its own hull argument there (OfficeFleet.WithHull).
+        // options carry the hull's options as well as the masts'. Heights on the game's own masts: Shipyard Expansion's added length taken off, as
+        // TraderRigs.PutOn adds it back. null when the ship has no rig record. The plan line's hull is the boat's save number here (a Transport
+        // copy's is its block, 1010 and up); Add puts its own hull argument there (OfficeFleet.WithHull).
         public static string RigOf(GameObject boat)
         {
             try
@@ -1219,20 +1379,19 @@ namespace EconomyOverhaul
                 var onMast = new Dictionary<int, int>(); var modSails = new HashSet<int>();
                 foreach (var s in d.sails ?? new List<SaveSailData>())
                 {
-                    // a sail from another mod, once per index (the user, 2026-11-09: "ship should be allowed to add into trade fleet even if it use
-                    // modded sail and hull option"): drawn on the fleet ship, and the ship leaves the fleet, 80% paid, at a load without it (their
-                    // answer, "Leaves the fleet, 80% paid"; OfficeFleet.Loaded through TraderRigs.Missing)
+                    // a sail from another mod, once per index: drawn on the fleet ship, and the ship leaves the fleet, 80% paid, at a load without it
+                    // (OfficeFleet.Loaded through TraderRigs.Missing)
                     if (s.prefabIndex >= TraderRigs.FirstModSail && modSails.Add(s.prefabIndex)) { var line = TraderRigs.ModSailLine(s.prefabIndex); if (line != null) text.Append(line).Append('\n'); }
                     float height = s.installHeight - (!se && refs && s.mastIndex >= 0 && s.mastIndex < refs.masts.Length ? TraderRigs.MastAdded(refs.masts[s.mastIndex]) : 0f);
                     text.Append("sail ").Append(s.prefabIndex.ToString(inv)).Append(' ').Append(s.mastIndex.ToString(inv)).Append(' ').Append(height.ToString("R", inv)).Append(' ').Append(s.minAngle.ToString("R", inv)).Append(' ')
                         .Append(s.maxAngle.ToString("R", inv)).Append(' ').Append(s.sailColor.ToString(inv)).Append(' ').Append(s.scaleY.ToString("R", inv)).Append(' ').Append(s.scaleZ.ToString("R", inv)).Append('\n');
-                    // Shipyard Expansion's own texture on this sail when it isn't its prefab's (the user, 2026-11-08 night: "can this be fix"; FleetCompat.SailTexture):
-                    // the k-th sail on its mast, as GetData lists them; not a "needs" line (without Shipyard Expansion the sail shows its own texture)
+                    // Shipyard Expansion's own texture on this sail when it isn't its prefab's (FleetCompat.SailTexture): the k-th sail on its mast, as GetData
+                    // lists them; not a "needs" line (without Shipyard Expansion the sail shows its own texture)
                     int k = onMast.TryGetValue(s.mastIndex, out var n) ? n : 0; onMast[s.mastIndex] = k + 1;
                     var sail = FleetCompat.SailOf(refs, s.mastIndex, k, s.prefabIndex);
                     var texture = FleetCompat.SailTexture(sail, s.prefabIndex);
                     if (texture != null) text.Append("texture ").Append(texture).Append('\n');
-                    // and its Shipyard Expansion angle when it isn't 0, and its jib side when flipped (the user, asked whether to carry them: "Look into it")
+                    // and its Shipyard Expansion angle when it isn't 0, and its jib side when flipped
                     FleetCompat.SailShape(sail, out float angle, out bool flipped);
                     if (!float.IsNaN(angle)) text.Append("angle ").Append(angle.ToString("R", inv)).Append('\n');
                     if (flipped) text.Append("flipped\n");
@@ -1243,12 +1402,12 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- Unique items (§4.9; the user's Q25-Q27 and Q34-Q36) ----
-    // A fixed table (the keepers and spawners load only with their islands): the items of the user's list, each with its own label (the game names
-    // three "lantern" and seven "plant"), and in a tab of their own the regional variants of all three regions (Q35's "only show the the items that
-    // is not at your region" lifted by the user, 2026-11-09: "Also allow unique item purchase to purchase local region item again"). The price: the item's value x 1.1 in the office port's coin at the daily rate, no reputation discount (Q26), at least
-    // 1 coin. Bought, it is made 1 m over the office's drop point in the pose its vanilla shop spawner gives (probe officeposes), owned and saved:
-    // the heap (the user: "Yes, keep the heap"). The modded items (Q36) in a tab of their own, grouped by mod (ModdedList).
+    // ---- Unique items ----
+    // A fixed table (the keepers and spawners load only with their islands): the unique items, each with its own label (the game names three
+    // "lantern" and seven "plant"), and in a tab of their own the regional variants of all three regions, the office's own included. The price:
+    // the item's value x 1.1 in the office port's coin at the daily rate, no reputation discount, at least 1 coin. Bought, it is made 1 m over
+    // the office's drop point in the pose its vanilla shop spawner gives, owned and saved: items bought one after another pile up there. The
+    // modded items in a tab of their own, grouped by mod (ModdedList).
     internal static class OfficeItems
     {
         internal sealed class Entry { internal int Prefab, Region = -1; internal string Label, Sellers, Mod; }
@@ -1279,18 +1438,16 @@ namespace EconomyOverhaul
             R(300, 0, "Pipe", "many ports"), R(301, 1, "Pipe", "many ports"), R(302, 2, "Pipe", "many ports"),
             R(370, 0, "Slicing knife", "many ports"), R(371, 1, "Slicing knife", "many ports"), R(372, 2, "Slicing knife", "many ports"),
             R(382, 0, "Kettle", "many ports"), R(383, 1, "Kettle", "many ports"), R(384, 2, "Kettle", "many ports") };
-        // Every region's variants, the office's own included (the user, 2026-11-09: "Also allow unique item purchase to purchase local region item
-        // again", in place of Q35's "only show the the items that is not at your region"); house kept for the callers.
+        // Every region's variants, the office's own included; house kept for the callers.
         internal static List<Entry> List(int house, bool regional) => regional ? Regional.ToList() : Unique.ToList();
-        // Every shop item of the user's mods (Q25, Q36; the user, 2026-11-08: "add all the modded item to be purchasable instead. not limited to
-        // unique item"): §3B's 87 items sold in only one place and the ones sold in several (§3B "Every modded shop item", read from each mod's code
-        // and asset bundles). Each shown only when its mod is loaded and its prefab stands at that index (looked up at each refresh of the items
-        // page, OfficeItemsPage, twice a second while it is open: the mods register their items after loading). Its label the item's own name and
-        // where ("several ports" for one sold in more than one: S), its
-        // page's "Sold at" every port; the price 10% over what its shop charges (Q34): Realistic Skies' atlas sells at 0.8 of its value, its almanac
-        // and quintant at 0.8 in the observatory and 1.0 at the merchants (the cheaper taken). Hanging Hammock and Sail Damage set their item's index
-        // from their config: read from the item they registered (Found). Left out: items no shop sells (Wind Totem's quest reward, the BFO 5000 shown
-        // at Bone Island, Windicators' 513, 521, 522, 525, Tobacco's 611-613) and this mod's own stock.
+        // Every shop item of the listed mods: the items sold in only one place and the ones sold in several (read from each mod's code and asset
+        // bundles). Each shown only when its mod is loaded and its prefab stands at that index (looked up at each refresh of the items page,
+        // OfficeItemsPage, twice a second while it is open: the mods register their items after loading). Its label the item's own name and
+        // where ("several ports" for one sold in more than one: S), its page's "Sold at" every port; the price 10% over what its shop charges:
+        // Realistic Skies' atlas sells at 0.8 of its value, its almanac and quintant at 0.8 in the observatory and 1.0 at the merchants (the
+        // cheaper taken). Hanging Hammock and Sail Damage set their item's index from their config: read from the item they registered (Found).
+        // Left out: items no shop sells (Wind Totem's quest reward, the BFO 5000 shown at Bone Island, Windicators' 513, 521, 522, 525, Tobacco's
+        // 611-613) and this mod's own stock.
         // shortcut: a fixed table, so a mod not in it (or a later version's new items) isn't listed; replace with a read of the shop spawners if
         // modded items must be found without a table.
         private sealed class Modded { internal string Guid, Sellers, Where; internal int[] Prefabs; internal float Mult = 1f; internal string[] Labels; internal Func<GameObject> Find; }
@@ -1314,8 +1471,7 @@ namespace EconomyOverhaul
             M("DogEggz.Cigar", "Gold Rock City", 618, 627, 630), M("DogEggz.Cigar", "Fort Aestrin", 619, 625, 626, 629), M("DogEggz.Cigar", "Dragon Cliffs", 620, 628, 631),
             M("DogEggz.Cigar", "Eastwind", 621), M("DogEggz.Cigar", "island 39", 622), M("DogEggz.Cigar", "Oasis", 623), M("DogEggz.Cigar", "Chronos", 624), S("DogEggz.Cigar", Cities, 614),
             M("DogEggz.JetPump", "Al'Ankh Academy", 604, 605, 606), M("DogEggz.PowerfulOar", "Kicia Bay", 603), S("DogEggz.PowerfulOar", Cities, 602),
-            // Both its tables are named "table" by Better Tables; the user, 2026-11-08: "make better table's table named "Leveled Table"" (the two differ
-            // in their top, so numbered).
+            // Better Tables names both its tables "table"; labelled "Leveled Table" here, numbered (the two differ in their top).
             new Modded { Guid = "com.nandbrew.bettertables", Sellers = "Fort Aestrin", Prefabs = new[] { 440, 441 }, Labels = new[] { "Leveled Table 1", "Leveled Table 2" } },
             M("com.dixiecapt.sailwind.tinystove", "Fort Aestrin", 32701),
             M("com.raddude.betterfishing", "Gold Rock City", 803, 806), M("com.raddude.betterfishing", "Dragon Cliffs", 804, 807), M("com.raddude.betterfishing", "Fort Aestrin", 805, 808),
@@ -1353,16 +1509,14 @@ namespace EconomyOverhaul
                     list.Add(new Entry { Prefab = p, Label = name + " (" + (m.Where ?? m.Sellers) + ")", Sellers = m.Sellers, Mod = mod });
                 }
             }
-            // Each mod's items together, the mods by name, each mod's in the table's order (the user, 2026-11-08: "make the item from same mod group
-            // together"; OrderBy keeps the order of equal keys).
+            // Each mod's items together, the mods by name, each mod's in the table's order (OrderBy keeps the order of equal keys).
             return list.OrderBy(e => e.Mod, StringComparer.OrdinalIgnoreCase).ToList();
         }
         // The world's up in each item's own frame, from its shop spawners (officeposes); +y where none was read.
         private static readonly Dictionary<int, Vector3> ups = new Dictionary<int, Vector3>();
-        // Beds, tables and chairs stand on their own +z, as every one of their shop spawners stands them (officegrid, og-2: Gold Rock City's 7; officeposes
-        // opose-3: the Emerald bed, large table and chair too), and so does the drying rack (opose-3: the Emerald one; Al'Ankh's and Aestrin's taken as
-        // their family's, not read). Everything else read stands +y up (opose-3: the potions, the rain totem, the ship models, the blue, green and
-        // yellow lanterns, the Emerald stove, smoker and pipe).
+        // Beds, tables and chairs stand on their own +z, as every one of their shop spawners stands them (Gold Rock City's 7; the Emerald bed, large
+        // table and chair too), and so does the drying rack (the Emerald one; Al'Ankh's and Aestrin's taken as their family's, not read). Everything
+        // else read stands +y up (the potions, the rain totem, the ship models, the blue, green and yellow lanterns, the Emerald stove, smoker and pipe).
         internal static Vector3 Up(int prefab) => ups.TryGetValue(prefab, out var u) ? u : prefab >= 60 && prefab <= 78 || prefab >= 374 && prefab <= 376 ? Vector3.forward : Vector3.up;
         internal static Quaternion Pose(int prefab, float yaw) => Quaternion.Euler(0f, yaw, 0f) * Quaternion.FromToRotation(Up(prefab), Vector3.up);
         private static ShipItem Item(int prefab) { var d = PrefabsDirectory.instance ? PrefabsDirectory.instance.directory : null; return d != null && prefab >= 0 && prefab < d.Length && d[prefab] ? d[prefab].GetComponent<ShipItem>() : null; }
@@ -1372,8 +1526,8 @@ namespace EconomyOverhaul
             float mult = shopMult.TryGetValue(e.Prefab, out var sm) ? sm : 1f;
             return Math.Max(1, (int)Math.Ceiling(ShopValue(e.Prefab, item.value) * mult * 1.1 * Fx.State.smooth[Office.Coin(house)] - 1e-9));
         }
-        // What the item's shop really charges before reputation (Q34): its value, but with Kemy's Furniture loaded that mod's prices by name on the
-        // vanilla furniture (its ShipItem patches, read in §3B: beds 950, tables 650, chairs 480, wall shelves 450).
+        // What the item's shop really charges before reputation: its value, but with Kemy's Furniture loaded that mod's prices by name on the
+        // vanilla furniture (its ShipItem patches: beds 950, tables 650, chairs 480, wall shelves 450).
         internal static int ShopValue(int prefab, int value)
         {
             if (!BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey("com.kemy.kemyfurniture")) return value;
@@ -1403,7 +1557,7 @@ namespace EconomyOverhaul
             float yaw = (island.rotation * drop.Turn).eulerAngles.y;
             var go = UnityEngine.Object.Instantiate(PrefabsDirectory.instance.directory[e.Prefab], at, Pose(e.Prefab, yaw), FloatingOriginManager.instance.transform);
             var item = go.GetComponent<ShipItem>(); item.sold = true; go.GetComponent<SaveablePrefab>().RegisterToSave();
-            // The gold sound only, no notice (the user, 2026-11-09: "remove the notification when buy item from office").
+            // The gold sound only, no notice.
             if (UISoundPlayer.instance) UISoundPlayer.instance.PlayGoldSound();
             Plugin.Log.LogInfo("Trade office: " + e.Label + " (prefab " + e.Prefab + ") bought at the " + Pledges.Name(house) + " for " + price + " " + PlayerGold.GetCurrencyName(coin) + ".");
             return item;
@@ -1415,7 +1569,7 @@ namespace EconomyOverhaul
         private void LateUpdate() { var cam = Camera.main; if (cam) transform.position = cam.transform.position; }
     }
 
-    // ---- The fixed spots (§3B, the user's OK on 2026-11-08: "OK, all six"; poses from run os-22) ----
+    // ---- The fixed spots ----
     internal enum OfficePart { Table, Clerk, Paper, Book, Chest, Drop, Sign, CartDude, Cart }
     internal struct OfficePose
     {
@@ -1495,17 +1649,18 @@ namespace EconomyOverhaul
             foreach (var p in list) if (p.Part == part) { pose = p; return true; }
             return false;
         }
-        // The office's table: the item whose mesh is the port table's (§4.2): Gold Rock City and Fort Aestrin table_1 (65), Dragon Cliffs and
+        // The office's table: the item whose mesh is the port table's: Gold Rock City and Fort Aestrin table_1 (65), Dragon Cliffs and
         // Oasis table_3 (67), Serpent Isle and Firefly Grotto table_4 (72).
         internal static int TablePrefab(int house) => house == 201 || house == 203 ? 65 : house == 202 || house == 205 ? 67 : 72;
         // Put an object under the island at a pose: its world scale kept (three islands' roots are scaled 0.5; Serpent Isle's is turned 270
         // degrees about x, so the turn is a whole quaternion, never a yaw).
-        internal static void Place(Transform t, Transform island, OfficePose pose)
+        internal static void Place(Transform t, Transform island, OfficePose pose) => Place(t, island, pose.Position, pose.Turn, pose.Scale);
+        internal static void Place(Transform t, Transform island, Vector3 position, Quaternion turn, Vector3 scale)
         {
             t.SetParent(island, false);
-            t.localPosition = pose.Position; t.localRotation = pose.Turn;
+            t.localPosition = position; t.localRotation = turn;
             var s = island.lossyScale;
-            t.localScale = new Vector3(pose.Scale.x / s.x, pose.Scale.y / s.y, pose.Scale.z / s.z);
+            t.localScale = new Vector3(scale.x / s.x, scale.y / s.y, scale.z / s.z);
         }
     }
 
@@ -1520,6 +1675,7 @@ namespace EconomyOverhaul
         internal static void Poll()
         {
             ClerkPlacer.Tick(); ClerkLook.Tick();
+            if (World.Ready && !Uninstall.Prepared && (GameState.currentlyLoading || GameState.justStarted)) OfficeWharves.BuildEarly();
             if ((poll -= Time.unscaledDeltaTime) > 0) return; poll = 1;
             if (!World.Ready || Uninstall.Prepared || GameState.currentlyLoading || !GameState.playing && !Startup.BlocksGameplay) { if (!World.Ready || Uninstall.Prepared) Clear(); return; }
             OfficeCarts.Apply();
@@ -1534,6 +1690,7 @@ namespace EconomyOverhaul
                 if (!site && d < BuildRange) site = Make(house, b);
                 if (site) site.Sync();
             }
+            OfficeWharves.Poll();
         }
         private static OfficeSite Make(int house, PurchasableBoat b)
         {
@@ -1546,7 +1703,7 @@ namespace EconomyOverhaul
         private static void Remove(int house) { if (sites.TryGetValue(house, out var s)) { if (s) s.Destroy(); sites.Remove(house); } }
         // A change of upgrades: the site redraws its parts at the next poll.
         internal static void Refresh(int house) { var s = Site(house); if (s) s.Sync(); poll = 0; }
-        internal static void Clear() { foreach (var h in sites.Keys.ToList()) Remove(h); OfficePanel.Close(); }
+        internal static void Clear() { foreach (var h in sites.Keys.ToList()) Remove(h); OfficeWharves.DropBuilt(); OfficePanel.Close(); }
     }
 
     // One house's office parts: the sign (until converted), the table and paper (an office), the money chest (the treasury). Each part is
@@ -1561,9 +1718,7 @@ namespace EconomyOverhaul
             house = index; boat = b;
             port = Office.PortOf(index);
             // The port's island: its ancestor straight under the shifting world (the nearest island origin can be another island's).
-            var t = port ? port.transform : null;
-            while (t && t.parent && t.parent.name != "_shifting world") t = t.parent;
-            island = t && t.parent ? t : null;
+            island = Office.IslandRoot(index);
             if (!island) { Plugin.Log.LogWarning("Trade office: no island found for the " + Pledges.Name(index)); return false; }
             transform.SetParent(island, false);
             return true;
@@ -1579,7 +1734,7 @@ namespace EconomyOverhaul
         internal void Sync()
         {
             bool office = Office.IsOffice(house) && Pledges.Owned(boat);
-            // The sign only from the region's reputation 6 (choice 4, the user: "hide below rep 6").
+            // The sign only from the region's reputation 6.
             bool offered = !office && Pledges.Owned(boat) && Reputations.Level(Office.Region(house)) >= Rules.OfficeLevel;
             if (offered) { if (!sign) MakeSign(); } else if (sign) { UnityEngine.Object.Destroy(sign); sign = null; }
             if (office) { if (!table) MakeTable(); if (!paper) MakePaper(); } else { if (table) UnityEngine.Object.Destroy(table); if (paper) UnityEngine.Object.Destroy(paper); table = paper = null; }
@@ -1587,15 +1742,14 @@ namespace EconomyOverhaul
             if (treasury) { if (!chest) MakeChest(); } else if (chest) { UnityEngine.Object.Destroy(chest); chest = null; }
             bool clerk = office && Office.Has(house, OfficeUpgrade.Clerk);
             if (clerk) { if (!clerkRoot) MakeClerk(); } else if (clerkRoot) { UnityEngine.Object.Destroy(clerkRoot); clerkRoot = null; }
-            // The cart dude while the contract works; paused without a clerk only he leaves and his cart stays (the user, 2026-11-08: "for cart
-            // dude only NPC left, cart stay").
+            // The cart dude while the contract works; paused without a clerk only he leaves and his cart stays.
             bool cart = office && Office.Has(house, OfficeUpgrade.Cart);
             if (cart) { if (!cartDude) MakeCartDude(); if (cartDude) PauseCartDude(!Office.Working(house, OfficeUpgrade.Cart)); }
-            else { if (cartDude) { UnityEngine.Object.Destroy(cartDude); cartDude = null; } cartSearched = false; CartDudePaused = false; }   // a remade one starts unpaused, as its flag
+            else { if (cartDude) { UnityEngine.Object.Destroy(cartDude); cartDude = null; } cartSearched = false; CartDudePaused = false; pausedParts.Clear(); pausedColliders.Clear(); }   // a remade one starts unpaused, as its flag
             bool coop = office && Office.Working(house, OfficeUpgrade.Cooperation);
             if (coop) { if (!book) MakeBook(); } else if (book) { UnityEngine.Object.Destroy(book); book = null; }
         }
-        // The cooperation's trade book (§4.7): a working copy of the port dude's, marked as this office's.
+        // The cooperation's trade book: a working copy of the port dude's, marked as this office's.
         private GameObject book;
         internal GameObject Book => book;
         private void MakeBook()
@@ -1607,23 +1761,35 @@ namespace EconomyOverhaul
                 return true;
             });
         }
-        // ---- The cart dude beside the door (§4.6; the user: "there will be a cart dude spawn in front of your office ... Even if the port don't have
-        // cart transport in vanilla, spawn one anyway"; his spot the user's, §3B) ----
+        // ---- The cart dude beside the door, spawned even where the port has no cart transport in vanilla ----
         // A working copy of the island's own cart dude (his CargoTransportDude opens the cart's screen; NPCAnimations moves him), found among the
-        // loaded ones nearest the house, at his approved pose; his cart at its own row under him (Gold Rock City's switched on: the game keeps it
+        // loaded ones nearest the house, at his fixed pose; his cart at its own row under him (Gold Rock City's switched on: the game keeps it
         // off; Fort Aestrin's as at his island). His carrier is the island's (island index, as the game's slots are), Serpent Isle's the one the
-        // office adds (OfficeCarts). Looked for once per visit (the user, 2026-11-08: "don't keep scanning, only scan once when player is close
-        // enough to island"): when the island's own scene has loaded (until then only its loaded flag is read); the site is made again on the next visit.
+        // office adds (OfficeCarts). Looked for once per visit, not scanned again: when the island's own scene has loaded (until then only its
+        // loaded flag is read); the site is made again on the next visit.
         private GameObject cartDude; private bool cartSearched;
         internal GameObject CartDude => cartDude;
         // Paused: everything of him but his cart switched off (his body and the rest), and his own colliders (the trigger that opens the cart's
-        // screen) off; back on when a clerk works there again.
+        // screen) off; back on when a clerk works there again. Only what the pause switched off comes back on: the game keeps a child "debug range"
+        // switched off on every cart dude (a 360 x 1 x 360 sphere in "test water 1"), which switching all on would draw over the town.
         internal bool CartDudePaused { get; private set; }
+        private readonly List<GameObject> pausedParts = new List<GameObject>();
+        private readonly List<Collider> pausedColliders = new List<Collider>();
         private void PauseCartDude(bool paused)
         {
             if (!cartDude || CartDudePaused == paused) return;
-            foreach (Transform child in cartDude.transform) if (child.name != "cart") child.gameObject.SetActive(!paused);
-            foreach (var c in cartDude.GetComponents<Collider>()) c.enabled = !paused;
+            if (paused)
+            {
+                pausedParts.Clear(); pausedColliders.Clear();
+                foreach (Transform child in cartDude.transform) if (child.name != "cart" && child.gameObject.activeSelf) { child.gameObject.SetActive(false); pausedParts.Add(child.gameObject); }
+                foreach (var c in cartDude.GetComponents<Collider>()) if (c.enabled) { c.enabled = false; pausedColliders.Add(c); }
+            }
+            else
+            {
+                foreach (var g in pausedParts) if (g) g.SetActive(true);
+                foreach (var c in pausedColliders) if (c) c.enabled = true;
+                pausedParts.Clear(); pausedColliders.Clear();
+            }
             CartDudePaused = paused;
         }
         private void MakeCartDude()
@@ -1648,17 +1814,17 @@ namespace EconomyOverhaul
                 dude.carrierIndex = carrier;
                 var cartPart = c.transform.Cast<Transform>().FirstOrDefault(t => t.name == "cart");
                 if (cartPart && OfficeSpots.TryGet(house, OfficePart.Cart, out var cp)) { cartPart.localPosition = cp.Position; cartPart.localRotation = cp.Turn; }
-                // Gold Rock City's cart: the object on, its renderers off in the game (os-18); switched on (the user: "GRC cart dude should have a cart").
+                // Gold Rock City's cart: the object on, its renderers off in the game; switched on.
                 if (cartPart && house == 201) { cartPart.gameObject.SetActive(true); foreach (var r in cartPart.GetComponentsInChildren<Renderer>(true)) r.enabled = true; }
                 c.SetActive(true);
                 return true;
             });
             if (cartDude) Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(house) + "'s cart dude copied from " + source.name + " (carrier " + carrier + ").");
         }
-        // ---- The clerk (§4.3; the user: "don't need to be trimmed down, just normal npc", "Clerk should be fully animated like normal npc") ----
+        // ---- The clerk: a full, animated NPC ----
         // A copy of the port dude's own model (Modular NPC: its Animator, CharacterCustomizer, NPCAnimations and its 4 m trigger, ~720 clothes
         // parts), never of the port dude himself (PortDude.Awake would take over Port.dude, and his trigger hands in mission cargo). He stands on a
-        // holder at his approved pose; NPCAnimations (breathing, the head turned to the player within its trigger) needs a parent, and the holder
+        // holder at his fixed pose; NPCAnimations (breathing, the head turned to the player within its trigger) needs a parent, and the holder
         // is it. His look: an outfit of his region from the game's NPCs, picked once and saved; the port dude's own when there are none.
         private GameObject clerkRoot;
         internal GameObject Clerk => clerkRoot;
@@ -1685,45 +1851,43 @@ namespace EconomyOverhaul
             UnityEngine.Object.Destroy(hold);
             body.SetActive(true);
             var talk = clerkRoot.AddComponent<ClerkTalk>(); talk.site = this;
-            // Clicked to talk (the user: "start with a click on him"): a trigger for the game's pointer (its ray hits triggers, 1.8 m at most,
-            // GoPointer.DoRaycast), his button on it. A trigger, so he stays as walk-through as before. On a child of its own with a renderer switched
-            // off: a GoPointerButton requires a Renderer (adding one without failed, otrade-3). This capsule the size of a standing man only until
-            // FitClerkArea puts his model's own shape there once he is dressed (and for good if that can't be made).
+            // Clicked to talk: a trigger for the game's pointer (its ray hits triggers, 1.8 m at most, GoPointer.DoRaycast), his button on it. A
+            // trigger, so he stays walk-through. On a child of its own with a renderer switched off: a GoPointerButton requires a Renderer (adding one
+            // without fails). This capsule the size of a standing man only until FitClerkArea puts his model's own shape there once he is dressed (and
+            // for good if that can't be made).
             var clickable = new GameObject("clerk button"); clickable.transform.SetParent(clerkRoot.transform, false);
             var hit = clickable.AddComponent<CapsuleCollider>(); hit.isTrigger = true; hit.direction = 1; hit.height = 1.8f; hit.radius = .3f; hit.center = new Vector3(0f, .9f, 0f);
             // No materials at all: the game's outline effect reads each of a pointed-at button's materials, and a new renderer's empty slot
-            // threw in cakeslice.OutlineEffect.OnPreRender every frame (oc-3).
+            // throws in cakeslice.OutlineEffect.OnPreRender every frame.
             var hidden = clickable.AddComponent<MeshRenderer>(); hidden.sharedMaterials = new Material[0]; hidden.enabled = false;
             var button = clickable.AddComponent<LoanAction>(); button.action = talk.Clicked; button.lookText = "Clerk";
-            // His look text in one place, whichever part of him is pointed at (the user, 2026-11-09: "hint text showing up everywhere on clerk, could
-            // you make it only in one place?"): the game draws a button's text at that button's own place (LookUI.ShowLookText), and his click area
-            // is a button on each bone, so ClerkLookTextPatch moves it here. At chest height of a standing man until FitClerkArea puts it at his
-            // model's chest.
+            // His look text in one place, whichever part of him is pointed at: the game draws a button's text at that button's own place
+            // (LookUI.ShowLookText), and his click area is a button on each bone, so ClerkLookTextPatch moves it here. At chest height of a standing
+            // man until FitClerkArea puts it at his model's chest.
             var text = new GameObject(ClerkTextName); text.transform.SetParent(clerkRoot.transform, false); text.transform.localPosition = new Vector3(0f, 1.25f, 0f);
             clickable.AddComponent<ClerkTextAt>().at = text.transform;
         }
         internal const string ClerkTextName = "clerk look text";
         // A new look (Player Model's screen) goes on a fresh copy of the port dude's model, not on the clerk that wears it now: his outfit
-        // (TraderHulls.DressWhole) switched its parts on by itself and gave some of them its NPC's own meshes and materials, which the game's
-        // CharacterCustomizer neither switches off nor knows (its ClearItems clears only what it switched on), so they stayed on under the new look:
-        // the old look kept showing, a female look under the outfit's male parts, two hands drawn in one place (the user's video, 2026-11-09). His
-        // place stays (MakeClerk reads his saved spot); the new copy is dressed by Dress, which puts the saved look on.
+        // (TraderHulls.DressWhole) switches its parts on by itself and gives some of them its NPC's own meshes and materials, which the game's
+        // CharacterCustomizer neither switches off nor knows (its ClearItems clears only what it switched on), so they would stay on under the new
+        // look (the old look showing through, two hands drawn in one place). His place stays (MakeClerk reads his saved spot); the new copy is
+        // dressed by Dress, which puts the saved look on.
         internal void RemakeClerk()
         {
             if (clerkRoot) { UnityEngine.Object.Destroy(clerkRoot); clerkRoot = null; }
             if (Office.Has(house, OfficeUpgrade.Clerk)) MakeClerk();
         }
-        // His click area (the user, 2026-11-08: "Same as clerk's model, same distance as pointer distance used to pick up cargo"): his drawn model's
-        // own shape, moving with him. Each worn part (head, torso, each arm, hand and leg, the clothes) baked in his pose (BakeMesh: its vertices in
-        // its own place and turn, its scale applied, as TraderHulls.BakeOutfit places them), its faces split into pieces of at most 128 corners (a
-        // convex shell of 128 points has at most 252 triangles, under the 255 Unity cooks one to, so none is cut), each piece a convex trigger shell
-        // on the nearest of its part's own bones, so it follows his idle animation, breathing and head turn (shells fitted once and left in place
-        // missed his model by up to 4.7 cm, oc-7). A piece keeps whole faces, so together they cover every face of him; a flat piece (under 1 cm
-        // thick along its faces' normal) is thickened 5 mm each way so it can be cooked. Each bone with pieces has its own clickable holder
-        // ("clerk button <bone>": a renderer switched off with no materials, his LoanAction), as the game's pointer reads the button on the collider
-        // it hits. The reach needs nothing of its own: the ray is the game's pointer ray that picks up cargo (GoPointer.DoRaycast: 1.8 m from the
-        // pointer, mask -604165). Fitted once he is dressed (ClerkGuard) and again after Player Model's look (ClerkLook.Tick); his clerk guard
-        // destroys the meshes and holders with him. If no shell can be made the first capsule stays.
+        // His click area: his drawn model's own shape, moving with him. Each worn part (head, torso, each arm, hand and leg, the clothes) baked
+        // in his pose (BakeMesh: its vertices in its own place and turn, its scale applied, as TraderHulls.BakeOutfit places them), its faces split
+        // into pieces of at most 128 corners (a convex shell of 128 points has at most 252 triangles, under the 255 Unity cooks one to, so none is
+        // cut), each piece a convex trigger shell on the nearest of its part's own bones, so it follows his idle animation, breathing and head turn
+        // (shells fitted once and left in place miss his model by up to 4.7 cm). A piece keeps whole faces, so together they cover every face of him;
+        // a flat piece (under 1 cm thick along its faces' normal) is thickened 5 mm each way so it can be cooked. Each bone with pieces has its own
+        // clickable holder ("clerk button <bone>": a renderer switched off with no materials, his LoanAction), as the game's pointer reads the button
+        // on the collider it hits. The reach needs nothing of its own: the ray is the game's pointer ray that picks up cargo (GoPointer.DoRaycast:
+        // 1.8 m from the pointer, mask -604165). Fitted once he is dressed (ClerkGuard) and again after Player Model's look (ClerkLook.Tick); his
+        // clerk guard destroys the meshes and holders with him. If no shell can be made the first capsule stays.
         private const int ClerkPieceMost = 128;
         internal void FitClerkArea()
         {
@@ -1831,7 +1995,7 @@ namespace EconomyOverhaul
             }
             return best;
         }
-        // Where the player put him (Q18), island-local; false until moved.
+        // Where the player put him, island-local; false until moved.
         internal bool ClerkSpot(out Vector3 position, out Quaternion turn)
         {
             position = Vector3.zero; turn = Quaternion.identity;
@@ -1860,8 +2024,8 @@ namespace EconomyOverhaul
             if (pick < 0 || pick >= all.Count) { pick = Rules.PickOutfit(Office.Region(house), all.Select(o => o.Kind).ToList(), new HashSet<int>(), UnityEngine.Random.value * .999999); s.clerkOutfit[i] = pick + 1; }
             if (pick >= 0 && TraderHulls.DressWhole(model, pick)) Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(house) + "'s clerk wears outfit " + pick + " (" + all[pick].From + ").");
         }
-        // A working copy at a pose: made under an inactive holder, the copied outlines taken off (the game adds its own at Start; the probe
-        // officeparts found two on each copy), placed, then woken.
+        // A working copy at a pose: made under an inactive holder, the copied outlines taken off (the game adds its own at Start, so a copy
+        // would hold two), placed, then woken.
         private GameObject Copy(GameObject source, OfficePart part, string name, Func<GameObject, bool> prepare = null)
         {
             if (!source || !OfficeSpots.TryGet(house, part, out var pose)) return null;
@@ -1880,7 +2044,7 @@ namespace EconomyOverhaul
             var ui = dude ? dude.GetComponentsInChildren<Transform>(true).FirstOrDefault(x => x.name == "mission UI") : null;
             return ui ? ui.GetComponentsInChildren<Transform>(true).FirstOrDefault(x => x.name == name) : null;
         }
-        // The sign beside the door: a copy of the house's own sale sign, its buy button replaced by the conversion (§4.1). Cloned from the
+        // The sign beside the door: a copy of the house's own sale sign, its buy button replaced by the conversion. Cloned from the
         // sign while it's switched off, so the copy's purchase button never registers itself as the house's sign (as the rental scroll is).
         private void MakeSign()
         {
@@ -1917,27 +2081,28 @@ namespace EconomyOverhaul
                 why.StartsWith("Needs ", StringComparison.Ordinal) && why.Contains("reputation") ? "needs " + BookUI.RegionName(region) + " rep. " + Rules.OfficeLevel : why.ToLowerInvariant());
             if (signLabel) signLabel.text = "Convert";
         }
-        // The port's table (§4.2): the table item sharing its mesh, its scripts and body off, its colliders kept so the player can't walk
+        // The port's table: the table item sharing its mesh, its scripts and body off, its colliders kept so the player can't walk
         // through it, on the default layer (an item's layer lets the player pass).
         private void MakeTable()
         {
             var dir = PrefabsDirectory.instance ? PrefabsDirectory.instance.directory : null; int prefab = OfficeSpots.TablePrefab(house);
             if (dir == null || prefab >= dir.Length || !dir[prefab]) return;
-            table = Copy(dir[prefab], OfficePart.Table, "trade office table", c =>
-            {
-                for (int pass = 0; pass < 4; pass++)
-                {
-                    foreach (var mb in c.GetComponentsInChildren<MonoBehaviour>(true).Reverse()) DestroyImmediate(mb);
-                    foreach (var j in c.GetComponentsInChildren<Joint>(true)) DestroyImmediate(j);
-                    foreach (var rb in c.GetComponentsInChildren<Rigidbody>(true)) DestroyImmediate(rb);
-                    if (c.GetComponentsInChildren<MonoBehaviour>(true).Length == 0) break;
-                }
-                foreach (var col in c.GetComponentsInChildren<Collider>(true)) { col.isTrigger = false; col.gameObject.layer = 0; }
-                foreach (var t in c.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = 0;
-                return true;
-            });
+            table = Copy(dir[prefab], OfficePart.Table, "trade office table", c => { StripToScenery(c); return true; });
         }
-        // The paper that opens the office's scroll: the mission paper, its button swapped for the mod's (§4.2, as RentandLoan.cs's mission scroll).
+        // An item's copy made scenery: its scripts, joints and body gone, its colliders solid on the default layer (also the wharf's documents' table).
+        internal static void StripToScenery(GameObject c)
+        {
+            for (int pass = 0; pass < 4; pass++)
+            {
+                foreach (var mb in c.GetComponentsInChildren<MonoBehaviour>(true).Reverse()) DestroyImmediate(mb);
+                foreach (var j in c.GetComponentsInChildren<Joint>(true)) DestroyImmediate(j);
+                foreach (var rb in c.GetComponentsInChildren<Rigidbody>(true)) DestroyImmediate(rb);
+                if (c.GetComponentsInChildren<MonoBehaviour>(true).Length == 0) break;
+            }
+            foreach (var col in c.GetComponentsInChildren<Collider>(true)) { col.isTrigger = false; col.gameObject.layer = 0; }
+            foreach (var t in c.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = 0;
+        }
+        // The paper that opens the office's scroll: the mission paper, its button swapped for the mod's (as RentandLoan.cs's mission scroll).
         private void MakePaper()
         {
             paper = Copy(MissionPart("mission_details_UI_bg_001")?.gameObject, OfficePart.Paper, "trade office paper", c =>
@@ -1950,8 +2115,7 @@ namespace EconomyOverhaul
                 return c.GetComponentInChildren<LoanAction>(true);
             });
         }
-        // The treasury's money chest (§4.4): a copy of the port dude's (on at 8 of 32 ports; a copy is switched on, officeparts), marked as
-        // this office's box.
+        // The treasury's money chest: a copy of the port dude's (on at 8 of 32 ports; a copy is switched on), marked as this office's box.
         private void MakeChest()
         {
             chest = Copy(MissionPart("moneychest")?.gameObject, OfficePart.Chest, "trade office chest", c =>
@@ -1968,14 +2132,1560 @@ namespace EconomyOverhaul
             signTimer = .5f; UpdateSign();
         }
     }
-    // The clerk's guard: once his model has woken (CharacterCustomizer.Start puts its default clothes on; Talkative NPCs adds its speech bubble
-    // and hit talker to every NPCAnimations at Start), whatever another mod added under him goes (the user's list item 3: "Talktive NPC don't make
-    // clerk speak") and his outfit goes on. Twice, the first two frames after he wakes; then it stops. He is built 450 m out, before any trigger
-    // of his can meet the player.
+    // ---- The office's wharf ----
+    // At Serpent Isle, Oasis and Firefly Grotto (Rules.WharfHouse), bought on the office's scroll after local office cooperation for 1,500 Gold. Every
+    // place is an island-local pose: a T pier of the island's own dock pieces with a ramp into the sand at Oasis and Serpent Isle, a low pier of Aestra
+    // Abbey's (Oasis's) dock piece along the quay with the cave's own stair up to it at Firefly Grotto; four cleats; a shipyard with documents on the
+    // office's table and a keeper; the whole deck the cargo area of the office's trade book. New parts are appended at the enum's end only.
+    internal enum WharfPart { Cross, Stem, Ramp, Low, Stair, Cleat, Table, Documents, Keeper, Yard, Edit, Release, Platform, Square, Ladder, Lamp, LampPost, LampRope, Lantern, Walk }
+    internal struct WharfPose
+    {
+        internal WharfPart Part; internal int Index; internal Vector3 Position, Scale; internal Quaternion Turn;
+    }
+    internal static class WharfSpots
+    {
+        // House, part, index, island-local position and turn, world scale. The keeper's row is his marker's middle, 0.9 m over the deck
+        // (OfficeWharves.MakeKeeper stands him on the deck).
+        private static WharfPose W(WharfPart part, int index, float x, float y, float z, float qx, float qy, float qz, float qw, float sx, float sy, float sz) =>
+            new WharfPose { Part = part, Index = index, Position = new Vector3(x, y, z), Turn = new Quaternion(qx, qy, qz, qw), Scale = new Vector3(sx, sy, sz) };
+        internal static readonly Dictionary<int, WharfPose[]> Poses = new Dictionary<int, WharfPose[]>
+        {
+            { 205, new[] {
+            W(WharfPart.Cross, 0, 111.2217f, 2.4f, -391.0501f, -0.270598f, -0.653281f, -0.653282f, 0.270598f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cross, 1, 119.707f, 2.4f, -382.5648f, -0.270598f, -0.653281f, -0.653282f, 0.270598f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cross, 2, 128.1923f, 2.4f, -374.0795f, -0.270598f, -0.653281f, -0.653282f, 0.270598f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cross, 3, 136.6776f, 2.4f, -365.5942f, -0.270598f, -0.653281f, -0.653282f, 0.270598f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 0, 75.0767f, 2.4f, -329.0687f, -0.653287f, -0.270584f, -0.270584f, 0.653287f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 1, 83.5615f, 2.4f, -337.5543f, -0.653287f, -0.270584f, -0.270584f, 0.653287f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 2, 92.0464f, 2.4f, -346.04f, -0.653287f, -0.270584f, -0.270584f, 0.653287f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 3, 100.5314f, 2.4f, -354.5256f, -0.653287f, -0.270584f, -0.270584f, 0.653287f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 4, 109.0163f, 2.4f, -363.0113f, -0.653287f, -0.270584f, -0.270584f, 0.653287f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 5, 117.5012f, 2.4f, -371.4969f, -0.653287f, -0.270584f, -0.270584f, 0.653287f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Ramp, 0, 66.4647f, 1.5046f, -320.456f, -0.597807f, -0.291759f, -0.247605f, 0.704411f, 0.5f, 0.5f, 0.5f),
+            // The cleats on the crosspiece's ship-side posts, as the game stands its cleats on this dock piece's own posts: on pole A of Cross 0, 0 (its far end),
+            // 2 and 3 (the middle one, at the ladder, left out), 0.0715 m over its top, turned as dock_mooring (4) on dock (13)
+            W(WharfPart.Cleat, 0, 109.0085f, 2.636f, -396.9969f, 0.274944f, 0.651464f, 0.651465f, -0.274944f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cleat, 1, 117.4937f, 2.636f, -388.5116f, 0.274944f, 0.651464f, 0.651465f, -0.274944f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cleat, 2, 134.4643f, 2.636f, -371.541f, 0.274944f, 0.651464f, 0.651465f, -0.274944f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cleat, 3, 142.9496f, 2.636f, -363.0557f, 0.274944f, 0.651464f, 0.651465f, -0.274944f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Table, 0, 127.5319f, 3.3894f, -372.594f, 0.653281f, 0.270598f, 0.270598f, -0.653281f, 1f, 1f, 1f),
+            W(WharfPart.Documents, 0, 126.9298f, 3.6431f, -371.8262f, -0.173265f, 0.68555f, 0.68555f, 0.173265f, 0.6589f, 1f, 1f),
+            W(WharfPart.Keeper, 0, 129.3704f, 4.1886f, -370.7555f, 0f, 0.92388f, 0f, -0.382683f, 0.5f, 1.8f, 0.5f),
+            W(WharfPart.Yard, 0, 132f, 0f, -386f, 0f, 0.382683f, 0f, 0.923879f, 1f, 1f, 1f),
+            W(WharfPart.Edit, 0, 136.2424f, 6f, -390.2428f, 0f, 0.382683f, 0f, 0.923879f, 1f, 1f, 1f),
+            W(WharfPart.Release, 0, 132f, 0f, -386f, 0f, 0.382683f, 0f, 0.923879f, 1f, 1f, 1f),
+            // The ladder at the crosspiece's middle on its seaward side: two of the game's junk large ladder, the second 0.8166 m under the first, clear of the
+            // table, keeper and cleats
+            W(WharfPart.Ladder, 0, 126.3945f, 3.3813f, -380.0962f, -0.270598f, 0.653281f, 0.653281f, 0.270598f, 1f, 1f, 1f),
+            W(WharfPart.Ladder, 1, 126.3945f, 1.7481f, -380.0962f, -0.270598f, 0.653281f, 0.653281f, 0.270598f, 1f, 1f, 1f),
+            // The lamps: copies of the island's own lamppost A at scale 0.65, each on a landward pole B post as lamppost A (1) stands on dock (8)'s, its foot on the
+            // post, the arm across over the deck, the lantern's bottom 2.35 m over it: L1-L4 on the crosspiece (not where the stem joins), L5 and L6 on the stem at
+            // a third and two thirds of it, L7 on the stem's last post, where the ramp joins
+            W(WharfPart.Lamp, 1, 105.5934f, 9.46f, -393.6799f, -0.275655f, 0.651163f, 0.651164f, 0.275655f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 2, 114.1767f, 9.46f, -385.0966f, -0.275655f, 0.651163f, 0.651164f, 0.275655f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 3, 131.1473f, 9.46f, -368.126f, -0.275655f, 0.651163f, 0.651164f, 0.275655f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 4, 139.6326f, 9.46f, -359.6407f, -0.275655f, 0.651163f, 0.651164f, 0.275655f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 5, 106.4848f, 9.46f, -357.4809f, 0.265539f, 0.655354f, 0.655354f, -0.265539f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 6, 89.5149f, 9.46f, -340.5096f, 0.265539f, 0.655354f, 0.655354f, -0.265539f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 7, 72.4472f, 9.46f, -323.4403f, 0.265539f, 0.655354f, 0.655354f, -0.265539f, 0.65f, 0.65f, 0.65f),
+            // The lamps along the painted path to the office: the same lamppost A every 25 m from the ramp's foot toward the door, 2.4 m beside the path's middle
+            // (0.6 m outside its paint), the arm toward the path, at least 1 m from the scene's objects and 6 m from the pier's and the game's lamps; L8 nearest the
+            // ramp. Each stands on the ground under it (PathLampOverGround; the rows' heights from the vanilla ground). L12 stands on the path's first 32.4 m (door
+            // to J), painted only without Oasis House Fix's roads, so it is made only then (OfficeWharves.PathLampShown).
+            W(WharfPart.Lamp, 8, 50.4556f, 8.1143f, -300.6633f, -0.606423f, 0.363664f, 0.363664f, 0.606423f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 9, 31.6574f, 11.5187f, -255.3252f, -0.611584f, 0.354916f, 0.354916f, 0.611584f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 10, 3.0698f, 18.767f, -214.897f, -0.617272f, 0.344928f, 0.344928f, 0.617272f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 11, -10.8f, 18.1295f, -166.1055f, -0.5f, 0.5f, 0.5f, 0.5f, 0.65f, 0.65f, 0.65f),
+            W(WharfPart.Lamp, 12, -24.8652f, 19.7868f, -125.3972f, -0.509518f, 0.490298f, 0.490298f, 0.509518f, 0.65f, 0.65f, 0.65f) } },
+            { 204, new[] {
+            W(WharfPart.Cross, 0, 13.5445f, -465.8451f, 2.6f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cross, 1, 19.2013f, -471.502f, 2.6f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cross, 2, 24.8582f, -477.1588f, 2.6f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cross, 3, 30.515f, -482.8156f, 2.6f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cross, 4, 36.1719f, -488.4725f, 2.6f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cross, 5, 41.8287f, -494.1293f, 2.6f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 0, 5.373f, -502.7663f, 2.6f, 0f, 0f, 0.384452f, 0.923145f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 1, 11.0082f, -497.0878f, 2.6f, 0f, 0f, 0.384452f, 0.923145f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 2, 16.6433f, -491.4093f, 2.6f, 0f, 0f, 0.384452f, 0.923145f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stem, 3, 22.2785f, -485.7308f, 2.6f, 0f, 0f, 0.384452f, 0.923145f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Ramp, 0, -0.0962f, -508.2775f, 2.0325f, 0.031368f, -0.07532f, 0.38317f, 0.920067f, 0.5f, 0.5f, 0.5f),
+            // The cleats on the planks, as the Emerald docks have none on a post: 0.275 m in from the plank ends, 0.132 m over the plank tops, the horn along the
+            // edge
+            W(WharfPart.Cleat, 0, 13.9643f, -462.1672f, 2.495f, 0f, 0f, 0.92388f, 0.382683f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cleat, 1, 24.2789f, -472.3757f, 2.4739f, 0f, 0f, 0.92388f, 0.382683f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cleat, 2, 35.6719f, -483.7687f, 2.4739f, 0f, 0f, 0.92388f, 0.382683f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Cleat, 3, 45.8792f, -494.0846f, 2.4941f, 0f, 0f, 0.92388f, 0.382683f, 0.5f, 0.5f, 0.5f),
+            // The documents' table (WharfSpots.TablePrefab), its long side across the pier, 0.05 m from the pier's landward edge, 1.94 m clear on the ship's side;
+            // the documents on it as on Oasis's; the keeper beyond its end along the pier
+            W(WharfPart.Table, 0, 31.0808f, -486.1647f, 3.2356f, 0f, 0f, -0.382684f, 0.923879f, 1f, 1f, 1f),
+            W(WharfPart.Documents, 0, 30.4787f, -486.9325f, 3.4893f, 0f, 0f, 0.969515f, 0.245034f, 0.6589f, 1f, 1f),
+            W(WharfPart.Keeper, 0, 33.1078f, -488.4941f, 4.0357f, -0.270598f, 0.653282f, 0.653282f, -0.270598f, 0.5f, 1.8f, 0.5f),
+            W(WharfPart.Yard, 0, 36f, -472.0002f, -0.0001f, 0.653282f, 0.270598f, 0.270598f, 0.653282f, 1f, 1f, 1f),
+            W(WharfPart.Edit, 0, 40.2264f, -467.7413f, 5.9999f, 0.653282f, 0.270598f, 0.270598f, 0.653282f, 1f, 1f, 1f),
+            W(WharfPart.Release, 0, 36f, -472.0002f, -0.0001f, 0.653282f, 0.270598f, 0.270598f, 0.653282f, 1f, 1f, 1f),
+            W(WharfPart.Ladder, 0, 30.424f, -477.9346f, 3.3681f, 0f, 0f, 0.92388f, 0.382683f, 1f, 1f, 1f),
+            W(WharfPart.Ladder, 1, 30.424f, -477.9346f, 1.7349f, 0f, 0f, 0.92388f, 0.382683f, 1f, 1f, 1f),
+            // The lamps: the Emerald docks have no lamp post and hang every lantern on a rope, so each lamp L1-L5 is two of the island's "east light pole with rope"
+            // 5.2 m apart, 0.27 m in from an edge away from the ship (drawn 0.82 tall, 3.19 m, for the game's 1.56 m under the lantern), its rope
+            // "east_street_rope" at scale 0.5 0.27 m under their tops and the rope's paper lantern under its middle. The posts' index is the lamp's times 10, plus 1
+            // for its second post. L1, L2 on the crosspiece's landward edge either side of the stem, L3 on the stem's west edge at its middle, L5 on L3's edge where
+            // the ramp joins; L4 is not used.
+            W(WharfPart.LampPost, 10, 12.0403f, -468.7516f, 5.0243f, 0f, 0f, -0.375566f, 0.926796f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampPost, 11, 19.5074f, -475.9923f, 5.0243f, 0f, 0f, -0.375566f, 0.926796f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampRope, 1, 15.7739f, -472.372f, 7.7643f, 0f, 0f, 0.920909f, -0.389778f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Lantern, 1, 15.7739f, -472.372f, 6.1443f, 0f, 0f, 0.920909f, -0.389778f, 0.5f, 0.495f, 0.509f),
+            W(WharfPart.LampPost, 20, 31.7686f, -488.4798f, 5.0199f, 0f, 0f, -0.375566f, 0.926796f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampPost, 21, 39.2356f, -495.7206f, 5.0199f, 0f, 0f, -0.375566f, 0.926796f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampRope, 2, 35.5021f, -492.1002f, 7.7599f, 0f, 0f, 0.920909f, -0.389778f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Lantern, 2, 35.5021f, -492.1002f, 6.1399f, 0f, 0f, 0.920909f, -0.389778f, 0.5f, 0.495f, 0.509f),
+            W(WharfPart.LampPost, 30, 10.4203f, -493.6714f, 4.949f, 0f, 0f, 0.382683f, 0.92388f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampPost, 31, 17.7742f, -486.3175f, 4.949f, 0f, 0f, 0.382683f, 0.92388f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampRope, 3, 14.0972f, -489.9945f, 7.689f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Lantern, 3, 14.0972f, -489.9945f, 6.069f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.495f, 0.509f),
+            W(WharfPart.LampPost, 50, 0.9026f, -503.1043f, 5.0243f, 0f, 0f, 0.382683f, 0.92388f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampPost, 51, 8.2565f, -495.7503f, 5.0243f, 0f, 0f, 0.382683f, 0.92388f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampRope, 5, 4.5796f, -499.4273f, 7.7643f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Lantern, 5, 4.5796f, -499.4273f, 6.1443f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.495f, 0.509f),
+            // L6 a gate across the stem's mouth: a post on the crosspiece's landward edge each side, 0.3 m in, 0.7 m west of the stem's middle (clear of the table),
+            // drawn 1.057 tall (4.11 m) so the lantern over the walkway hangs its foot 2.50 m over the deck; L7, L8 on the boardwalk's west side, 0.3 m in, 1 m
+            // from each end (12.1 m between the lanterns), each post at 0.82 on the walk's deck under it (the walk climbs: the two posts' feet 0.51 and 0.27 m apart
+            // in height), the rope from top to top, the lantern under its middle (1.45 and 1.56 m over the walk)
+            W(WharfPart.LampPost, 60, 21.102f, -477.733f, 5.8999f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 1.057f),
+            W(WharfPart.LampPost, 61, 28.456f, -485.0869f, 5.8999f, 0f, 0f, -0.382683f, 0.92388f, 0.5f, 0.5f, 1.057f),
+            W(WharfPart.LampRope, 6, 24.779f, -481.4099f, 9.5879f, 0f, 0f, 0.92388f, -0.382683f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Lantern, 6, 24.779f, -481.4099f, 7.9679f, 0f, 0f, 0.92388f, -0.382683f, 0.5f, 0.495f, 0.509f),
+            W(WharfPart.LampPost, 70, -5.6267f, -510.2966f, 4.4575f, 0f, 0f, -0.765631f, 0.64328f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampPost, 71, -7.4195f, -520.541f, 5.4711f, 0f, 0f, -0.765631f, 0.64328f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampRope, 7, -6.5231f, -515.4188f, 7.7043f, 0.004201f, 0.048376f, 0.995075f, 0.086414f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Lantern, 7, -6.5231f, -515.4188f, 6.0843f, 0f, 0f, 0.99625f, 0.086516f, 0.5f, 0.495f, 0.509f),
+            W(WharfPart.LampPost, 80, -9.7815f, -534.0385f, 6.1611f, 0f, 0f, -0.765631f, 0.64328f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampPost, 81, -11.5743f, -544.2828f, 6.7047f, 0f, 0f, -0.765631f, 0.64328f, 0.5f, 0.5f, 0.82f),
+            W(WharfPart.LampRope, 8, -10.6779f, -539.1607f, 9.1729f, 0.002259f, 0.02601f, 0.995911f, 0.086485f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Lantern, 8, -10.6779f, -539.1607f, 7.5529f, 0f, 0f, 0.996251f, 0.086515f, 0.5f, 0.495f, 0.509f),
+            // The boardwalk from the ramp's foot to the office door: five copies of the pier's own piece with its base, each following the ground under its middle,
+            // stretched 0.45 along; the first starts 1.1 m further back over the ramp's end so the two decks meet with no sand between them (stretched 0.57, 8.6
+            // degrees). A walkway only, not a cargo area.
+            W(WharfPart.Walk, 0, -3.0127f, -513.1227f, 2.3598f, -0.057278f, -0.048125f, -0.763485f, 0.641478f, 0.5699f, 0.5f, 0.5f),
+            W(WharfPart.Walk, 1, -4.4901f, -521.5647f, 3.1333f, -0.002357f, -0.00198f, -0.765627f, 0.643278f, 0.4501f, 0.5f, 0.5f),
+            W(WharfPart.Walk, 2, -5.7267f, -528.6307f, 3.3785f, -0.024388f, -0.020491f, -0.765242f, 0.642954f, 0.4501f, 0.5f, 0.5f),
+            W(WharfPart.Walk, 3, -6.9685f, -535.7272f, 3.8206f, -0.02248f, -0.018888f, -0.7653f, 0.643003f, 0.4501f, 0.5f, 0.5f),
+            W(WharfPart.Walk, 4, -8.2113f, -542.8288f, 4.1923f, -0.016784f, -0.014102f, -0.765446f, 0.643126f, 0.4501f, 0.5f, 0.5f) } },
+            { 206, new[] {
+            W(WharfPart.Low, 0, -30.4225f, 1.2f, -1075.749f, -0.683897f, -0.179682f, -0.179682f, 0.683897f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Low, 1, -27.4733f, 1.2f, -1080.9741f, -0.683897f, -0.179682f, -0.179682f, 0.683897f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Low, 2, -24.5241f, 1.2f, -1086.1992f, -0.683897f, -0.179682f, -0.179682f, 0.683897f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Low, 3, -21.5749f, 1.2f, -1091.4244f, -0.683897f, -0.179682f, -0.179682f, 0.683897f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Low, 4, -18.6256f, 1.2f, -1096.6495f, -0.683897f, -0.179682f, -0.179682f, 0.683897f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Low, 5, -15.6764f, 1.2f, -1101.8748f, -0.683897f, -0.179682f, -0.179682f, 0.683897f, 0.5f, 0.5f, 0.5f),
+            W(WharfPart.Stair, 0, -22.8045f, 1.2346f, -1090.3345f, -0.683896f, -0.179682f, -0.179682f, 0.683897f, 1f, 1f, 0.6396f),
+            // The wood platform at the stair's top, outside the quay wall's gap: its frame's origin 14.93 m along the wall run and 2.80 m out from its landward
+            // face (the stair landing's start and its sea edge) at 2.915 m (the landing's top 2.911; the planks' tops from 2.921), the low pier's turn 90 degrees
+            // about up (x along the run, y toward the wall), at the pier's scale
+            W(WharfPart.Platform, 0, -21.4515f, 2.915f, -1091.2335f, -0.610642f, 0.356534f, 0.356534f, 0.610642f, 0.5f, 0.5f, 0.5f),
+            // The cleats on every second ship-side post (pole B) at Aestra Abbey's size 0.9, 0.2155 m over its top, the horn along the pier; 12 m apart, numbered
+            // from the low pier's first piece
+            W(WharfPart.Cleat, 0, -30.686f, 1.524f, -1072.5849f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 0.9f, 0.9f, 0.9f),
+            W(WharfPart.Cleat, 1, -24.7876f, 1.524f, -1083.0352f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 0.9f, 0.9f, 0.9f),
+            W(WharfPart.Cleat, 2, -18.8892f, 1.524f, -1093.4855f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 0.9f, 0.9f, 0.9f),
+            W(WharfPart.Cleat, 3, -12.9907f, 1.524f, -1103.9359f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 0.9f, 0.9f, 0.9f),
+            // The documents' table as Serpent Isle's, the documents on it as on Oasis's. The quay wall's face (Cube.022) stands 0.25 m in from the deck's
+            // quay-side edge; the table's edge stands 0.05 m off that face, 1.27 m clear on the ship's side.
+            W(WharfPart.Table, 0, -25.0220f, 1.6856f, -1086.3075f, 0.356533f, 0.610642f, 0.610642f, -0.356533f, 1f, 1f, 1f),
+            W(WharfPart.Documents, 0, -25.4726f, 1.8125f, -1086.4945f, -0.552654f, 0.441105f, 0.441105f, 0.552654f, 0.6589f, 1f, 1f),
+            // The keeper on the table's far side from the stair, facing it, 0.67 m beyond the table's end
+            W(WharfPart.Keeper, 0, -25.5273f, 2.0981f, -1085.1945f, 0f, 0.967176f, 0f, 0.254109f, 0.5f, 1.8f, 0.5f),
+            W(WharfPart.Yard, 0, -18.1438f, 0f, -1086.1943f, 0f, 0.967176f, 0f, 0.254109f, 1f, 1f, 1f),
+            W(WharfPart.Edit, 0, -15.5312f, 3f, -1084.7197f, 0f, 0.967176f, 0f, 0.254109f, 1f, 1f, 1f),
+            // The release at the ship's place turned half a turn, heading 330.6 degrees, its bow away from the cave's wall; the yard, its edit place and the wharf
+            // berth stay at 150.6
+            W(WharfPart.Release, 0, -18.1438f, 0f, -1086.1943f, 0f, -0.254109f, 0f, 0.967176f, 1f, 1f, 1f),
+            // The square's cargo areas, filled after the pier: each box's middle on the quay's floor (2.739 m, flat under both, read from Cube.002), turned along
+            // the wall run (heading 150.59), its scale the box's width inland (x) and length along the run (z). Right of the tree, by the sea wall: 0.5-13.5 m
+            // along WallRunStart's run, 0.8-3.5 m inland (it ends 1 m before the wall's gap); the tree's far side: -1.0-9.0 m along, 3.5-8.0 m inland (from the
+            // planter to the lamp).
+            W(WharfPart.Square, 0, -29.65755f, 2.739f, -1086.75599f, 0f, 0.967249f, 0f, 0.253829f, 2.7f, 1f, 13f),
+            W(WharfPart.Square, 1, -34.26674f, 2.739f, -1085.91028f, 0f, 0.967249f, 0f, 0.253829f, 4.5f, 1f, 10f),
+            W(WharfPart.Ladder, 0, -21.7033f, 1.7409f, -1088.167f, -0.610642f, 0.356534f, 0.356534f, 0.610642f, 1f, 1f, 1f),
+            W(WharfPart.Ladder, 1, -21.7033f, 0.9243f, -1088.167f, -0.610642f, 0.356534f, 0.356534f, 0.610642f, 1f, 1f, 1f),
+            // The lamps: copies of the island's own streetlamp medi, 0.5 m in from the quay-side edge and 0.75 m along from a quay-side post, on the side clear of
+            // the stair, platform, table and keeper; the posts by the stair and the table have none
+            W(WharfPart.Lamp, 1, -15.4377f, 1.5924f, -1104.4558f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 1f, 1f, 1f),
+            W(WharfPart.Lamp, 2, -18.387f, 1.5924f, -1099.2305f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 1f, 1f, 1f),
+            W(WharfPart.Lamp, 3, -20.5902f, 1.5949f, -1095.3068f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 1f, 1f, 1f),
+            W(WharfPart.Lamp, 4, -27.2346f, 1.5924f, -1083.5551f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 1f, 1f, 1f),
+            W(WharfPart.Lamp, 5, -30.1838f, 1.5924f, -1078.33f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 1f, 1f, 1f),
+            W(WharfPart.Lamp, 6, -32.387f, 1.5949f, -1074.4062f, 0.356534f, 0.610642f, 0.610642f, -0.356534f, 1f, 1f, 1f) } },
+        };
+        // Where 1.2.1 stood each cleat, island-local by its number: a ship saved moored there keeps its rope's end at that place, which the cleats above no
+        // longer touch (0.1-4.0 m off); OfficeWharves.MoorSaved moors such a rope to the cleat of the same number.
+        internal static readonly Dictionary<int, Vector3[]> OldCleats = new Dictionary<int, Vector3[]>
+        {
+            { 205, new[] { new Vector3(109.8504f, 2.5318f, -395.8459f), new Vector3(120.1387f, 2.5318f, -385.5577f), new Vector3(131.5582f, 2.5318f, -374.1382f), new Vector3(141.8465f, 2.5318f, -363.8499f) } },
+            { 204, new[] { new Vector3(13.9137f, -462.2175f, 2.4022f), new Vector3(24.1753f, -472.4791f, 2.4022f), new Vector3(35.5683f, -483.872f, 2.4022f), new Vector3(45.8299f, -494.1336f, 2.4022f) } },
+            { 206, new[] { new Vector3(-30.4416f, 1.4058f, -1073.2561f), new Vector3(-24.8996f, 1.4058f, -1083.0748f), new Vector3(-18.9644f, 1.4058f, -1093.5903f), new Vector3(-13.4224f, 1.4058f, -1103.4092f) } },
+        };
+        // A saved rope's end counts as at a 1.2.1 cleat within OldCleatReach across (world metres; it lay at the cleat's origin) and is moored again only while its
+        // ship is within MoorSavedReach of the new cleat (the island up and the ship there), for MoorSavedFor seconds after the pier is built.
+        internal const float OldCleatReach = .3f, MoorSavedReach = 40f, MoorSavedFor = 30f;
+        internal static WharfPose[] Of(int house, WharfPart part) => Poses.TryGetValue(house, out var l) ? l.Where(p => p.Part == part).OrderBy(p => p.Index).ToArray() : new WharfPose[0];
+        internal static bool TryGet(int house, WharfPart part, out WharfPose pose) { var l = Of(house, part); pose = l.Length > 0 ? l[0] : default; return l.Length > 0; }
+        // The pieces copied: Oasis's dock piece and Serpent Isle's with its base, from the island's own scene by their paths; Firefly Grotto's from the
+        // embedded mesh; the island's own cleat from the always-loaded scene.
+        internal static string PiecePath(int house) => house == 205 ? "island 20 A (oasis) scenery/dock (13)" : house == 204 ? "island 22 E (serpent isle) scenery/east_dock (31)" : null;
+        internal static string PieceMesh(int house) => house == 204 ? "east_dock" : "dock";
+        internal static string CleatName(int house) => house == 205 ? "dock_mooring (4)" : house == 204 ? "dock_mooring E" : "dock_mooring M";
+        // The documents' table at every wharf: item 67 (furniture_table_3, Oasis's office table), not the office's own table kind (OfficeSpots.TablePrefab:
+        // item 72 at Serpent Isle and Firefly Grotto).
+        internal const int TablePrefab = 67;
+        // The lamps copied, each the island's own from its own scene, by path: Oasis's lamppost A, Firefly Grotto's streetlamp medi, at Serpent Isle a rope
+        // post and a rope with its paper lantern ("halo" its glow from afar, a child of the rope).
+        internal static string LampPath(int house) => house == 205 ? "island 20 A (oasis) scenery/lamppost A (1)" : house == 206 ? "scenery/streetlamp medi (1)" : null;
+        internal const string LampPostPath = "island 22 E (serpent isle) scenery/east light pole with rope (2)", LampRopePath = "island 22 E (serpent isle) scenery/east_street_rope (3)", HaloName = "halo";
+        // Oasis's lamps from FirstPathLamp on stand beside the painted path, on the ground: the origin PathLampOverGround world metres over the terrain under
+        // it (lamppost A's foot 5.5393 units under its origin at 0.65, sunk 0.30 m as the island's own lamps on the ground, 0.24-0.39 m).
+        internal const int FirstPathLamp = 8;
+        internal const float PathLampOverGround = 3.3005f;
+        // The cave's own stair (level33's two "stairs" draw it; the one at an even scale is copied).
+        internal const string StairMesh = "ita_building_3_interior_stairs";
+        // The yard sells as its region's own yard: Oasis as Gold Rock City, Serpent Isle as Dragon Cliffs, Firefly Grotto as Fort Aestrin. Their sails as
+        // PrefabsDirectory.sails slots in the yard's own order, and their colours.
+        internal static readonly int[][] Sails = {
+            new[] { 4, 0, 1, 3, 9, 7, 8, 6, 10, 12, 11, 2, 15, 16, 14, 13, 59, 60, 61, 70, 71, 72, 75, 76, 77, 80, 81, 82, 78, 79, 73, 62, 63 },
+            new[] { 24, 25, 20, 21, 22, 29, 28, 27, 26, 17, 18, 19, 23, 53, 95, 96, 97, 98, 90, 91, 100, 101, 102, 106, 107, 103, 92, 93 },
+            new[] { 37, 36, 30, 5, 39, 38, 34, 31, 40, 41, 42, 43, 33, 44, 45, 32, 48, 49, 50, 51, 52, 47, 46, 119, 120, 110, 111, 121, 114, 115, 117, 118, 116, 113 } };
+        internal static readonly int[][] Colours = { new[] { 12, 13, 14, 15, 16, 17 }, new[] { 0, 1, 2, 3, 4, 5 }, new[] { 6, 7, 8, 9, 10, 11 } };
+        // The yard's area round the ship's place: the 36.5 x 7 m hull's beam + 4 m by its length + 8 m, as tall as the vanilla yards' (27.5 m).
+        internal static readonly Vector3 YardArea = new Vector3(11f, 27.5f, 44.5f);
+        // How far over its Release row the yard lets a ship go, in world metres (the rows lie at the sea's level, island-local y 0; the game's yards release
+        // 0.6-3.6 m over the sea).
+        internal const float ReleaseOverSea = .2f;
+        // The documents' trigger on the mission paper's mesh.
+        internal static readonly Vector3 PaperBox = new Vector3(1.187f, .861f, .102f), PaperCentre = new Vector3(-.311f, -.156f, .033f);
+        // Aestra Abbey's and Oasis's dock piece as level20's "dock (13)" holds it: its box collider on layer 14 and the game's DockPushCol; two "dock_poles"
+        // children with a mesh collider of their mesh.
+        internal static readonly Vector3 DockBox = new Vector3(6.239688f, 12.448506f, 2.8511288f), DockBoxCentre = new Vector3(-.0023959875f, .26352006f, -1.5380343f);
+        internal static readonly Vector3[] DockPoles = { new Vector3(-2.64f, -5.77f, -.36f), new Vector3(-2.64f, 6.23f, -.36f) };
+        internal const int DockLayer = 14;
+        internal const string DockResource = "EconomyOverhaul.Data.wharf_dock.obj", DockMaterial = "buildings_A_paint";
+        // Firefly Grotto's quay wall: the island's "island cave church town/Cube.022", its quay wall and cliff rock in one mesh in the island root's frame,
+        // which the game won't let be read during play. While the grotto's pier stands, its renderer and collider draw the embedded copy cut by
+        // work/economyoverhaul_tools/DockMesh --wall: a gap from WallGapFrom to WallGapTo along the wall run beside the stair (the run from WallRunStart along
+        // WallRunAxis, island-local x and z), only while the game's mesh is still the one the copy was cut from (its name, vertex count and bounds).
+        internal const string WallPath = "island cave church town/Cube.022", WallMesh = "Cube.022", WallResource = "EconomyOverhaul.Data.grotto_wall.obj";
+        internal const int WallVertices = 1956;
+        internal static readonly Vector3 WallBoundsCentre = new Vector3(-85.10155f, 12.12055f, -1127.5871f), WallBoundsSize = new Vector3(146.2853f, 32.0897f, 117.3944f);
+        internal static readonly Vector2 WallRunStart = new Vector2(-31.2218075f, -1079.6023f), WallRunAxis = new Vector2(.49103f, -.87114f);
+        internal const float WallGapFrom = 14.5f, WallGapTo = 17.6f, WallThick = .697f;
+        // The wood platform at the stair's top, outside the gap: four of the dock's own planks and two of its legs, laid out by
+        // work/economyoverhaul_tools/DockMesh --planks; posed by its Platform row above.
+        internal const string PlatformResource = "EconomyOverhaul.Data.grotto_platform.obj";
+        internal static bool WallMatches(string name, int vertices, Vector3 centre, Vector3 size) =>
+            name == WallMesh && vertices == WallVertices && (centre - WallBoundsCentre).magnitude < .01f && (size - WallBoundsSize).magnitude < .01f;
+        // Firefly Grotto's warm wall behind the quay wall's gap, taken away while the wharf stands: the game's "scenery/fence stone (7)" in the island's scene
+        // (its own renderer off, its BoxCollider on), drawn by the scene's combined buildings_A_paint mesh ("scenery/_mesh combiner ( buildings_A_paint/New
+        // Game Object", made by the game's editor-only MeshCombiner, no collider). While the wharf stands: the fence's collider off, and that mesh's renderer
+        // drawing the embedded copy work/economyoverhaul_tools/DockMesh --fence cut without the fence's 64 vertices, only while the fence stands where the copy
+        // was cut for and the mesh is still the one it was cut from (its vertex count and bounds; the mesh has no name).
+        internal const string SceneryRoot = "scenery", FencePath = "fence stone (7)", CombinedPath = "_mesh combiner ( buildings_A_paint/New Game Object";
+        internal const string CombinedResource = "EconomyOverhaul.Data.grotto_scenery_a.obj";
+        internal static readonly Vector3 FenceAt = new Vector3(-25.060059f, 3f, -1097.2305f);
+        internal const int CombinedVertices = 1404;
+        internal static readonly Vector3 CombinedBoundsCentre = new Vector3(-74.93225f, 2.18845f, -1079.381f), CombinedBoundsSize = new Vector3(104.1121f, 4.2915f, 95.1418f);
+        // The ladder at the middle of each pier's seaward side: two copies of the game's own ship ladder in plain wood (the junk large's mesh "ladder" in
+        // "wood4"), the upper carrying the game's BoatLadder with a click box over both, LadderBox wide along the edge and deep out from it (world metres);
+        // after the game's lift the player is set LadderInward further in (WharfLadderLiftPatch).
+        internal const string LadderMesh = "ladder", LadderMaterial = "wood4";
+        internal const float LadderInward = .45f;
+        internal static readonly Vector2 LadderBox = new Vector2(1.2f, .4f);
+        internal static bool FenceMatches(Vector3 local, int vertices, Vector3 centre, Vector3 size) =>
+            (local - FenceAt).magnitude < .05f && vertices == CombinedVertices && (centre - CombinedBoundsCentre).magnitude < .01f && (size - CombinedBoundsSize).magnitude < .01f;
+        // The cargo areas over the deck: from AreaBelow under the pieces' origins (at or just over the deck) to AreaAbove over them; the placement's
+        // floor search starts OriginOver them.
+        internal const float AreaBelow = .6f, AreaAbove = 3f, OriginOver = .3f;
+        // The keeper's rows give a 1.8 m marker's middle, 0.9 m over the deck.
+        internal const float KeeperMarkerHalf = .9f;
+        // The empty object under the documents that the game's ShipyardDocuments switches off at night in the wharfmaster's place (OfficeWharves.MakeYard).
+        internal const string KeeperNight = "trade office wharf keeper night switch";
+    }
+
+    // The wharves standing. Each one's cleats stay for the whole session (a ship moored there stays moored while the player is away and after a load: the
+    // game's ropes moor again to a cleat made after the load); its pier, ramp or stair (at Firefly Grotto with a gap cut in the quay's wall beside it),
+    // documents' table and cargo areas while the island's own scene is loaded, as the island's own docks are; its yard, documents and keeper while a clerk
+    // works there (the upgrades pause without him). Gone with the wharf (a bankruptcy, the house no longer the player's, "Prepare to uninstall"): a ship in
+    // its yard released and a ship moored there let go first, with a notice.
+    internal static class OfficeWharves
+    {
+        internal const string CleatName = "trade office wharf cleat";
+        private sealed class Wharf
+        {
+            internal int House; internal Transform Island; internal GameObject[] Cleats; internal float RetryAt, YardRetryAt;   // when the pier, the yard is next tried after a failure
+            internal GameObject Built;                                        // the pier and the rest under one holder at the island's origin
+            internal BoxCollider[] Areas; internal Vector3[] Origins;         // the cargo areas, crosspiece then stem (the grotto: the low pier)
+            internal GameObject YardRoot, Documents, Keeper; internal Shipyard Yard;
+            internal MeshFilter WallFilter; internal MeshCollider WallCollider; internal Mesh WallGame;   // Firefly Grotto's quay wall while cut
+            internal BoxCollider FenceCollider; internal MeshFilter CombinedFilter; internal Mesh CombinedGame;   // its warm wall while taken away
+            internal List<GameObject> Lamps; internal IslandStreetlightsManager LampManager;   // its lamps, in the island's own scene with the manager that lists them
+            internal float BuiltAt;                                           // when the pier was built (MoorSaved runs for a while after)
+        }
+        private static readonly Dictionary<int, Wharf> wharves = new Dictionary<int, Wharf>();
+        private static readonly HashSet<string> warned = new HashSet<string>();
+        private static void Warn(int house, string what) { if (warned.Add(house + what)) Plugin.Log.LogWarning("Trade office: the " + Pledges.Name(house) + "'s wharf: " + what); }
+        internal static bool Standing(int house) => Rules.WharfHouse(house) && Office.Live(house) && Office.Has(house, OfficeUpgrade.Wharf);
+        // The ports where a wharf stands (for the fleet's wharf berth, OfficeFleet.WharfBerth).
+        internal static IEnumerable<int> StandingPorts()
+        {
+            foreach (int house in Office.Houses)
+            {
+                if (!Standing(house)) continue;
+                var p = Office.PortOf(house); if (p) yield return p.portIndex;
+            }
+        }
+        // A wharf's yard (its cleaning, repair, sail repair and shipyard fee free: WharfYardPricePatch).
+        internal static bool IsYard(Shipyard yard) => yard && wharves.Values.Any(w => w.Yard == yard);
+        // Its documents (null until its island's scene has loaded, and while no clerk works there).
+        internal static GameObject Documents(int house) => wharves.TryGetValue(house, out var w) && w.Documents ? w.Documents : null;
+        // With the office sites, once a second while the world is ready.
+        internal static void Poll()
+        {
+            foreach (int house in Office.Houses)
+            {
+                if (!Rules.WharfHouse(house) || !Pledges.Find(house)) continue;
+                wharves.TryGetValue(house, out var w);
+                if (!Standing(house))
+                {
+                    if (w != null) RemoveSafe(w);
+                    if (house == OasisPath.House) try { OasisPath.PutBack(); } catch (Exception e) { Warn(house, "its path not put back: " + e); }
+                    continue;
+                }
+                if (w == null) wharves[house] = w = new Wharf { House = house };
+                if (!w.Island) w.Island = Office.IslandRoot(house);
+                if (!w.Island) continue;
+                // Its own failure stays here: this runs inside the plugin's Update, before the economy's tick.
+                try
+                {
+                    if (w.Cleats == null || w.Cleats.Any(c => !c)) MakeCleats(w);
+                    bool loaded = SceneLoaded(house);
+                    if (loaded && !w.Built) Build(w);
+                    else if (!loaded && w.Built) DropBuilt(w);
+                    if (w.Built && Time.unscaledTime < w.BuiltAt + WharfSpots.MoorSavedFor) MoorSaved(w);
+                    bool yard = w.Built && Office.Working(house, OfficeUpgrade.Wharf);
+                    if (yard && !w.YardRoot) MakeYard(w);
+                    else if (!yard && w.YardRoot && !InUse(w)) DropYard(w);
+                    // Oasis's painted path from the office door to the ramp (OasisPath: once a session, its own failure kept to itself)
+                    if (house == OasisPath.House && w.Built) OasisPath.Tick(w.Island);
+                }
+                catch (Exception e) { Warn(house, "an error; the step is tried again (the yard 30 s later, anything else the next second): " + e); }
+            }
+        }
+        // Everything gone ("Prepare to uninstall").
+        internal static void RemoveAll()
+        {
+            foreach (var w in wharves.Values.ToList()) RemoveSafe(w);
+            try { OasisPath.PutBack(); } catch (Exception e) { Plugin.Log.LogWarning("Trade office: Oasis's path not put back: " + e); }   // (none left painted, whatever the wharves held)
+        }
+        // Remove, and on a failure everything that can still go goes and the wharf is forgotten (a removal that threw would throw again at every poll).
+        private static void RemoveSafe(Wharf w)
+        {
+            try { Remove(w); }
+            catch (Exception e)
+            {
+                try { DropYard(w); } catch { } try { RestoreWall(w); } catch { } try { RestoreFence(w); } catch { } try { DropLamps(w); } catch { }
+                if (w.Built) Object.Destroy(w.Built);
+                if (w.Cleats != null) foreach (var c in w.Cleats) if (c) { try { Switched(w, c, false); } catch { } Object.Destroy(c); }
+                wharves.Remove(w.House);
+                Plugin.Log.LogWarning("Trade office: the " + Pledges.Name(w.House) + "'s wharf not wholly removed: " + e);
+            }
+        }
+        // The built parts gone, the cleats kept (the world not ready: a ship moored there stays moored).
+        internal static void DropBuilt() { foreach (var w in wharves.Values) try { DropBuilt(w); } catch (Exception e) { Warn(w.House, "its built parts not wholly dropped: " + e); } }
+        // Every frame while a save loads and until the player presses on: each standing wharf built as soon as its island's scene is loaded. The game lets the
+        // player and loose items fall 1.5 s after LoadGame, before Poll's next second, and without the deck under them they fall into the sea.
+        internal static void BuildEarly()
+        {
+            foreach (int house in Office.Houses)
+            {
+                if (!Rules.WharfHouse(house) || wharves.TryGetValue(house, out var w) && w.Built || !Standing(house) || !SceneLoaded(house) || !Pledges.Find(house)) continue;
+                if (w == null) wharves[house] = w = new Wharf { House = house };
+                if (!w.Island) w.Island = Office.IslandRoot(house);
+                if (!w.Island) continue;
+                try { if (w.Cleats == null || w.Cleats.Any(c => !c)) MakeCleats(w); Build(w); }
+                catch (Exception e) { Warn(house, "not built at the load (tried again): " + e); }
+            }
+        }
+        // The island's scene is its index (its port's IslandHorizon.islandIndex): the cart contract's lookup, kept once found (-1 until then).
+        private static int SceneIndex(int house) => OfficeCarts.IslandOf(house);
+        private static bool SceneLoaded(int house) { int i = SceneIndex(house); return i > 0 && UnityEngine.SceneManagement.SceneManager.GetSceneByBuildIndex(i).isLoaded; }
+        private static bool InUse(Wharf w) => w.Yard && GameState.currentShipyard == w.Yard;
+
+        // ---- The cleats: copies of the island's own (from the always-loaded scene), cleared as the game's Unmoor leaves a cleat ----
+        private static void MakeCleats(Wharf w)
+        {
+            var poses = WharfSpots.Of(w.House, WharfPart.Cleat); if (poses.Length == 0) return;
+            var named = w.Island.Find(WharfSpots.CleatName(w.House)); var src = named ? named.GetComponent<GPButtonDockMooring>() : null;
+            if (!src) src = w.Island.GetComponentsInChildren<GPButtonDockMooring>(true).FirstOrDefault(c => c && !c.name.StartsWith(CleatName, StringComparison.Ordinal));
+            if (!src) { Warn(w.House, "no cleat of its island to copy"); return; }
+            if (w.Cleats == null || w.Cleats.Length != poses.Length) w.Cleats = new GameObject[poses.Length];
+            for (int i = 0; i < poses.Length; i++)
+            {
+                if (w.Cleats[i]) continue;
+                var hold = new GameObject("trade office hold"); hold.SetActive(false);
+                var c = Object.Instantiate(src.gameObject, hold.transform); c.name = CleatName + " " + w.House + " " + i;
+                foreach (var o in c.GetComponentsInChildren<cakeslice.Outline>(true)) Object.DestroyImmediate(o);
+                var spring = c.GetComponent<SpringJoint>();
+                if (spring) { spring.connectedBody = null; spring.anchor = Vector3.zero; spring.spring = 0f; }
+                foreach (var col in c.GetComponents<Collider>()) col.enabled = true;
+                // On or off as the island's own cleats are now (a far island's are off; a copy of an off cleat stays off until switched).
+                c.SetActive(src.gameObject.activeSelf);
+                OfficeSpots.Place(c.transform, w.Island, poses[i].Position, poses[i].Turn, poses[i].Scale);
+                Object.Destroy(hold);
+                w.Cleats[i] = c;
+                Switched(w, c, true);
+            }
+            Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(w.House) + "'s wharf cleats made from " + src.name + " (" + poses.Length + ", " + (src.gameObject.activeSelf ? "on" : "off with the far island's") + ").");
+        }
+        // The island's own switch (IslandPerformanceSwitcher) turns its direct children off beyond its load distance, the cleats among them; it lists them
+        // once at its Start, so a cleat the mod adds joins that list and goes off with them: a far island sinks with distance (IslandHorizon), and a cleat
+        // left on would pull a ship moored to it down with the island. Taken off the list before it is destroyed (the switch sets each one's state).
+        private static void Switched(Wharf w, GameObject cleat, bool add)
+        {
+            var sw = w.Island ? w.Island.GetComponent<IslandPerformanceSwitcher>() : null;
+            var list = sw ? AccessTools.Field(typeof(IslandPerformanceSwitcher), "partialHideObjects")?.GetValue(sw) as List<GameObject> : null;
+            if (list == null) { if (add) Warn(w.House, "its island has no switch list; the cleats stay on"); return; }
+            if (add) { if (!list.Contains(cleat)) list.Add(cleat); }
+            else list.RemoveAll(g => ReferenceEquals(g, cleat));
+        }
+        // The ships moored to the wharf's cleats let go (the game's own Unmoor), and the player told which. Found from the ropes' side: every ship's
+        // ropes whose spring is one of the cleats (Pledges.MooredTo, as the loans and the QA's readings read it). The game's Unmoor clears the spring's
+        // connectedBody whichever rope it belonged to, so a cleat can lose its ship while a rope still reads moored to it. Pledges.All is the save manager's
+        // list, which holds the ships switched off far away too.
+        private static void LetGo(Wharf w)
+        {
+            if (w.Cleats == null) return;
+            var cleats = new HashSet<Transform>(); foreach (var c in w.Cleats) if (c) cleats.Add(c.transform);
+            if (cleats.Count == 0) return;
+            var names = new List<string>();
+            foreach (var b in Pledges.All())
+            {
+                var ropes = b ? b.GetComponent<BoatMooringRopes>() : null; if (!ropes || ropes.ropes == null) continue;
+                bool tied = false;
+                foreach (var r in ropes.ropes)
+                {
+                    var cleat = Pledges.MooredTo(r);
+                    if (cleat && cleats.Contains(cleat)) { r.Unmoor(); r.ResetRopePos(); tied = true; }
+                }
+                if (!tied) continue;
+                string n = Pledges.Name(Pledges.Index(b)); if (!names.Contains(n)) names.Add(n);
+            }
+            if (names.Count == 0) return;
+            var port = Office.PortOf(w.House);
+            Loans.Notify("The wharf at " + (port ? port.GetPortName() : Pledges.Name(w.House)) + " is gone. Let go from it: " + string.Join(", ", names.ToArray()));
+            Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(w.House) + "'s wharf gone; let go: " + string.Join(", ", names.ToArray()) + ".");
+        }
+        private static void Remove(Wharf w)
+        {
+            if (w.House == OasisPath.House) try { OasisPath.PutBack(); } catch (Exception e) { Warn(w.House, "its path not put back: " + e); }
+            DropYard(w);
+            LetGo(w);
+            DropBuilt(w);
+            if (w.Cleats != null) foreach (var c in w.Cleats) if (c) { Switched(w, c, false); Object.Destroy(c); }
+            wharves.Remove(w.House);
+            Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(w.House) + "'s wharf removed.");
+        }
+
+        // ---- The pier and the rest, while the island's scene is loaded ----
+        private static void Build(Wharf w)
+        {
+            if (Time.unscaledTime < w.RetryAt) return;
+            int house = w.House; var root = new GameObject("trade office wharf " + house); root.transform.SetParent(w.Island, false);
+            try
+            {
+                var groups = new List<List<GameObject>>(); var extra = new List<GameObject>(); int pieces = 0;
+                if (house == 206)
+                {
+                    groups.Add(WharfSpots.Of(house, WharfPart.Low).Select(p => MakeDock(root.transform, p, "trade office wharf low " + p.Index)).ToList());
+                    var stair = Stair(house);
+                    if (stair && WharfSpots.TryGet(house, WharfPart.Stair, out var sp)) Copy(stair, root.transform, sp, "trade office wharf stair");
+                    else Warn(house, "the cave's stair not found in its scene; the low pier stands without it, the quay wall whole");
+                    if (stair)
+                    {
+                        // the gap in the quay wall at the stair's top, the warm wall behind it and the platform; each one's failure leaves the rest
+                        try { CutWall(w); } catch (Exception e) { RestoreWall(w); Warn(house, "the quay wall not cut: " + e.Message); }
+                        try { TakeFence(w); } catch (Exception e) { RestoreFence(w); Warn(house, "the warm wall behind the gap not taken away: " + e.Message); }
+                        try { MakePlatform(root.transform); } catch (Exception e) { Warn(house, "no platform at the stair's top: " + e.Message); }
+                    }
+                }
+                else
+                {
+                    var src = Source(w);
+                    if (!src) throw new InvalidOperationException("the island's dock piece " + WharfSpots.PiecePath(house) + " not found");
+                    foreach (var part in new[] { WharfPart.Cross, WharfPart.Stem })
+                        groups.Add(WharfSpots.Of(house, part).Select(p => Copy(src, root.transform, p, "trade office wharf " + part.ToString().ToLowerInvariant() + " " + p.Index)).ToList());
+                    foreach (var p in WharfSpots.Of(house, WharfPart.Ramp)) extra.Add(Copy(src, root.transform, p, "trade office wharf ramp"));
+                    // Serpent Isle's boardwalk from the ramp's foot to the office door (its Walk rows): the pier's own piece, under the pier's holder; not a cargo area
+                    foreach (var p in WharfSpots.Of(house, WharfPart.Walk)) extra.Add(Copy(src, root.transform, p, "trade office wharf walk " + p.Index));
+                }
+                // the pole pairs two neighbouring pieces stand in one place: one kept
+                DropDoubled(w, groups.SelectMany(g => g).Concat(extra));
+                pieces = groups.Sum(g => g.Count);
+                MakeTable(w, root.transform);
+                // the ladder (its own failure leaves the pier without it)
+                try { MakeLadders(w, root.transform); } catch (Exception e) { Warn(house, "no ladder: " + e.Message); }
+                // the lamps (their own failure leaves the pier without them, none half made)
+                try { MakeLamps(w); } catch (Exception e) { DropLamps(w); Warn(house, "no lamps: " + e.Message); }
+                MakeAreas(w, root.transform, groups);
+                w.Built = root; w.BuiltAt = Time.unscaledTime;
+                Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(house) + "'s wharf built: " + pieces + " deck pieces, " + w.Areas.Length + " cargo areas (" + w.Areas.Sum(a => a.size.x * a.size.z).ToString("F0") + " m²), " +
+                    (w.Lamps != null ? w.Lamps.Count : 0) + " lamp parts" + (WharfSpots.Of(house, WharfPart.Walk).Length > 0 ? ", the boardwalk" : "") + ".");
+            }
+            catch (Exception e)
+            {
+                Object.Destroy(root); w.Areas = null; w.Origins = null; w.RetryAt = Time.unscaledTime + 30f;
+                try { RestoreWall(w); } catch { } try { RestoreFence(w); } catch { } try { DropLamps(w); } catch { }
+                Warn(house, "not built: " + e.Message);
+            }
+        }
+        private static void DropBuilt(Wharf w)
+        {
+            DropYard(w);
+            RestoreWall(w);
+            RestoreFence(w);
+            DropLamps(w);
+            if (w.Built) Object.Destroy(w.Built);
+            w.Built = null; w.Areas = null; w.Origins = null;
+        }
+        // Firefly Grotto's quay wall with a gap beside the stair while the pier stands: the embedded cut copy on the wall's renderer and collider, if
+        // the wall is still the game's mesh the copy was cut from; else a warning and the wall stays whole (the stair then ends at it). The game's own put
+        // back by RestoreWall, from DropBuilt: the island's scene unloaded, or the wharf removed (bankruptcy, the house lost, "Prepare to uninstall").
+        private static Mesh wallCut;
+        private static void CutWall(Wharf w)
+        {
+            var t = w.Island.Find(WharfSpots.WallPath); var mf = t ? t.GetComponent<MeshFilter>() : null; var mc = t ? t.GetComponent<MeshCollider>() : null;
+            var game = mf ? mf.sharedMesh : null;
+            if (!game || !mc || mc.sharedMesh != game || !WharfSpots.WallMatches(game.name, game.vertexCount, game.bounds.center, game.bounds.size))
+            {
+                Warn(w.House, "the quay wall (" + WharfSpots.WallPath + ") isn't the game's as the wharf knows it" + (game ? " (" + game.name + ", " + game.vertexCount + " vertices)" : "") + "; it stays whole and the stair ends at it");
+                return;
+            }
+            if (!wallCut)
+            {
+                wallCut = ObjMesh.Load(WharfSpots.WallResource, "trade office wharf quay wall");
+                wallCut.RecalculateTangents(); wallCut.hideFlags = HideFlags.DontUnloadUnusedAsset;
+            }
+            w.WallFilter = mf; w.WallCollider = mc; w.WallGame = game;
+            mf.sharedMesh = wallCut; mc.sharedMesh = wallCut;
+        }
+        private static void RestoreWall(Wharf w)
+        {
+            if (w.WallGame)
+            {
+                if (w.WallFilter && w.WallFilter.sharedMesh == wallCut) w.WallFilter.sharedMesh = w.WallGame;
+                if (w.WallCollider && w.WallCollider.sharedMesh == wallCut) w.WallCollider.sharedMesh = w.WallGame;
+            }
+            w.WallFilter = null; w.WallCollider = null; w.WallGame = null;
+        }
+        // The warm wall behind the gap taken away while the pier stands (WharfSpots.FenceMatches): found in the island's own scene (its root "scenery"),
+        // only when the fence stands where the cut copy was made for and the combined mesh is the one it was cut from; else a warning and it stays. Put back
+        // by RestoreFence wherever the quay wall is.
+        private static Mesh combinedCut;
+        private static void TakeFence(Wharf w)
+        {
+            var sc = UnityEngine.SceneManagement.SceneManager.GetSceneByBuildIndex(SceneIndex(w.House)); if (!sc.isLoaded) return;
+            var scenery = sc.GetRootGameObjects().FirstOrDefault(g => g.name == WharfSpots.SceneryRoot);
+            var fence = scenery ? scenery.transform.Find(WharfSpots.FencePath) : null; var col = fence ? fence.GetComponent<BoxCollider>() : null;
+            var combined = scenery ? scenery.transform.Find(WharfSpots.CombinedPath) : null; var mf = combined ? combined.GetComponent<MeshFilter>() : null;
+            var game = mf ? mf.sharedMesh : null;
+            var local = fence && w.Island ? w.Island.InverseTransformPoint(fence.position + SceneryLag(scenery.transform)) : Vector3.zero;
+            if (!col || !game || !WharfSpots.FenceMatches(local, game.vertexCount, game.bounds.center, game.bounds.size))
+            {
+                Warn(w.House, "the warm wall behind the gap (" + WharfSpots.SceneryRoot + "/" + WharfSpots.FencePath + ") or its drawing isn't the game's as the wharf knows it" + (game ? " (" + game.vertexCount + " vertices)" : "") + "; it stays");
+                return;
+            }
+            if (!combinedCut)
+            {
+                combinedCut = ObjMesh.Load(WharfSpots.CombinedResource, "trade office wharf grotto scenery");
+                combinedCut.RecalculateTangents(); combinedCut.hideFlags = HideFlags.DontUnloadUnusedAsset;
+            }
+            w.FenceCollider = col; w.CombinedFilter = mf; w.CombinedGame = game;
+            col.enabled = false; mf.sharedMesh = combinedCut;
+        }
+        private static void RestoreFence(Wharf w)
+        {
+            if (w.FenceCollider) w.FenceCollider.enabled = true;
+            if (w.CombinedGame && w.CombinedFilter && w.CombinedFilter.sharedMesh == combinedCut) w.CombinedFilter.sharedMesh = w.CombinedGame;
+            w.FenceCollider = null; w.CombinedFilter = null; w.CombinedGame = null;
+        }
+        // The parts inside the pier's pieces (not the pieces themselves) drawn twice in one place, by Rules.Doubled: the later twin switched off at once (out of
+        // the physics scene and the drawing this frame) and destroyed. Firefly Grotto's low pier has 5 such pole pairs, one at each joint (its dock piece's pairs
+        // 6.0 m apart, the pieces laid 6.0 m apart); the game's own docks keep the overlap but draw it in one combined mesh, where it doesn't show.
+        private static void DropDoubled(Wharf w, IEnumerable<GameObject> pieces)
+        {
+            var parts = new List<MeshFilter>();
+            foreach (var p in pieces) if (p) parts.AddRange(p.GetComponentsInChildren<MeshFilter>(true).Where(f => f && f.transform != p.transform && f.sharedMesh && f.GetComponent<Renderer>()));
+            var drop = Rules.Doubled(parts.Select(f => f.sharedMesh.GetInstanceID()).ToList(), parts.Select(f => f.transform.position).ToList(),
+                parts.Select(f => f.transform.rotation).ToList(), parts.Select(f => f.transform.lossyScale).ToList());
+            foreach (int i in drop) { var g = parts[i].gameObject; g.SetActive(false); Object.Destroy(g); }
+            if (drop.Count > 0) Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(w.House) + "'s wharf: " + drop.Count + " doubled part" + (drop.Count == 1 ? "" : "s") + " of its pier pieces left out (" +
+                string.Join(", ", drop.Select(i => parts[i].name).Distinct().ToArray()) + "; one kept in each place).");
+        }
+        // A working copy of a scene piece at a pose: made under an inactive holder, the copied outlines off (the game adds its own at Start), its renderers
+        // on (the game's MeshCombiner draws the scene's pieces and switched theirs off), placed, then woken.
+        private static GameObject Copy(GameObject src, Transform parent, WharfPose pose, string name)
+        {
+            var hold = new GameObject("trade office hold"); hold.SetActive(false);
+            var c = Object.Instantiate(src, hold.transform); c.name = name;
+            foreach (var o in c.GetComponentsInChildren<cakeslice.Outline>(true)) Object.DestroyImmediate(o);
+            foreach (var r in c.GetComponentsInChildren<Renderer>(true)) r.enabled = true;
+            c.SetActive(true);
+            OfficeSpots.Place(c.transform, parent, pose.Position, pose.Turn, pose.Scale);
+            Object.Destroy(hold);
+            return c;
+        }
+        private static Transform FindInScene(int scene, string path)
+        {
+            var sc = UnityEngine.SceneManagement.SceneManager.GetSceneByBuildIndex(scene); if (!sc.isLoaded || path == null) return null;
+            var parts = path.Split('/');
+            foreach (var root in sc.GetRootGameObjects())
+            {
+                if (root.name != parts[0]) continue;
+                var t = root.transform; for (int i = 1; i < parts.Length && t; i++) t = t.Find(parts[i]);
+                if (t) return t;
+            }
+            return null;
+        }
+        // The pictured piece by its path; if another mod changed the scene, its flat piece of the same mesh nearest the crosspiece.
+        private static GameObject Source(Wharf w)
+        {
+            int scene = SceneIndex(w.House);
+            var named = FindInScene(scene, WharfSpots.PiecePath(w.House)); if (named) return named.gameObject;
+            var sc = UnityEngine.SceneManagement.SceneManager.GetSceneByBuildIndex(scene); if (!sc.isLoaded) return null;
+            var near = WharfSpots.TryGet(w.House, WharfPart.Cross, out var cp) ? w.Island.TransformPoint(cp.Position) : w.Island.position;
+            string mesh = WharfSpots.PieceMesh(w.House);
+            var f = sc.GetRootGameObjects().SelectMany(g => g.GetComponentsInChildren<MeshFilter>(true))
+                .Where(m => m && m.sharedMesh && m.sharedMesh.name == mesh && m.name.StartsWith(mesh, StringComparison.Ordinal) && Mathf.Abs(m.transform.forward.y) > .995f)
+                .OrderBy(m => (m.transform.position - near).sqrMagnitude).FirstOrDefault();
+            if (f) Warn(w.House, WharfSpots.PiecePath(w.House) + " not found; " + f.name + " copied instead");
+            return f ? f.gameObject : null;
+        }
+        private static GameObject Stair(int house)
+        {
+            var sc = UnityEngine.SceneManagement.SceneManager.GetSceneByBuildIndex(SceneIndex(house)); if (!sc.isLoaded) return null;
+            var f = sc.GetRootGameObjects().SelectMany(g => g.GetComponentsInChildren<MeshFilter>(true)).Where(m => m && m.sharedMesh && m.sharedMesh.name == WharfSpots.StairMesh)
+                .OrderBy(m => Mathf.Abs(m.transform.lossyScale.y - m.transform.lossyScale.x)).FirstOrDefault();
+            return f ? f.gameObject : null;
+        }
+        // Firefly Grotto's low pier: Aestra Abbey's (Oasis's) dock piece from the embedded meshes, built as level20's "dock (13)" is, in the game's own
+        // buildings_A_paint (loaded at the grotto: its scenes draw with it).
+        private static Mesh[] dockMeshes; private static Material dockPaint;
+        private static GameObject MakeDock(Transform parent, WharfPose pose, string name)
+        {
+            if (dockMeshes == null || dockMeshes.Any(m => !m))
+            {
+                var l = ObjMesh.LoadAll(WharfSpots.DockResource, "trade office wharf dock");
+                if (l.Count != 2) throw new InvalidOperationException("the embedded dock holds " + l.Count + " meshes, not 2");
+                foreach (var m in l) { m.RecalculateTangents(); m.hideFlags = HideFlags.DontUnloadUnusedAsset; }
+                dockMeshes = l.ToArray();
+            }
+            var paint = DockPaint();
+            var hold = new GameObject("trade office hold"); hold.SetActive(false);
+            var go = new GameObject(name) { layer = WharfSpots.DockLayer }; go.transform.SetParent(hold.transform, false);
+            go.AddComponent<MeshFilter>().sharedMesh = dockMeshes[0]; go.AddComponent<MeshRenderer>().sharedMaterial = paint;
+            var box = go.AddComponent<BoxCollider>(); box.size = WharfSpots.DockBox; box.center = WharfSpots.DockBoxCentre;
+            go.AddComponent<DockPushCol>();
+            foreach (var at in WharfSpots.DockPoles)
+            {
+                var poles = new GameObject("dock_poles") { layer = WharfSpots.DockLayer }; poles.transform.SetParent(go.transform, false); poles.transform.localPosition = at;
+                poles.AddComponent<MeshFilter>().sharedMesh = dockMeshes[1]; poles.AddComponent<MeshRenderer>().sharedMaterial = paint;
+                poles.AddComponent<MeshCollider>().sharedMesh = dockMeshes[1];
+            }
+            OfficeSpots.Place(go.transform, parent, pose.Position, pose.Turn, pose.Scale);
+            Object.Destroy(hold);
+            return go;
+        }
+        private static Material DockPaint()
+        {
+            if (!dockPaint) dockPaint = Resources.FindObjectsOfTypeAll<Material>().FirstOrDefault(m => m && m.name == WharfSpots.DockMaterial);
+            if (!dockPaint) throw new InvalidOperationException("the game's " + WharfSpots.DockMaterial + " material isn't loaded");
+            return dockPaint;
+        }
+        // The ladder (WharfSpots.LadderMesh): a copy of the game's own ship ladder at each Ladder row (index 0 the upper, 1 the one under it); on the upper the
+        // click box over both copies, the WharfLadder mark (the direction in, from the mesh toward its origin, which is the pier's side; it switches the lower
+        // copies' outlines with the upper's) and the game's BoatLadder, added last so its Awake finds the box. The mesh and its materials found once among the
+        // loaded ships' ladders and kept.
+        private static Mesh ladderMesh; private static Material[] ladderMats;
+        private static bool LadderSource()
+        {
+            if (ladderMesh && ladderMats != null && ladderMats.Length > 0 && ladderMats.All(m => m)) return true;
+            var src = Resources.FindObjectsOfTypeAll<BoatLadder>().Select(l => l ? l.GetComponent<MeshFilter>() : null).FirstOrDefault(f => f && f.gameObject.scene.IsValid() && f.sharedMesh &&
+                f.sharedMesh.name == WharfSpots.LadderMesh && f.GetComponent<MeshRenderer>() && f.GetComponent<MeshRenderer>().sharedMaterials.Any(m => m && m.name.StartsWith(WharfSpots.LadderMaterial, StringComparison.Ordinal)));
+            if (!src) return false;
+            ladderMesh = src.sharedMesh; ladderMats = src.GetComponent<MeshRenderer>().sharedMaterials; return true;
+        }
+        private static void MakeLadders(Wharf w, Transform root)
+        {
+            var rows = WharfSpots.Of(w.House, WharfPart.Ladder); if (rows.Length == 0) return;
+            if (!LadderSource()) { Warn(w.House, "no game ladder (" + WharfSpots.LadderMesh + " in " + WharfSpots.LadderMaterial + ") loaded to copy; the pier stands without its ladder"); return; }
+            var made = new List<GameObject>(); GameObject upper = null;
+            foreach (var p in rows)
+            {
+                // under the pier's holder (at the island's origin, so the rows' island-local poses hold), so it goes with the pier and isn't made again at each build
+                var go = new GameObject("trade office wharf ladder " + p.Index);
+                OfficeSpots.Place(go.transform, root, p.Position, p.Turn, p.Scale);
+                go.AddComponent<MeshFilter>().sharedMesh = ladderMesh; go.AddComponent<MeshRenderer>().sharedMaterials = ladderMats;
+                made.Add(go); if (p.Index == 0) upper = go;
+            }
+            if (!upper) return;
+            // the copies under the upper one outlined with it: each its own outline, resting as the game's button leaves its own (off, colour 2), switched with the
+            // upper's by WharfLadder; added while the copy is switched off, so it wakes already off and never registers with the outline effect before it is
+            // pointed at
+            var lower = new List<cakeslice.Outline>();
+            foreach (var g in made)
+            {
+                if (g == upper) continue;
+                g.SetActive(false);
+                var o = g.AddComponent<cakeslice.Outline>(); o.color = 2; o.enabled = false;
+                g.SetActive(true);
+                lower.Add(o);
+            }
+            var t = upper.transform; var b = ladderMesh.bounds; var sc = t.lossyScale;
+            // its axes: up (the local axis nearest the world's), out from the side (the thinner of the other two), along the edge (the last)
+            int k = 0; float best = -1f;
+            for (int i = 0; i < 3; i++) { float d = Mathf.Abs(Vector3.Dot(t.TransformDirection(i == 0 ? Vector3.right : i == 1 ? Vector3.up : Vector3.forward), Vector3.up)); if (d > best) { best = d; k = i; } }
+            int thin = Enumerable.Range(0, 3).Where(i => i != k).OrderBy(i => b.size[i]).First(), wide = 3 - k - thin;
+            var box = new Bounds(b.center, b.size);
+            foreach (var g in made) if (g != upper) box.Encapsulate(new Bounds(t.InverseTransformPoint(g.transform.TransformPoint(b.center)), b.size));
+            var size = box.size; size[wide] = WharfSpots.LadderBox.x / Mathf.Abs(sc[wide]); size[thin] = WharfSpots.LadderBox.y / Mathf.Abs(sc[thin]);
+            var col = upper.AddComponent<BoxCollider>(); col.isTrigger = true; col.center = box.center; col.size = size;
+            var axis = thin == 0 ? Vector3.right : thin == 1 ? Vector3.up : Vector3.forward;
+            var inward = t.TransformDirection(axis) * -Mathf.Sign(b.center[thin] == 0f ? 1f : b.center[thin]); inward.y = 0f;
+            var mark = upper.AddComponent<WharfLadder>(); mark.inward = inward.sqrMagnitude > 1e-6f ? inward.normalized : Vector3.zero; mark.lower = lower.ToArray();
+            upper.AddComponent<BoatLadder>();
+        }
+        // The wood platform at the stair's top, outside the quay wall's gap: a plank in front of the gap from its start to the post beside it and three
+        // over the stair's landing on to the post, their tops just over the landing's, the stair's top steps left open, on two legs standing on the low pier
+        // (the embedded grotto_platform.obj, the dock's own planks and legs) in the low pier's paint and on its layer; its own mesh as its collider (the planks
+        // walked on, the legs solid); not a cargo area.
+        private static Mesh platformMesh;
+        private static void MakePlatform(Transform parent)
+        {
+            if (!WharfSpots.TryGet(206, WharfPart.Platform, out var pose)) return;
+            if (!platformMesh)
+            {
+                platformMesh = ObjMesh.Load(WharfSpots.PlatformResource, "trade office wharf platform");
+                platformMesh.RecalculateTangents(); platformMesh.hideFlags = HideFlags.DontUnloadUnusedAsset;
+            }
+            var paint = DockPaint();
+            var go = new GameObject("trade office wharf platform") { layer = WharfSpots.DockLayer };
+            go.AddComponent<MeshFilter>().sharedMesh = platformMesh; go.AddComponent<MeshRenderer>().sharedMaterial = paint;
+            go.AddComponent<MeshCollider>().sharedMesh = platformMesh;
+            OfficeSpots.Place(go.transform, parent, pose.Position, pose.Turn, pose.Scale);
+        }
+        // The documents' table: item 67 at every wharf (WharfSpots.TablePrefab), scenery as the office's.
+        private static void MakeTable(Wharf w, Transform root)
+        {
+            var dir = PrefabsDirectory.instance ? PrefabsDirectory.instance.directory : null; int prefab = WharfSpots.TablePrefab;
+            if (dir == null || prefab >= dir.Length || !dir[prefab] || !WharfSpots.TryGet(w.House, WharfPart.Table, out var tp)) { Warn(w.House, "no table"); return; }
+            var hold = new GameObject("trade office hold"); hold.SetActive(false);
+            var t = Object.Instantiate(dir[prefab], hold.transform); t.name = "trade office wharf table";
+            OfficeSite.StripToScenery(t);
+            OfficeSpots.Place(t.transform, root, tp.Position, tp.Turn, tp.Scale);
+            Object.Destroy(hold);
+        }
+        // ---- The lamps: copies of the island's own, lit at night and dark by day by the island's own lamp manager (IslandStreetlightsManager: every lamp it
+        // lists on while the island's time is past 16:30 or before 07:30). Three traps: (1) the scene's lamps are drawn by the editor's MeshCombiner, their own
+        // renderers off: switched on; (2) the game's Awake keeps a lamp's first material as its "on" one, and by day the scene's lamps hold their "off" one: the
+        // copy's set before it wakes, from a woken lamp of the same mesh and the same "off" material (Serpent Isle's lanterns come red and yellow); (3) the
+        // manager only ever adds lamps, and one destroyed while listed makes it throw every frame and stops the lamps after it: taken off its list first
+        // (DropLamps). Kept in the island's own scene, so they go with it and its manager.
+        private static void MakeLamps(Wharf w)
+        {
+            DropLamps(w);
+            int scene = SceneIndex(w.House); var made = new List<GameObject>(); w.Lamps = made;
+            if (w.House == 204)
+            {
+                var post = FindInScene(scene, WharfSpots.LampPostPath); var rope = FindInScene(scene, WharfSpots.LampRopePath);
+                if (!post || !rope) { Warn(w.House, "the island's rope post or rope not found in its scene; no lamps"); return; }
+                var woke = Woken(w, rope.root);
+                var srcLamp = rope.GetComponentsInChildren<IslandStreetlight>(true).Select(x => x.transform).FirstOrDefault(); var srcHalo = rope.Find(WharfSpots.HaloName);
+                // the glow's place in the lantern's frame, as it hangs in the scene
+                var haloOff = srcLamp && srcHalo ? Quaternion.Inverse(srcLamp.rotation) * (srcHalo.position - srcLamp.position) : Vector3.zero;
+                var posts = WharfSpots.Of(w.House, WharfPart.LampPost); var ropes = WharfSpots.Of(w.House, WharfPart.LampRope);
+                foreach (var lr in WharfSpots.Of(w.House, WharfPart.Lantern))
+                {
+                    foreach (var pp in posts.Where(p => p.Index / 10 == lr.Index)) made.Add(LampCopy(w, post, pp, "trade office wharf lamp post " + pp.Index, woke));
+                    foreach (var rp in ropes.Where(p => p.Index == lr.Index))
+                    {
+                        var c = LampCopy(w, rope, rp, "trade office wharf lamp rope " + rp.Index, woke); made.Add(c);
+                        // the lantern to its row's place, turn and world scale: the scene's rope is scaled unevenly, so the rope's copy at an even 0.5 carries it 1.19 m
+                        // off and flattened; the rope's glow moved with it
+                        var lamp = c.GetComponentsInChildren<IslandStreetlight>(true).Select(x => x.transform).FirstOrDefault(); var halo = c.transform.Find(WharfSpots.HaloName);
+                        if (!lamp) continue;
+                        lamp.SetPositionAndRotation(w.Island.TransformPoint(lr.Position) - SceneryLag(rope.root), w.Island.rotation * lr.Turn);
+                        var ls = lamp.lossyScale; lamp.localScale = Vector3.Scale(lamp.localScale, new Vector3(lr.Scale.x / ls.x, lr.Scale.y / ls.y, lr.Scale.z / ls.z));
+                        if (halo && srcHalo) halo.position = lamp.position + lamp.rotation * haloOff;
+                    }
+                }
+            }
+            else
+            {
+                var src = FindInScene(scene, WharfSpots.LampPath(w.House));
+                if (!src) { Warn(w.House, "the island's lamp (" + WharfSpots.LampPath(w.House) + ") not found in its scene; no lamps"); return; }
+                var woke = Woken(w, src.root);
+                foreach (var p in WharfSpots.Of(w.House, WharfPart.Lamp))
+                {
+                    var at = p;
+                    if (IsPathLamp(w.House, p))
+                    {
+                        if (!PathLampShown(w.Island, p)) continue;
+                        at.Position = w.Island.InverseTransformPoint(PathLampPlace(w.Island, p));
+                    }
+                    made.Add(LampCopy(w, src, at, "trade office wharf lamp " + p.Index, woke));
+                }
+            }
+        }
+        // Oasis's lamps along its painted path (WharfSpots.FirstPathLamp on). One on the path's first OasisPathJ metres (door to J) stands only while that
+        // stretch is the mod's paint: not while Oasis House Fix's roads cover it (OasisPath.OhfState).
+        internal static bool IsPathLamp(int house, WharfPose p) => house == OasisPath.House && p.Part == WharfPart.Lamp && p.Index >= WharfSpots.FirstPathLamp;
+        internal static bool PathLampShown(Transform island, WharfPose p)
+        {
+            if (!island) return true;
+            bool fromJ; var now = OasisPath.Now;   // the path as painted decides, once there is one
+            if (now != null) fromJ = now.FromJ; else OasisPath.OhfState(out _, out fromJ);
+            if (!fromJ) return true;
+            var at = island.TransformPoint(p.Position);
+            return Rules.PathAlong(OasisPath.Line(island, false), at.x, at.z) >= Rules.OasisPathJ;
+        }
+        // Its place on the ground under it: the row's (x, z), PathLampOverGround over the highest of the island's terrains there (the game's Terrain.SampleHeight),
+        // so it stands on Better Ports' Oasis ground (-0.36..+0.48 m from the vanilla one along the path) and on Oasis House Fix's levelling as on the
+        // vanilla ground; the row's own height (the vanilla ground's) where no terrain lies under it.
+        internal static Vector3 PathLampPlace(Transform island, WharfPose p)
+        {
+            var at = island.TransformPoint(p.Position); float top = float.NegativeInfinity;
+            foreach (var t in island.GetComponentsInChildren<Terrain>(true))
+            {
+                if (!t || !t.terrainData) continue;
+                var o = t.GetPosition(); var s = t.terrainData.size;
+                if (at.x < o.x || at.x > o.x + s.x || at.z < o.z || at.z > o.z + s.z) continue;
+                top = Math.Max(top, o.y + t.SampleHeight(at));
+            }
+            return float.IsNegativeInfinity(top) ? at : new Vector3(at.x, top + WharfSpots.PathLampOverGround, at.z);
+        }
+        // The island's manager (one per island scene, on its scenery root) and its lamps that have woken (their "on" material kept: Awake has run).
+        private static List<IslandStreetlight> Woken(Wharf w, Transform root)
+        {
+            var mgr = root.GetComponentInChildren<IslandStreetlightsManager>(true);
+            if (!mgr) throw new InvalidOperationException("no lamp manager under " + root.name);
+            w.LampManager = mgr;
+            return root.GetComponentsInChildren<IslandStreetlight>(false).Where(x => x && Fields.Get<Material>(x, "onMat")).ToList();
+        }
+        // One copy of a scenery lamp part at a row: made under a switched-off holder, its outlines off, its renderers on, each light's object on with its "on" material
+        // set and its manager (the scene's own, copied with it), placed (it wakes there), then moved into the island's scene by its world pose.
+        private static GameObject LampCopy(Wharf w, Transform src, WharfPose pose, string name, List<IslandStreetlight> woke)
+        {
+            var hold = new GameObject("trade office hold"); hold.SetActive(false);
+            try
+            {
+                var c = Object.Instantiate(src.gameObject, hold.transform); c.name = name;
+                foreach (var o in c.GetComponentsInChildren<cakeslice.Outline>(true)) Object.DestroyImmediate(o);
+                foreach (var r in c.GetComponentsInChildren<Renderer>(true)) r.enabled = true;
+                foreach (var sl in c.GetComponentsInChildren<IslandStreetlight>(true))
+                {
+                    sl.gameObject.SetActive(true);
+                    var mf = sl.GetComponent<MeshFilter>(); var mesh = mf ? mf.sharedMesh : null;
+                    bool Same(IslandStreetlight x) { var f = x.GetComponent<MeshFilter>(); return f && f.sharedMesh == mesh; }
+                    var like = woke.FirstOrDefault(x => Same(x) && x.offMat == sl.offMat) ?? woke.FirstOrDefault(Same);
+                    var rd = sl.GetComponent<Renderer>(); var on = like ? Fields.Get<Material>(like, "onMat") : null;
+                    if (rd && on) { var mats = rd.sharedMaterials; mats[0] = on; rd.sharedMaterials = mats; }
+                    if (!sl.streetlightManager) sl.streetlightManager = w.LampManager;
+                }
+                OfficeSpots.Place(c.transform, w.Island, pose.Position, pose.Turn, pose.Scale);
+                c.transform.SetParent(src.root, true);
+                c.transform.position -= SceneryLag(src.root);
+                return c;
+            }
+            finally { Object.Destroy(hold); }
+        }
+        // How far an island scene's root has still to move to its island: the game's IslandSceneryScene copies the island's position to it in its own Update,
+        // so on the scene's first frame and a world shift's frame it lags. Added to a place read under it, taken off a copy placed under it.
+        private static Vector3 SceneryLag(Transform sceneryRoot)
+        {
+            var s = sceneryRoot ? sceneryRoot.GetComponent<IslandSceneryScene>() : null; int i = s ? s.parentIslandIndex : -1;
+            return Refs.islands != null && i >= 0 && i < Refs.islands.Length && Refs.islands[i] ? Refs.islands[i].position - sceneryRoot.position : Vector3.zero;
+        }
+        // The lamps gone: each copy's lights taken off the manager's list (trap 3), then the copies destroyed. After the island's scene unloaded they and the
+        // manager are gone already.
+        private static void DropLamps(Wharf w)
+        {
+            if (w.Lamps == null) return;
+            var list = w.LampManager ? AccessTools.Field(typeof(IslandStreetlightsManager), "streetlights")?.GetValue(w.LampManager) as List<IslandStreetlight> : null;
+            foreach (var g in w.Lamps)
+            {
+                if (!g) continue;
+                if (list != null) foreach (var sl in g.GetComponentsInChildren<IslandStreetlight>(true)) list.Remove(sl);
+                Object.Destroy(g);
+            }
+            w.Lamps = null; w.LampManager = null;
+        }
+        // A ship saved moored to a wharf cleat where 1.2.1 stood it (WharfSpots.OldCleats) stays moored. The game puts a rope saved as moored back where it lay,
+        // under the shifting world, and moors it only to a cleat whose trigger it touches (SaveableObject.Load, PickupableBoatMooringRope.OnTriggerEnter): with the
+        // cleats moved, its rope would lie free and the ship drift. Such a rope (not moored, not held, away from its rest, under the shifting world) whose end
+        // stands within OldCleatReach across of a 1.2.1 cleat's place is moored to the cleat of the same number with the game's own MoorTo, if that cleat is on and
+        // free and the ship within MoorSavedReach of it. Run for MoorSavedFor seconds after the pier is built: its island's scene loaded, the player near.
+        private static void MoorSaved(Wharf w)
+        {
+            if (w.Cleats == null || !w.Island || !WharfSpots.OldCleats.TryGetValue(w.House, out var old)) return;
+            foreach (var b in Pledges.All())
+            {
+                var ropes = b ? b.GetComponent<BoatMooringRopes>() : null; if (!ropes || ropes.ropes == null) continue;
+                foreach (var r in ropes.ropes)
+                {
+                    if (!r || r.IsMoored() || r.held || r.IsAtInitialPos() || r.transform.parent != Refs.shiftingWorld) continue;
+                    var at = r.transform.position;
+                    for (int i = 0; i < old.Length && i < w.Cleats.Length; i++)
+                    {
+                        var was = w.Island.TransformPoint(old[i]);
+                        if (new Vector2(at.x - was.x, at.z - was.z).magnitude > WharfSpots.OldCleatReach) continue;
+                        var c = w.Cleats[i]; var m = c && c.activeInHierarchy ? c.GetComponent<GPButtonDockMooring>() : null;
+                        if (m && m.spring && !m.spring.connectedBody && Vector3.Distance(b.transform.position, c.transform.position) < WharfSpots.MoorSavedReach)
+                        {
+                            r.MoorTo(m);
+                            Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(Pledges.Index(b)) + "'s rope, saved at the " + Pledges.Name(w.House) + "'s wharf cleat " + i + " where 1.2.1 stood it, moored to that cleat again.");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        // The cargo areas, the whole pier: one box over each run of deck pieces (the crosspiece, the stem; the grotto's low pier), along the run, as wide and
+        // long as the pieces' colliders, a trigger on the layer the game's pointer passes through (2).
+        private static void MakeAreas(Wharf w, Transform root, List<List<GameObject>> groups)
+        {
+            var areas = new List<BoxCollider>(); var origins = new List<Vector3>();
+            foreach (var g in groups)
+            {
+                var run = g.Where(p => p && p.GetComponent<Collider>()).ToList(); if (run.Count == 0) continue;
+                var first = run[0].transform.position; var along = run[run.Count - 1].transform.position - first; along.y = 0f;
+                if (along.sqrMagnitude < .01f) { along = run[0].transform.forward; along.y = 0f; }
+                if (along.sqrMagnitude < .01f) along = Vector3.forward;
+                var frame = Quaternion.LookRotation(along.normalized, Vector3.up); var inverse = Quaternion.Inverse(frame);
+                Vector3 lo = Vector3.one * float.MaxValue, hi = -lo; float originY = 0f;
+                foreach (var p in run)
+                {
+                    originY += p.transform.position.y;
+                    var col = p.GetComponent<Collider>();
+                    var b = col is BoxCollider box ? new Bounds(box.center, box.size) : col is MeshCollider mc && mc.sharedMesh ? mc.sharedMesh.bounds : new Bounds(Vector3.zero, Vector3.zero);
+                    for (int k = 0; k < 8; k++)
+                    {
+                        var c = inverse * (p.transform.TransformPoint(b.center + Vector3.Scale(b.extents, new Vector3((k & 1) == 0 ? -1 : 1, (k & 2) == 0 ? -1 : 1, (k & 4) == 0 ? -1 : 1))) - first);
+                        lo = Vector3.Min(lo, c); hi = Vector3.Max(hi, c);
+                    }
+                }
+                originY /= run.Count;
+                var mid = first + frame * new Vector3((lo.x + hi.x) / 2, 0f, (lo.z + hi.z) / 2);
+                float bottom = originY - WharfSpots.AreaBelow, top = originY + WharfSpots.AreaAbove;
+                var go = new GameObject("trade office wharf cargo area") { layer = 2 }; go.transform.SetParent(root, false);
+                var s = root.lossyScale; go.transform.localScale = new Vector3(1f / s.x, 1f / s.y, 1f / s.z);
+                go.transform.SetPositionAndRotation(new Vector3(mid.x, (bottom + top) / 2, mid.z), frame);
+                var area = go.AddComponent<BoxCollider>(); area.isTrigger = true; area.size = new Vector3(hi.x - lo.x, top - bottom, hi.z - lo.z);
+                areas.Add(area); origins.Add(new Vector3(mid.x, originY + WharfSpots.OriginOver, mid.z));
+            }
+            if (areas.Count == 0) throw new InvalidOperationException("no deck piece with a collider for the cargo area");
+            // Firefly Grotto's square after the pier (its Square rows: the floor at the box's middle, the box's width and length in its scale), the same height
+            // as the deck's areas over its floor.
+            foreach (var p in WharfSpots.Of(w.House, WharfPart.Square))
+            {
+                var floor = w.Island.TransformPoint(p.Position); var frame = w.Island.rotation * p.Turn;
+                float bottom = floor.y - WharfSpots.AreaBelow, top = floor.y + WharfSpots.AreaAbove;
+                var go = new GameObject("trade office wharf cargo area") { layer = 2 }; go.transform.SetParent(root, false);
+                var s = root.lossyScale; go.transform.localScale = new Vector3(1f / s.x, 1f / s.y, 1f / s.z);
+                go.transform.SetPositionAndRotation(new Vector3(floor.x, (bottom + top) / 2, floor.z), frame);
+                var area = go.AddComponent<BoxCollider>(); area.isTrigger = true; area.size = new Vector3(p.Scale.x, top - bottom, p.Scale.z);
+                areas.Add(area); origins.Add(floor + Vector3.up * WharfSpots.OriginOver);
+            }
+            w.Areas = areas.ToArray(); w.Origins = origins.ToArray();
+        }
+
+        // ---- The yard (one object made switched off, its trigger, the two installers, the camera rotator and the Shipyard with its region's values set before
+        // it wakes; the documents on the port man's mission paper's mesh with the keeper), while a clerk works there ----
+        private static void MakeYard(Wharf w)
+        {
+            if (Time.unscaledTime < w.YardRetryAt) return;
+            int house = w.House, region = Office.Region(house); var root = w.Built.transform;
+            if (region < 0 || region > 2 || !PrefabsDirectory.instance || !WharfSpots.TryGet(house, WharfPart.Yard, out var yp) || !WharfSpots.TryGet(house, WharfPart.Edit, out var ep) ||
+                !WharfSpots.TryGet(house, WharfPart.Release, out var rp) || !WharfSpots.TryGet(house, WharfPart.Documents, out var dp) || !WharfSpots.TryGet(house, WharfPart.Keeper, out var kp)) return;
+            var port = Office.PortOf(house); var dude = port ? port.GetDude() : null;
+            var paper = dude ? dude.GetComponentsInChildren<MeshFilter>(true).FirstOrDefault(f => f.name == "mission_details_UI_bg_001") : null;
+            if (!paper) { Warn(house, "no mission paper under the port man for its documents; no yard"); w.YardRetryAt = Time.unscaledTime + 30f; return; }
+            GameObject yr = null, docs = null, keeper = null; Shipyard yard;
+            try
+            {
+                yr = new GameObject("trade office wharf yard " + house); yr.SetActive(false);
+                OfficeSpots.Place(yr.transform, root, yp.Position, yp.Turn, yp.Scale);
+                var box = yr.AddComponent<BoxCollider>(); box.isTrigger = true; box.size = WharfSpots.YardArea;
+                yr.AddComponent<ShipyardSailInstaller>(); var parts = yr.AddComponent<ShipyardPartsInstaller>();
+                var rotator = yr.AddComponent<ShipyardCameraRotator>(); rotator.enabled = false;
+                yard = yr.AddComponent<Shipyard>();
+                Transform Mark(string name, WharfPose p) { var t = new GameObject(name).transform; OfficeSpots.Place(t, root, p.Position, p.Turn, p.Scale); t.SetParent(yr.transform, true); return t; }
+                var edit = Mark("edited ship position", ep); var release = Mark("ship release position", rp);
+                // let go over the sea as the game's yards do (theirs 0.6-3.6 m), not at its level: world up from the row's place, so the island's frame and scale
+                // don't change it
+                release.position += Vector3.up * WharfSpots.ReleaseOverSea;
+                Fields.Set(rotator, "boatPos", edit);
+                var sails = PrefabsDirectory.instance.sails;
+                yard.region = region; yard.availableSailColors = (int[])WharfSpots.Colours[region].Clone();
+                yard.sailPrefabs = WharfSpots.Sails[region].Where(i => sails != null && i < sails.Length && sails[i]).Select(i => sails[i]).ToArray();
+                yard.editedShipPosition = edit; yard.shipReleasePosition = release; yard.partsInstaller = parts;
+                Fields.Set(yard, "boatsInTrigger", new List<GameObject>());   // AddComponent leaves it null
+                keeper = MakeKeeper(w, kp, dude);
+                docs = new GameObject("trade office wharf documents"); docs.SetActive(false);
+                docs.AddComponent<MeshFilter>().sharedMesh = paper.sharedMesh; docs.AddComponent<MeshRenderer>().sharedMaterials = paper.GetComponent<MeshRenderer>().sharedMaterials;
+                var dbox = docs.AddComponent<BoxCollider>(); dbox.isTrigger = true; dbox.size = WharfSpots.PaperBox; dbox.center = WharfSpots.PaperCentre;
+                // the wharfmaster stands at the pier at every hour: the game's documents switch their keeper off from 18:00 to 07:00 (ShipyardDocuments.Update) and
+                // only that, the yard staying open; so they are given an empty object of their own to switch (KeeperNight), and the wharfmaster's holder is no
+                // documents' keeper
+                var night = new GameObject(WharfSpots.KeeperNight); night.transform.SetParent(docs.transform, false);
+                var documents = docs.AddComponent<ShipyardDocuments>(); documents.shipyard = yard; documents.keeper = night;
+                OfficeSpots.Place(docs.transform, root, dp.Position, dp.Turn, dp.Scale);
+                yr.SetActive(true); docs.SetActive(true);
+            }
+            // A step that threw leaves nothing of the yard behind (Poll comes back each second: a half-made yard, keeper and documents a try would
+            // add up under the pier) and waits 30 s, as Build does.
+            catch { foreach (var g in new[] { yr, docs, keeper }) if (g) Object.Destroy(g); w.YardRetryAt = Time.unscaledTime + 30f; throw; }
+            w.YardRoot = yr; w.Yard = yard; w.Documents = docs; w.Keeper = keeper;
+            Bottomry.ForgetYards();
+            Plugin.Log.LogInfo("Trade office: the " + Pledges.Name(house) + "'s wharf yard made: region " + region + ", " + yard.sailPrefabs.Length + " sails (another mod may add more as it wakes), a keeper " + (keeper.transform.childCount > 0 ? "copied from the port man" : "not drawn (no model to copy)") + ".");
+        }
+        // A yard in use (a ship admitted) is left until the player leaves it, unless the wharf goes: then its ship is released. The game lets the ship go
+        // by a coroutine on the yard (MoveShip, about 2 s) and RadFixes runs one at release, so the yard is kept 5 s before it goes.
+        private static void DropYard(Wharf w)
+        {
+            if (InUse(w))
+            {
+                w.Yard.DischargeShip();
+                w.YardRoot.transform.SetParent(w.Island, true); Object.Destroy(w.YardRoot, 5f);
+            }
+            else if (w.YardRoot) Object.Destroy(w.YardRoot);
+            if (w.Documents) Object.Destroy(w.Documents);
+            if (w.Keeper) Object.Destroy(w.Keeper);
+            if (w.YardRoot || w.Yard) Bottomry.ForgetYards();
+            w.YardRoot = w.Documents = w.Keeper = null; w.Yard = null;
+        }
+        // The keeper: a copy of the port man's model as the clerk is (OfficeSite.MakeClerk), on a holder that stays on at every hour (the documents switch their
+        // own KeeperNight object instead, MakeYard); dressed in one of his region's outfits picked from the house's number (the same each visit), not the
+        // clerk's, or in the look made for him in Player Model's screen (ClerkGuard puts it on). The holder stays empty if there is no model to copy (the
+        // documents need a keeper object).
+        private static GameObject MakeKeeper(Wharf w, WharfPose pose, PortDude dude)
+        {
+            var holder = new GameObject("trade office wharf keeper"); GameObject hold = null;
+            try
+            {
+                OfficeSpots.Place(holder.transform, w.Built.transform, pose.Position, pose.Turn, Vector3.one);
+                holder.transform.position -= Vector3.up * WharfSpots.KeeperMarkerHalf;
+                var model = dude ? dude.GetComponentsInChildren<NPCAnimations>(true).Select(a => a.transform).FirstOrDefault() : null;
+                if (!model) return holder;
+                hold = new GameObject("trade office hold"); hold.SetActive(false);
+                var body = Object.Instantiate(model.gameObject, hold.transform); body.name = model.name;
+                foreach (Transform child in body.transform.Cast<Transform>().ToArray())
+                    if (child.name.IndexOf("speech", StringComparison.OrdinalIgnoreCase) >= 0 || child.GetComponents<MonoBehaviour>().Any(m => m && m.GetType().Name == "NPCHitTalker")) Object.DestroyImmediate(child.gameObject);
+                body.transform.SetParent(holder.transform, false);
+                body.transform.localPosition = dude.transform.InverseTransformPoint(model.position);
+                body.transform.localRotation = Quaternion.Inverse(dude.transform.rotation) * model.rotation;
+                var ws = model.lossyScale; var hs = holder.transform.lossyScale; body.transform.localScale = new Vector3(ws.x / hs.x, ws.y / hs.y, ws.z / hs.z);
+                var guard = holder.AddComponent<ClerkGuard>(); guard.model = body.transform; guard.kept = new HashSet<Transform>(body.GetComponentsInChildren<Transform>(true));
+                guard.outfit = KeeperOutfit(w.House); guard.look = KeeperLook(w.House);
+                Object.Destroy(hold);
+                body.SetActive(true);
+                return holder;
+            }
+            // (a step that threw: his holder and the copy's holder go with it; MakeYard drops the rest)
+            catch { if (hold) Object.Destroy(hold); Object.Destroy(holder); throw; }
+        }
+        private static int KeeperOutfit(int house)
+        {
+            var all = TraderHulls.Outfits; if (all.Count == 0) return -1;
+            var worn = new HashSet<int>(); var s = World.State?.office; int i = Office.Slot(house);
+            if (s?.clerkOutfit != null && i >= 0 && i < s.clerkOutfit.Length && s.clerkOutfit[i] > 0) worn.Add(s.clerkOutfit[i] - 1);
+            return Rules.PickOutfit(Office.Region(house), all.Select(o => o.Kind).ToList(), worn, new System.Random(house).NextDouble() * .999999);
+        }
+        // His look from Player Model's screen (null: none made, or a save from before it).
+        internal static string KeeperLook(int house) { var a = World.State?.office?.keeperLook; int i = Office.Slot(house); return a != null && i >= 0 && i < a.Length ? a[i] : null; }
+        // After Player Model's screen (ClerkLook.Tick), a fresh keeper wearing the new look, as a fresh clerk is made for his (OfficeSite.RemakeClerk): on
+        // the same pose (the documents switch only their own KeeperNight object, never him). Nothing while no yard stands (no clerk working, his island not
+        // loaded): the next keeper made wears it.
+        internal static void RemakeKeeper(int house)
+        {
+            if (!wharves.TryGetValue(house, out var w) || !w.Keeper || !w.Built || !w.Documents || !WharfSpots.TryGet(house, WharfPart.Keeper, out var kp)) return;
+            var port = Office.PortOf(house); var fresh = MakeKeeper(w, kp, port ? port.GetDude() : null);
+            var old = w.Keeper; w.Keeper = fresh; Object.Destroy(old);
+        }
+        // The wharfmaster's holder (null while no yard stands; the QA's reading).
+        internal static GameObject Keeper(int house) => wharves.TryGetValue(house, out var w) && w.Keeper ? w.Keeper : null;
+
+        // ---- Cargo: the office book's purchases placed on the pier, and crates lying on it counted when a book of its port sells ----
+        // The pier takes the office book's cargo: the wharf works (a clerk there) and its deck is built.
+        internal static bool Delivers(int house) => wharves.TryGetValue(house, out var w) && Decked(w) && Office.Working(house, OfficeUpgrade.Wharf);
+        // Its deck is built (its island's scene loaded), with a clerk or without.
+        private static bool Decked(Wharf w) => w.Areas != null && w.Areas.Length > 0 && w.Areas.All(a => a);
+        internal static bool Place(int house, IslandMarket market, List<Good> goods, out int found)
+        {
+            found = 0;
+            return wharves.TryGetValue(house, out var w) && w.Areas != null && CargoPlacement.PlaceOnWharf(market, goods, w.Areas, w.Origins, out found);
+        }
+        internal static IEnumerable<Good> Goods(int house) => wharves.TryGetValue(house, out var w) && Decked(w) ? OnDeck(w) : Enumerable.Empty<Good>();
+        // The goods on the deck of the wharf at this market's port: the port's own trade book counts them as the office's does. With a clerk or without, so
+        // crates left there when he quits can still be sold at the port's book.
+        internal static IEnumerable<Good> AtPort(IslandMarket market)
+        {
+            var port = market ? market.GetPort() : null;
+            if (port) foreach (var w in wharves.Values) if (Decked(w) && Office.PortOf(w.House) == port) return OnDeck(w);
+            return Enumerable.Empty<Good>();
+        }
+        // The goods lying in the cargo areas (not held, not in a cart): their own colliders or their physics copy's (ItemRigidbody).
+        private static IEnumerable<Good> OnDeck(Wharf w)
+        {
+            var seen = new HashSet<Good>();
+            foreach (var a in w.Areas)
+                if (a) foreach (var c in Physics.OverlapBox(a.transform.TransformPoint(a.center), a.size * .5f, a.transform.rotation, ~0, QueryTriggerInteraction.Collide))
+                {
+                    var g = c.GetComponentInParent<Good>();
+                    if (!g) { var rb = c.GetComponentInParent<ItemRigidbody>(); var si = rb ? rb.GetShipItem() : null; g = si ? si.GetComponent<Good>() : null; }
+                    var item = g ? g.GetComponent<ShipItem>() : null;
+                    if (item && !item.held && item.GetCurrentInventorySlot() < 100 && seen.Add(g)) yield return g;
+                }
+        }
+    }
+
+    // ---- The painted path at Oasis (the line and the paint's rules in Rules.OasisPath*) ----
+    // While Oasis's wharf stands and its island's scene is loaded (OfficeWharves.Poll, once a second), the game's own "Cobblestone Chaotic Red" TerrainLayer is
+    // painted into Oasis's terrain along the line from the office door to the wharf's ramp, the grass on it taken off. The game never changes a terrain at
+    // runtime: this is in memory only (no save change), once a session, and put back when the wharf goes and at "Prepare to uninstall" (OfficeWharves.Remove).
+    // - Oasis House Fix, loaded with its paint on (its master switch and either its drive and paths or its firmer dirt roads: its Tick paints then, as of its
+    //   1.4.6), paints Oasis's terrain once on arrival and makes its grid 1024: the path waits for that (its paint seen on this terrain data, its
+    //   _pathsDone) and is painted after it, never before (a path painted before its resample cannot be put back exactly). With its drive, paths and roads
+    //   on, the path starts at J, else at the door.
+    // - The grid made OasisPathGrid by the mod itself when no other mod has (Rules.FinerGrid on a worker thread, written in one frame); left so when the path
+    //   is put back (in memory only: the game's 512 is back at the next start; the ground looks the same at 1024).
+    // - Better Ports' Oasis terrain has 8 layers: the path's is a ninth (a third control texture; no frame cost measured).
+    // - The put-back: cells still as painted from the copy, any other by its painted share given back in the copy's mix (Rules.TakeOff); at a grid made finer
+    //   since, by position; the grass back where none came back and no other mod's road lies now; a layer the path added taken to exactly 0 in the path's cells
+    //   (Unity keeps a removed layer's channel: a trace would come back with the next layer added there), then off, while it is the terrain's last layer.
+    internal static class OasisPath
+    {
+        internal const int House = 205;
+        private const string OhfGuid = "com.dixiecapt.sailwind.oasishousefix";
+        internal sealed class GrassCut { internal int Layer, X, Y, W, H; internal int[,] Orig; internal bool[,] Cleared; }
+        internal sealed class Painted
+        {
+            internal Terrain T; internal TerrainData D; internal TerrainLayer Layer;
+            internal int Index, Res, X, Y, W, H, Sand, Cells, Tufts; internal bool Added, FromJ;
+            internal float[,,] Orig, Done;   // the path's rectangle before the paint (its layer added) and as painted
+            internal readonly List<GrassCut> Grass = new List<GrassCut>();
+        }
+        // The grid made finer on a worker thread (Finer): the data it was read from, its grid then, the result or the error.
+        private sealed class FineJob { internal TerrainData D; internal int From; internal double ReadMs; internal System.Diagnostics.Stopwatch Clock; internal volatile float[,,] Done; internal volatile string Error; }
+        private static Painted painted; private static FineJob fine; private static bool gaveUp;
+        private static Terrain terrain; private static TerrainLayer layer; private static bool layerLooked; private static FieldInfo ohfDone; private static bool ohfLooked;
+        internal static Painted Now => painted;   // (the QA's reading)
+        private static readonly HashSet<string> said = new HashSet<string>();
+        private static void Warn(string what) { if (said.Add(what)) Plugin.Log.LogWarning("Trade office: Oasis's path: " + what); }
+        private static void Once(string what) { if (said.Add(what)) Plugin.Log.LogInfo("Trade office: Oasis's path: " + what); }
+        private static string Ms(double ms) => ms.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + " ms";
+
+        // The line in world (x, z) from the live island root (the world shifts), from J when Oasis House Fix's roads cover the door's end.
+        internal static List<Vector2> Line(Transform island, bool fromJ)
+        {
+            var l = new List<Vector2>(); var a = Rules.OasisPathLine;
+            for (int i = 0; i + 1 < a.Length; i += 2) { var w = island.TransformPoint(new Vector3(a[i], 0f, a[i + 1])); l.Add(new Vector2(w.x, w.z)); }
+            return fromJ ? Rules.PathFrom(l, Rules.OasisPathJ) : l;
+        }
+        // Oasis's terrain: the one under its island root holding the office door (Better Ports puts its own data on the same Terrain), kept once found.
+        private static Terrain TerrainOf(Transform island, Vector2 at)
+        {
+            if (terrain && terrain.transform.IsChildOf(island)) return terrain;
+            terrain = null;
+            foreach (var t in island.GetComponentsInChildren<Terrain>(true))
+            {
+                if (!t || !t.terrainData) continue;
+                var p = t.GetPosition(); var s = t.terrainData.size;
+                if (at.x >= p.x && at.x <= p.x + s.x && at.y >= p.z && at.y <= p.z + s.z) return terrain = t;
+            }
+            return null;
+        }
+        // Oasis House Fix: whether it paints Oasis's terrain (loaded, its master switch on, its drive and paths or its firmer dirt roads on) and whether its
+        // roads cover the line before J (its drive, paths and roads on), read from its BepInEx config (section "General" and "Grounds").
+        private static BepInEx.BaseUnityPlugin Ohf() => BepInEx.Bootstrap.Chainloader.PluginInfos.TryGetValue(OhfGuid, out var i) && i != null ? i.Instance : null;
+        private static object OhfConfig(BepInEx.BaseUnityPlugin o, string section, string key)
+        {
+            foreach (var kv in o.Config) if (kv.Key.Section == section && kv.Key.Key == key) return kv.Value.BoxedValue;
+            return null;
+        }
+        internal static void OhfState(out bool paints, out bool roads)
+        {
+            paints = roads = false; var o = Ohf(); if (!o) return;
+            if (OhfConfig(o, "General", "Enabled") is bool on && !on) return;
+            bool paths = OhfConfig(o, "Grounds", "Dirt drive and paths") is bool a && a, r = OhfConfig(o, "Grounds", "Dirt roads round the house") is bool b && b;
+            float firm = OhfConfig(o, "Grounds", "Firmer dirt roads on Oasis (0 to 1)") is float f ? f : 0f;
+            paints = paths || firm > .01f; roads = paths && r;
+        }
+        // Its paint done on this terrain data (its own record, _pathsDone, set as it paints). A version without that record: painted at once, with a warning.
+        private static bool OhfPainted(BepInEx.BaseUnityPlugin o, TerrainData d)
+        {
+            if (!ohfLooked) { ohfLooked = true; ohfDone = AccessTools.Field(o.GetType(), "_pathsDone"); }
+            if (ohfDone == null) { Warn("Oasis House Fix's record of its own paint (_pathsDone) is not in this version; the path is painted without waiting for it"); return true; }
+            return ReferenceEquals(ohfDone.GetValue(o), d);
+        }
+        // The game's layer, found once by name: of several so named, the one most terrain data use.
+        private static TerrainLayer Layer()
+        {
+            if (layerLooked) return layer;
+            layerLooked = true;
+            var found = Resources.FindObjectsOfTypeAll<TerrainLayer>().Where(l => l && l.name == Rules.OasisPathLayer).ToList();
+            if (found.Count > 1)
+            {
+                var datas = Resources.FindObjectsOfTypeAll<TerrainData>().Where(d => d && d.terrainLayers != null).ToList();
+                found = found.OrderByDescending(l => datas.Count(d => d.terrainLayers.Contains(l))).ToList();
+            }
+            layer = found.FirstOrDefault();
+            if (!layer) Warn("the game's \"" + Rules.OasisPathLayer + "\" terrain layer was not found; no path");
+            return layer;
+        }
+
+        // From OfficeWharves.Poll, once a second, while Oasis's wharf stands and its pier is built (the island's scene loaded). Its own failure gives up the path
+        // for the session (put back what it did), never the wharf's other steps.
+        internal static void Tick(Transform island)
+        {
+            if (gaveUp || !island) return;
+            try
+            {
+                var t = TerrainOf(island, Line(island, false)[0]);
+                if (!t) { Warn("no terrain under the office door; no path"); return; }
+                var d = t.terrainData;
+                if (painted != null)
+                {
+                    if (painted.D == d) return;
+                    Plugin.Log.LogInfo("Trade office: Oasis's path: the terrain's data changed since the paint; painted again on the new data."); painted = null;
+                }
+                OhfState(out bool ohfPaints, out bool fromJ);
+                var o = ohfPaints ? Ohf() : null;
+                if (o && !OhfPainted(o, d)) { Once("waiting for Oasis House Fix's paint of Oasis's ground (the path is painted after it)"); return; }
+                var l = Layer(); if (!l) { gaveUp = true; return; }
+                if (d.alphamapResolution < Rules.OasisPathGrid) { Finer(d); return; }
+                fine = null;
+                Paint(t, d, l, Line(island, fromJ), fromJ);
+            }
+            catch (Exception e) { gaveUp = true; fine = null; Warn("not painted: " + e); try { PutBack(); } catch { } gaveUp = true; }
+        }
+        // The grid made twice as fine: read here, worked out on a worker thread (Rules.FinerGrid), written in one frame by a later Tick once done; again until
+        // it reaches OasisPathGrid. Its times logged (read, worked out, written).
+        private static void Finer(TerrainData d)
+        {
+            var job = fine;
+            if (job != null && job.D == d && job.From == d.alphamapResolution)
+            {
+                if (job.Error != null) { fine = null; gaveUp = true; Warn("the paint grid could not be made finer (" + job.Error + "); no path"); return; }
+                var done = job.Done; if (done == null) return;
+                fine = null;
+                if (done.GetLength(2) != d.alphamapLayers) return;   // the layers changed while it was worked out: read again at the next Tick
+                double worked = job.Clock.Elapsed.TotalMilliseconds; var sw = System.Diagnostics.Stopwatch.StartNew();
+                int from = job.From, to = from * 2;
+                d.alphamapResolution = to;
+                if (d.alphamapResolution != to) { gaveUp = true; Warn("the paint grid stayed " + d.alphamapResolution + " when set to " + to + "; no path"); return; }
+                d.SetAlphamaps(0, 0, done);
+                Plugin.Log.LogInfo("Trade office: Oasis's path: the ground's paint grid made " + to + " (from " + from + ", " + (d.size.x / to).ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + " m a cell; no other mod had): read " +
+                    Ms(job.ReadMs) + ", worked out on a thread in " + Ms(worked) + ", written in " + Ms(sw.Elapsed.TotalMilliseconds) + " in one frame.");
+                return;
+            }
+            int res = d.alphamapResolution;
+            var clock = System.Diagnostics.Stopwatch.StartNew(); var a = d.GetAlphamaps(0, 0, res, res);
+            var j = new FineJob { D = d, From = res, ReadMs = clock.Elapsed.TotalMilliseconds, Clock = System.Diagnostics.Stopwatch.StartNew() };
+            fine = j;
+            new System.Threading.Thread(() => { try { j.Done = Rules.FinerGrid(a); } catch (Exception e) { j.Error = e.Message; } }) { IsBackground = true, Name = "EconomyOverhaul Oasis paint grid", Priority = System.Threading.ThreadPriority.BelowNormal }.Start();
+        }
+        // The cells round the line in a grid of res (the rectangle the path's paint and edge reach, 2 cells more).
+        private static void Rect(Terrain t, int res, List<Vector2> line, out int x0, out int y0, out int w, out int h)
+        {
+            var p = t.GetPosition(); var s = t.terrainData.size; float cx = s.x / res, cz = s.z / res, m = Rules.OasisPathHalf + Rules.OasisPathSoft;
+            float minX = line.Min(q => q.x) - m, maxX = line.Max(q => q.x) + m, minZ = line.Min(q => q.y) - m, maxZ = line.Max(q => q.y) + m;
+            x0 = Mathf.Clamp(Mathf.FloorToInt((minX - p.x) / cx) - 2, 0, res - 1); y0 = Mathf.Clamp(Mathf.FloorToInt((minZ - p.z) / cz) - 2, 0, res - 1);
+            int x1 = Mathf.Clamp(Mathf.FloorToInt((maxX - p.x) / cx) + 2, 0, res - 1), y1 = Mathf.Clamp(Mathf.FloorToInt((maxZ - p.z) / cz) + 2, 0, res - 1);
+            w = x1 - x0 + 1; h = y1 - y0 + 1;
+        }
+        private static void Paint(Terrain t, TerrainData d, TerrainLayer l, List<Vector2> line, bool fromJ)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var layers = d.terrainLayers ?? new TerrainLayer[0];
+            var p = new Painted { T = t, D = d, Layer = l, FromJ = fromJ, Res = d.alphamapResolution };
+            p.Sand = Array.FindIndex(layers, x => x && x.name.IndexOf("sand", StringComparison.OrdinalIgnoreCase) >= 0);
+            Rect(t, p.Res, line, out p.X, out p.Y, out p.W, out p.H);
+            p.Index = Array.IndexOf(layers, l);
+            if (p.Index < 0) { d.terrainLayers = layers.Concat(new[] { l }).ToArray(); p.Index = d.terrainLayers.Length - 1; p.Added = true; }
+            try
+            {
+                p.Orig = d.GetAlphamaps(p.X, p.Y, p.W, p.H);
+                var a = (float[,,])p.Orig.Clone(); var pos = t.GetPosition(); float cx = d.size.x / p.Res, cz = d.size.z / p.Res;
+                for (int y = 0; y < p.H; y++)
+                    for (int x = 0; x < p.W; x++)
+                        if (Rules.PaintCell(a, y, x, p.Index, Rules.PathWeight(Rules.PathDistance(line, pos.x + (p.X + x + .5f) * cx, pos.z + (p.Y + y + .5f) * cz)))) p.Cells++;
+                d.SetAlphamaps(p.X, p.Y, a);
+            }
+            catch { if (p.Added && d.terrainLayers.Length == layers.Length + 1) d.terrainLayers = layers; throw; }
+            p.Done = d.GetAlphamaps(p.X, p.Y, p.W, p.H);
+            painted = p;   // (from here the put-back can undo it, the grass included as far as it went)
+            double paintMs = sw.Elapsed.TotalMilliseconds;
+            p.Tufts = GrassOff(p, line);
+            Plugin.Log.LogInfo("Trade office: Oasis's path painted (" + (fromJ ? "P2, from J, " + Rules.OasisPathJ.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + " m along the line, after Oasis House Fix's road" : "P1, from the office door") +
+                "): '" + l.name + "' " + (p.Added ? "added as" : "already") + " layer " + (p.Index + 1) + " of " + d.alphamapLayers + " on '" + d.name + "' (grid " + p.Res + "), " + p.Cells + " cells in a " + p.W + " x " + p.H + " rectangle in " + Ms(paintMs) +
+                ", " + p.Tufts + " grass tufts off; in all " + Ms(sw.Elapsed.TotalMilliseconds) + ". In memory only.");
+        }
+        // The grass off where the path's paint is over OasisPathGrassOver (every detail layer), the cells kept for the put-back.
+        private static int GrassOff(Painted p, List<Vector2> line)
+        {
+            var d = p.D; int dw = d.detailWidth, dh = d.detailHeight, n = d.detailPrototypes != null ? d.detailPrototypes.Length : 0;
+            if (dw <= 0 || dh <= 0 || n == 0) return 0;
+            var pos = p.T.GetPosition(); var size = d.size; float cx = size.x / dw, cz = size.z / dh, ax = size.x / p.Res, az = size.z / p.Res;
+            int x0 = Mathf.Clamp(Mathf.FloorToInt(p.X * ax / cx), 0, dw - 1), y0 = Mathf.Clamp(Mathf.FloorToInt(p.Y * az / cz), 0, dh - 1);
+            int x1 = Mathf.Clamp(Mathf.CeilToInt((p.X + p.W) * ax / cx), x0 + 1, dw), y1 = Mathf.Clamp(Mathf.CeilToInt((p.Y + p.H) * az / cz), y0 + 1, dh), w = x1 - x0, h = y1 - y0;
+            var clear = new bool[h, w]; bool any = false;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    if (Rules.PathWeight(Rules.PathDistance(line, pos.x + (x0 + x + .5f) * cx, pos.z + (y0 + y + .5f) * cz)) > Rules.OasisPathGrassOver) { clear[y, x] = true; any = true; }
+            if (!any) return 0;
+            int tufts = 0;
+            for (int k = 0; k < n; k++)
+            {
+                var g = d.GetDetailLayer(x0, y0, w, h, k); var orig = (int[,])g.Clone(); bool changed = false;
+                for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) if (clear[y, x] && g[y, x] != 0) { tufts += g[y, x]; g[y, x] = 0; changed = true; }
+                if (changed) { d.SetDetailLayer(x0, y0, k, g); p.Grass.Add(new GrassCut { Layer = k, X = x0, Y = y0, W = w, H = h, Orig = orig, Cleared = clear }); }
+            }
+            return tufts;
+        }
+
+        // The path put back (OfficeWharves.Remove: the wharf gone, "Prepare to uninstall"); nothing when none is painted. The grid stays as it is.
+        internal static void PutBack()
+        {
+            fine = null; gaveUp = false;
+            var p = painted; painted = null;
+            if (p == null || !p.D) return;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var d = p.D; var layers = d.terrainLayers ?? new TerrainLayer[0]; int li = Array.IndexOf(layers, p.Layer), L = d.alphamapLayers, res = d.alphamapResolution;
+            if (li != p.Index || L != p.Orig.GetLength(2))
+            {
+                Warn("the terrain's layers changed since the paint (" + layers.Length + " now, the path's at " + (li + 1) + " of them); the path is left until the game restarts");
+                return;
+            }
+            float trace = p.Added ? 0f : 1f / 255f; var mix = new float[L]; int copied = 0, shared = 0; string how;
+            // A cell's layer li taken to 0, its share given to its own other layers (a layer the path added must hold nothing where it painted).
+            void Zero(float[,,] a, int y, int x) { if (a[y, x, li] <= 0f) return; for (int k = 0; k < L; k++) mix[k] = k == li ? 0f : a[y, x, k]; Rules.TakeOff(a, y, x, li, 0f, mix); }
+            if (res == p.Res)
+            {
+                var cur = d.GetAlphamaps(p.X, p.Y, p.W, p.H);
+                for (int y = 0; y < p.H; y++)
+                    for (int x = 0; x < p.W; x++)
+                    {
+                        bool same = true;
+                        for (int k = 0; k < L && same; k++) if (Math.Abs(cur[y, x, k] - p.Done[y, x, k]) > .5f / 255f) same = false;
+                        if (same) { bool was = false; for (int k = 0; k < L; k++) { if (cur[y, x, k] != p.Orig[y, x, k]) was = true; cur[y, x, k] = p.Orig[y, x, k]; } if (was) copied++; }   // still as painted: the copy back
+                        else if (cur[y, x, li] > p.Orig[y, x, li] + trace) { for (int k = 0; k < L; k++) mix[k] = p.Orig[y, x, k]; Rules.TakeOff(cur, y, x, li, p.Orig[y, x, li], mix); shared++; }
+                        if (p.Added) Zero(cur, y, x);
+                    }
+                d.SetAlphamaps(p.X, p.Y, cur);
+                how = "at its grid (" + res + "): " + copied + " cells still as painted copied back, " + shared + " changed since given their share back";
+            }
+            else if (res > p.Res && res % p.Res == 0)
+            {
+                // By position: the grid made finer since (another mod). Each fine cell's weights before the paint bilinear from the copy (Rules.FinerGrid's rule).
+                int f = res / p.Res, FX = p.X * f, FY = p.Y * f, FW = Math.Min(p.W * f, res - FX), FH = Math.Min(p.H * f, res - FY);
+                var now = d.GetAlphamaps(FX, FY, FW, FH);
+                for (int i = 0; i < FH; i++)
+                    for (int j = 0; j < FW; j++)
+                    {
+                        float fi = (FY + i + .5f) / f - .5f, fj = (FX + j + .5f) / f - .5f;
+                        int i0 = Mathf.Clamp(Mathf.FloorToInt(fi), 0, p.Res - 1), i1 = Math.Min(p.Res - 1, i0 + 1), j0 = Mathf.Clamp(Mathf.FloorToInt(fj), 0, p.Res - 1), j1 = Math.Min(p.Res - 1, j0 + 1);
+                        if (i0 >= p.Y && i1 < p.Y + p.H && j0 >= p.X && j1 < p.X + p.W)
+                        {
+                            float ti = Mathf.Clamp01(fi - i0), tj = Mathf.Clamp01(fj - j0);
+                            for (int k = 0; k < L; k++)
+                                mix[k] = (1f - tj) * (1f - ti) * p.Orig[i0 - p.Y, j0 - p.X, k] + tj * (1f - ti) * p.Orig[i0 - p.Y, j1 - p.X, k] + (1f - tj) * ti * p.Orig[i1 - p.Y, j0 - p.X, k] + tj * ti * p.Orig[i1 - p.Y, j1 - p.X, k];
+                            if (now[i, j, li] > mix[li] + trace) { Rules.TakeOff(now, i, j, li, mix[li], mix); shared++; }
+                        }
+                        if (p.Added) Zero(now, i, j);
+                    }
+                d.SetAlphamaps(FX, FY, now);
+                how = "by position (the grid " + p.Res + " then, " + res + " now): " + shared + " cells given their share back";
+            }
+            else { Warn("the paint grid went from " + p.Res + " to " + res + " since the paint; the path is left until the game restarts"); return; }
+            int grass = GrassBack(p, out int skipped);
+            string off = "";
+            if (p.Added)
+            {
+                if (li == layers.Length - 1) { d.terrainLayers = layers.Take(li).ToArray(); off = "; its layer taken off"; }
+                else off = "; its layer left on Oasis's terrain, empty (another layer was added after it)";
+            }
+            Plugin.Log.LogInfo("Trade office: Oasis's path put back " + how + "; grass " + grass + " of " + p.Tufts + " tufts back (" + skipped + " left: grass back since, or another mod's road there now)" + off + "; in " + Ms(sw.Elapsed.TotalMilliseconds) + ".");
+        }
+        // The grass back where the path took it off, unless some has come back or another mod's road lies there now (its sand over 0.1 above the copy's).
+        private static int GrassBack(Painted p, out int skipped)
+        {
+            skipped = 0; if (p.Grass.Count == 0) return 0;
+            var d = p.D; int res = d.alphamapResolution, back = 0, f = res % p.Res == 0 ? res / p.Res : 0; var pos = p.T ? p.T.GetPosition() : Vector3.zero; var size = d.size;
+            float[,,] now = null; int sx = p.X * f, sy = p.Y * f, sw = Math.Min(p.W * f, res - sx), sh = Math.Min(p.H * f, res - sy);
+            if (p.Sand >= 0 && f > 0 && p.T) now = d.GetAlphamaps(sx, sy, sw, sh);
+            bool Road(float wx, float wz)
+            {
+                if (now == null) return false;
+                int i = Mathf.Clamp(Mathf.FloorToInt((wx - pos.x) / (size.x / res)) - sx, 0, sw - 1), j = Mathf.Clamp(Mathf.FloorToInt((wz - pos.z) / (size.z / res)) - sy, 0, sh - 1);
+                int oi = Mathf.Clamp(Mathf.FloorToInt((wx - pos.x) / (size.x / p.Res)) - p.X, 0, p.W - 1), oj = Mathf.Clamp(Mathf.FloorToInt((wz - pos.z) / (size.z / p.Res)) - p.Y, 0, p.H - 1);
+                return now[j, i, p.Sand] - p.Orig[oj, oi, p.Sand] > .1f;
+            }
+            float cx = size.x / d.detailWidth, cz = size.z / d.detailHeight;
+            foreach (var g in p.Grass)
+            {
+                var cur = d.GetDetailLayer(g.X, g.Y, g.W, g.H, g.Layer); bool changed = false;
+                for (int y = 0; y < g.H; y++)
+                    for (int x = 0; x < g.W; x++)
+                    {
+                        if (!g.Cleared[y, x] || g.Orig[y, x] == 0) continue;
+                        if (cur[y, x] != 0 || Road(pos.x + (g.X + x + .5f) * cx, pos.z + (g.Y + y + .5f) * cz)) { skipped += g.Orig[y, x]; continue; }
+                        cur[y, x] = g.Orig[y, x]; back += g.Orig[y, x]; changed = true;
+                    }
+                if (changed) d.SetDetailLayer(g.X, g.Y, g.Layer, cur);
+            }
+            return back;
+        }
+
+        // Stone footsteps (FootstepsStonePatch): world point at over the path's cells as painted, at OasisPathStoneOver or more. Returns at once when no path is
+        // painted.
+        internal static bool OnStone(Vector3 at)
+        {
+            var p = painted; if (p == null || !p.T || p.T.terrainData != p.D || p.D.alphamapResolution != p.Res) return false;
+            var pos = p.T.GetPosition(); var size = p.D.size;
+            int x = Mathf.FloorToInt((at.x - pos.x) / size.x * p.Res) - p.X, y = Mathf.FloorToInt((at.z - pos.z) / size.z * p.Res) - p.Y;
+            return x >= 0 && y >= 0 && x < p.W && y < p.H && p.Done[y, x, p.Index] >= Rules.OasisPathStoneOver;
+        }
+        internal static bool Any => painted != null;
+    }
+    // Stone footsteps on Oasis's painted path. The game's FootstepsAudio.Update picks a step's clips by the tag of the collider under the player (Stone: its
+    // stoneSteps; Terrain: sandSteps, or wetSteps in shallow water; anything else wood) and never reads the terrain's paint. While the player stands over
+    // the path's cells (OasisPath.OnStone), its sandSteps are its own stoneSteps for that Update (swapped in the prefix, back in the finalizer), so the
+    // terrain's branch plays stone; wet steps in shallow water and every other ground stay the game's.
+    [HarmonyPatch(typeof(FootstepsAudio), "Update")] internal static class FootstepsStonePatch
+    {
+        private static FootstepsAudio swapped; private static AudioClip[] sand;
+        static void Prefix(FootstepsAudio __instance, AudioClip[] ___stoneSteps, ref AudioClip[] ___sandSteps)
+        {
+            Restore();
+            if (!OasisPath.Any || !__instance || !OasisPath.OnStone(__instance.transform.position)) return;
+            if (___stoneSteps == null || ___stoneSteps.Length == 0) return;
+            sand = ___sandSteps; swapped = __instance; ___sandSteps = ___stoneSteps;
+        }
+        static Exception Finalizer(Exception __exception) { Restore(); return __exception; }
+        private static void Restore() { if (swapped) Fields.Set(swapped, "sandSteps", sand); swapped = null; sand = null; }
+    }
+    // For Shipwright and Transport (its storage and paper transport at the wharves), read by name as OfficeFleetApi is: the houses whose wharf stands now,
+    // a standing wharf's port index (-1: none), its documents (null until its island's scene has loaded, and while no clerk works there).
+    public static class OfficeWharfApi
+    {
+        public static int[] Standing() => Office.Houses.Where(OfficeWharves.Standing).ToArray();
+        public static int Port(int house) { var p = OfficeWharves.Standing(house) ? Office.PortOf(house) : null; return p ? p.portIndex : -1; }
+        public static GameObject Documents(int house) => OfficeWharves.Documents(house);
+    }
+
+    // A ship let go from an office wharf's yard never keeps a stale world shift: a ship hidden through a shift keeps ShiftingRigidbody's shifting flag and
+    // its BoatProbes.dontUpdateVelocity (its water drag frozen) until a shift finds it on, and bounces about 1 m after a yard's Exit. After the game's
+    // release, with no shift under way (one under way gives it back itself), the game's own RestoreMomentum clears it, as Shipwright and Transport's
+    // GameAccess.ClearStaleShift does for its take-outs. Nothing is done for a ship that holds neither flag.
+    [HarmonyPatch(typeof(Shipyard), "DischargeShip")] internal static class WharfYardReleasePatch
+    {
+        private static bool warned;
+        static void Prefix(Shipyard __instance, out GameObject __state) => __state = OfficeWharves.IsYard(__instance) ? __instance.GetCurrentBoat() : null;
+        static void Postfix(GameObject __state, bool __runOriginal)
+        {
+            if (!__runOriginal || !__state) return;
+            try
+            {
+                var manager = FloatingOriginManager.instance;
+                if (FloatingOriginManager.ShiftingThisFrame || manager && Fields.Get<bool>(manager, "shifting")) return;
+                var shifting = __state.GetComponent<ShiftingRigidbody>(); var probes = __state.GetComponent<Crest.BoatProbes>();
+                if (!shifting || !shifting.gameObject.activeInHierarchy || !shifting.IsShifting() && !(probes && probes.dontUpdateVelocity)) return;
+                shifting.RestoreMomentum();
+                Plugin.Log.LogInfo("Trade office: a ship let go from a wharf yard still held a world shift's flags; given back the game's way (RestoreMomentum).");
+            }
+            catch (Exception e) { if (!warned) { warned = true; Plugin.Log.LogWarning("Trade office: a wharf yard's release check failed: " + e.Message); } }
+        }
+    }
+
+    // An office wharf's yard charges nothing for hull cleaning, hull repair, Sail Damage's sail repair or the shipyard fee, rented ships included. After the
+    // game's order is built, and last (after Sail Damage's postfix, which adds its line and sets the total line), each of those lines reads 0 and its amount
+    // comes off the order's total; ConfirmOrder takes that total and still cleans, repairs and (Sail Damage) mends from the order's flags. Not when the
+    // game's method was skipped (Swappable Staysail's sail maker builds its own order). The order's text (currentOrderText, not shown in 0.40.1) follows.
+    // Sails and parts are charged as at any yard.
+    [HarmonyPatch(typeof(Shipyard), nameof(Shipyard.UpdateOrder), new[] { typeof(bool) })] internal static class WharfYardPricePatch
+    {
+        private static bool warned, failed;
+        [HarmonyPriority(Priority.Last)]
+        static void Postfix(Shipyard __instance, bool __runOriginal)
+        {
+            if (!__runOriginal || !OfficeWharves.IsYard(__instance)) return;
+            try
+            {
+                var ui = ShipyardUI.instance ? ShipyardUI.instance.shipyardOrderText : null; if (!ui) return;
+                var lines = Fields.Get<List<string>>(ui, "lines"); var changed = new List<string[]>();
+                int off = Rules.FreeAtWharf(lines, changed);
+                if (!warned && (__instance.IncludeHullCleaning() || __instance.IncludeRepair()) && !lines.Any(l => l != null && (l.EndsWith(": hull cleaning", StringComparison.Ordinal) || l.EndsWith(": hull repair", StringComparison.Ordinal))))
+                { warned = true; Plugin.Log.LogWarning("Trade office: a wharf yard's order has no hull cleaning or repair line to make free (another mod changed the order?); charged as the order says."); }
+                if (off == 0) return;
+                int total = Fields.Get<int>(__instance, "currentOrderTotal") - off;
+                Fields.Set(__instance, "currentOrderTotal", total);
+                string coin = PlayerGold.GetCurrencyName(__instance.region), text = Fields.Get<string>(__instance, "currentOrderText") ?? "";
+                foreach (var c in changed) { int at = text.LastIndexOf(c[0], StringComparison.Ordinal); if (at >= 0) text = text.Substring(0, at) + c[1] + text.Substring(at + c[0].Length); }
+                int tail = text.LastIndexOf("\n\n TOTAL: ", StringComparison.Ordinal); if (tail >= 0) text = text.Substring(0, tail);
+                Fields.Set(__instance, "currentOrderText", text + "\n\n TOTAL: " + total + " " + coin);
+                ui.SetTotalLine(Rules.OrderTotalLine(total, coin));
+                ui.DisplayCurrentText();
+            }
+            catch (Exception e) { if (!failed) { failed = true; Plugin.Log.LogWarning("Trade office: a wharf yard's free order not applied (charged as the order says): " + e); } }
+        }
+    }
+
+    // A wharf's ladder (OfficeWharves.MakeLadders): the direction in from the pier's side, for WharfLadderLiftPatch; and the outlines of the copies under the
+    // upper one, switched as the game's button switches the upper's own outline (it outlines only its own object's renderer: GoPointerButton.Start adds one
+    // Outline, UpdateColor sets its colour and on/off each LateUpdate). Run after the game's LateUpdate, so the copies follow in the same frame.
+    [DefaultExecutionOrder(1000)]
+    public sealed class WharfLadder : MonoBehaviour
+    {
+        internal Vector3 inward; internal cakeslice.Outline[] lower; private cakeslice.Outline own;
+        private void LateUpdate()
+        {
+            if (lower == null || lower.Length == 0) return;
+            if (!own) own = GetComponent<cakeslice.Outline>(); if (!own) return;
+            foreach (var o in lower)
+                if (o) { if (o.color != own.color) o.color = own.color; if (o.enabled != own.enabled) o.enabled = own.enabled; }
+        }
+    }
+    // After the game's lift (BoatLadder.OnActivate puts the player 1.25 m over the ladder's origin, plus 0.1 m along their facing, when they are not aboard),
+    // a wharf ladder sets them WharfSpots.LadderInward further in: its origin, the game's mesh's own, stands 0.07 m in from the pier's side, where the lift
+    // leaves the player on the edge (at Firefly Grotto on a dock pole's top). The same "not aboard" test as the game's; a ship's own ladders are left alone.
+    [HarmonyPatch(typeof(BoatLadder), nameof(BoatLadder.OnActivate), new Type[0])] internal static class WharfLadderLiftPatch
+    {
+        static void Postfix(BoatLadder __instance, bool __runOriginal)
+        {
+            if (!__runOriginal) return;   // (no lift by the game, no step in)
+            var mark = __instance ? __instance.GetComponent<WharfLadder>() : null; if (!mark || mark.inward == Vector3.zero) return;
+            var pc = GameObject.FindWithTag("PlayerController"); if (!pc || !pc.transform.parent || pc.transform.parent.gameObject.name != "_shifting world") return;
+            var cc = pc.GetComponent<CharacterController>(); bool on = cc && cc.enabled; if (cc) cc.enabled = false;
+            pc.transform.position += mark.inward * WharfSpots.LadderInward;
+            if (cc) cc.enabled = on;
+        }
+    }
+    // The clerk's guard: once his model has woken (CharacterCustomizer.Start puts its default clothes on; Talkative NPCs adds its speech bubble and hit
+    // talker to every NPCAnimations at Start), whatever another mod added under him goes, so he speaks only this mod's lines, and his outfit goes on.
+    // Twice, the first two frames after he wakes; then it stops. He is built 450 m out, before any trigger of his can meet the player.
     public sealed class ClerkGuard : MonoBehaviour
     {
         internal OfficeSite site; internal Transform model; internal HashSet<Transform> kept;
         internal Mesh[] area; internal GameObject[] holders;   // his click area's shells and their holders on his bones (OfficeSite.FitClerkArea)
+        // The wharf's keeper (OfficeWharves.MakeKeeper) has no site: his look from Player Model's screen (null: none, or Player Model not loaded), else
+        // the outfit he wears instead (-1: his model's own clothes); no click area.
+        internal string look; internal int outfit = -1;
         private int frames;
         private void Update()
         {
@@ -1985,6 +3695,7 @@ namespace EconomyOverhaul
             foreach (var m in model.GetComponentsInChildren<MonoBehaviour>(true))
                 if (m && m.GetType().Name == "NPCHitTalker") { if (m.gameObject == model.gameObject) Destroy(m); else Destroy(m.gameObject); }
             if (frames == 0 && site) site.Dress(model);
+            else if (frames == 0 && !ClerkLook.Apply(model, look) && outfit >= 0) TraderHulls.DressWhole(model, outfit);
             // Dressed the frame before, and posed by his Animator since: his click area takes his model's shape.
             if (frames == 1 && site) site.FitClerkArea();
             if (++frames >= 2) enabled = false;
@@ -1993,18 +3704,16 @@ namespace EconomyOverhaul
         private void OnDestroy() { ClerkLook.Release(gameObject); if (area != null) foreach (var m in area) if (m) Destroy(m); }
     }
 
-    // ---- The clerk's talk (§4.3, Q19: "Boss", six greetings picked at random, "<number> days, Boss. I would advise haste.") ----
-    // A click on him starts it (the user, 2026-11-08: "start with a click on him"; his trigger and button added by OfficeSite.MakeClerk): he greets,
-    // then tells the harbour's news (the last departure and the next arrival, in full detail) and then the demand (here or abroad, where the goods
-    // are, how old the news is); a click on the reply (or on him) goes on, the last closes, walking away closes. Only this mod's lines (the user's
-    // list item 3). With wages owed he asks for them instead. In the tavern's speech bubble: the loan tutorials' copy, taken at the start menu from
-    // a starting island's tavern NPC (Siren Song, Crab Beach, Neverdin: the game loads them there) and kept, so it serves every port, Serpent Isle
-    // and Firefly Grotto included (run ocm-1; the user asked "can you not just copy from other port?": it is). Only if no copy was ever taken, a
-    // copy of the house's own sign, which is always loaded.
+    // ---- The clerk's talk: "Boss", six greetings picked at random, "<number> days, Boss. I would advise haste." ----
+    // A click on him starts it (his trigger and button added by OfficeSite.MakeClerk): he greets, then tells the harbour's news (the last
+    // departure and the next arrival, in full detail) and then the demand (here or abroad, where the goods are, how old the news is); a click on
+    // the reply (or on him) goes on, the last closes, walking away closes. Only this mod's lines. With wages owed he asks for them instead. In
+    // the tavern's speech bubble: the loan tutorials' copy, taken at the start menu from a starting island's tavern NPC (Siren Song, Crab Beach,
+    // Neverdin: the game loads them there) and kept, so it serves every port, Serpent Isle and Firefly Grotto included. Only if no copy was ever
+    // taken, a copy of the house's own sign, which is always loaded.
     public sealed class ClerkTalk : MonoBehaviour
     {
         internal OfficeSite site;
-        // The greetings; the second, fourth and sixth in the user's words (2026-11-08), their spelling corrected at their word.
         internal static readonly string[] Greetings = {
             "Good day, Boss. The books are in order and the office is at your service. Shall I report?",
             "Welcome back, Boss. The ledgers are balanced and I have kept watch on the harbour. Shall I report?",
@@ -2209,15 +3918,13 @@ namespace EconomyOverhaul
             return false;
         }
     }
-    // ---- Moving the clerk (Q18, the user: "in trade office UI you should be able to reassign clerk's position"; any ground or floor on the
-    // house's island, not aboard a ship, not in the sea) ----
+    // ---- Moving the clerk: any ground or floor on the house's island, not aboard a ship, not in the sea ----
     // From the office's scroll: he follows the point the player looks at (the view's middle, up to 8 m), turned to face the player; a left click
-    // or R puts him there, a right click, F (or Escape) puts him back; Q and E turn him, and from then on he keeps that heading (the user,
-    // 2026-11-09: "R also act as left click to place clerk, F also act as right click to cancel / Q/E to rotate the clerk, change where he face").
+    // or R puts him there, a right click, F (or Escape) puts him back; Q and E turn him, and from then on he keeps that heading.
     // Saved island-local, his turn with his spot (OfficeSite.SaveClerkSpot's rotation), so he rides with the island. He himself is the ghost.
     // The keys are the game's own bindings (GameInput, the player's rebinds followed): R is its Activate key, F its PickUp key, Q and E its
-    // RotateH and RotateV keys. The user's pairing is the other way round from the game's second keys (left click is PickUp's, right click
-    // Activate's); the user's words win. While he is moved, and until those keys are let go after it, the game's own reads of them answer "not
+    // RotateH and RotateV keys. This pairing is the other way round from the game's second keys (left click is PickUp's, right click
+    // Activate's). While he is moved, and until those keys are let go after it, the game's own reads of them answer "not
     // pressed" (ClerkMoveKeyPatch), so they don't also click, pick up, drop, throw or turn what the pointer holds, or stop the view (Q in MouseLook).
     internal static class ClerkPlacer
     {
@@ -2322,16 +4029,19 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- The clerk's look in Player Model's own screen (Q16, the user: "only B") ----
-    // Read from the mod's public members by name (no reference to it; Virtual Crew's way of calling it): the player's look kept, the clerk's put in
-    // its place, Player Model's character screen opened; when it closes, the look it holds is the clerk's and the player's goes back. The player's
-    // look waits in the office's save meanwhile, and goes back at the next load if the game stopped between. On the clerk: Player Model's own
-    // body material (BodyTemplate.SharedMaterial), so the colours it writes don't recolour every NPC sharing the game's material (§4.3's trap).
+    // ---- The clerk's and the wharf keeper's looks in Player Model's own screen ----
+    // Read from the mod's public members by name (no reference to it; Virtual Crew's way of calling it): the player's look kept, the NPC's put in
+    // its place, Player Model's character screen opened; when it closes, the look it holds is the NPC's and the player's goes back. The player's
+    // look waits in the office's save meanwhile, and goes back at the next load if the game stopped between. On the NPC: Player Model's own
+    // body material (BodyTemplate.SharedMaterial), so the colours it writes don't recolour every NPC sharing the game's material.
+    // One path for both: the house edited and whether it is its keeper's look (clerkLook or keeperLook), then a fresh clerk or keeper made wearing it.
     internal static class ClerkLook
     {
         internal const string Guid = "com.diamondminer99.playermodel";
         private static bool tried; private static Type model, appearance, screen, menu, body;
-        private static OfficeSite editing;
+        private static int editingHouse; private static bool editingKeeper;   // the house whose look the screen holds (0: none), and whether its keeper's
+        private static string Who(bool keeper) => keeper ? "the wharfmaster's" : "the clerk's";
+        private static string[] Looks(OfficeState st, bool keeper) => keeper ? st.keeperLook ?? (st.keeperLook = new string[6]) : st.clerkLook ?? (st.clerkLook = new string[6]);
         private static bool Find()
         {
             if (tried) return model != null && appearance != null && screen != null;
@@ -2363,40 +4073,57 @@ namespace EconomyOverhaul
         }
         // The office's Escape stays off while Player Model's screen uses it (its own check: CharacterScreen.IsOpen or ConsumedPauseKeyThisFrame).
         internal static bool KeyTaken { get { if (!Find()) return false; var used = AccessTools.Property(screen, "ConsumedPauseKeyThisFrame"); return ScreenOpen || used != null && (bool)used.GetValue(null, null); } }
+        // "Clerk's look" on the clerk's row of the office's scroll.
         internal static string Edit(OfficeSite s)
         {
             if (!Find()) return "Needs the Player Model mod";
-            if (editing) return "Already editing";
+            if (editingHouse != 0) return "Already editing";
             if (!s || !s.Clerk) return "No clerk here";
+            return Open(s.house, false);
+        }
+        // "Wharfmaster's appearance" on the wharf's row: the wharf bought is enough; a keeper not made now (no clerk working) wears it when he is.
+        internal static string EditKeeper(int house)
+        {
+            if (!Find()) return "Needs the Player Model mod";
+            if (editingHouse != 0) return "Already editing";
+            if (!OfficeWharves.Standing(house)) return "No wharf here";
+            return Open(house, true);
+        }
+        private static string Open(int house, bool keeper)
+        {
             try
             {
                 var st = Office.State; string mine = Serialize(Local); st.playerLook = mine;
-                var looks = st.clerkLook ?? (st.clerkLook = new string[6]); int i = Office.Slot(s.house);
-                Local = Deserialize(looks[i] ?? mine);
+                Local = Deserialize(Looks(st, keeper)[Office.Slot(house)] ?? mine);
                 AccessTools.Method(screen, "Open").Invoke(null, null);
                 if (!ScreenOpen) { Restore(); return "Player Model's screen didn't open"; }
-                editing = s;
-                Plugin.Log.LogInfo("Trade office: the clerk's look opened in Player Model's screen.");
+                editingHouse = house; editingKeeper = keeper;
+                Plugin.Log.LogInfo("Trade office: " + Who(keeper) + " look opened in Player Model's screen.");
                 return null;
             }
             catch (Exception e) { Restore(); Plugin.Log.LogWarning("Trade office: Player Model's screen not opened: " + (e.InnerException ?? e).Message); return "Player Model's screen didn't open"; }
         }
         internal static void Tick()
         {
-            if (!editing) { if (World.Ready && World.State?.office?.playerLook != null && Find()) Restore(); return; }
+            if (editingHouse == 0) { if (World.Ready && World.State?.office?.playerLook != null && Find()) Restore(); return; }
             if (ScreenOpen) return;
-            var s = editing; editing = null;
+            int house = editingHouse; bool keeper = editingKeeper; editingHouse = 0;
             try
             {
                 string edited = Serialize(Local); Restore();
-                var st = Office.State; (st.clerkLook ?? (st.clerkLook = new string[6]))[Office.Slot(s.house)] = edited;
+                Looks(Office.State, keeper)[Office.Slot(house)] = edited;
                 var hide = menu != null ? AccessTools.Method(menu, "Hide") : null; if (hide != null) hide.Invoke(null, null);
-                // A fresh clerk wears it (OfficeSite.RemakeClerk: the outfit's parts never under it); his guard dresses him (Dress puts the saved
-                // look on) and fits his click area.
-                if (s && s.Clerk) s.RemakeClerk();
-                Plugin.Log.LogInfo("Trade office: the clerk's look saved from Player Model's screen; the player's own look put back.");
+                Plugin.Log.LogInfo("Trade office: " + Who(keeper) + " look saved from Player Model's screen; the player's own look put back.");
             }
-            catch (Exception e) { Restore(); Plugin.Log.LogWarning("Trade office: the clerk's look not read back: " + (e.InnerException ?? e).Message); }
+            catch (Exception e) { Restore(); Plugin.Log.LogWarning("Trade office: " + Who(keeper) + " look not read back: " + (e.InnerException ?? e).Message); return; }
+            // A fresh NPC wears it (OfficeSite.RemakeClerk, OfficeWharves.RemakeKeeper: the outfit's parts never under it); his guard dresses him (the
+            // saved look put on) and fits the clerk's click area. The look is saved even if this fails: the next one made wears it.
+            try
+            {
+                if (keeper) OfficeWharves.RemakeKeeper(house);
+                else { var s = OfficeSites.Site(house); if (s && s.Clerk) s.RemakeClerk(); }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Trade office: " + Who(keeper) + " look saved, but he wasn't made again wearing it: " + (e.InnerException ?? e).Message); }
         }
         private static void Restore()
         {
@@ -2415,13 +4142,13 @@ namespace EconomyOverhaul
                 // off and each group listed, so his female parts are there to pick (PlayerAppearance.Apply refuses female with no female torso listed)
                 // and no part from before stays on.
                 try { AccessTools.Method(typeof(PsychoticLab.CharacterCustomizer), "BuildLists")?.Invoke(cc, null); }
-                catch (Exception e) { Plugin.Log.LogWarning("Trade office: the clerk's part lists not made again: " + (e.InnerException ?? e).Message); }
+                catch (Exception e) { Plugin.Log.LogWarning("Trade office: the NPC's part lists not made again for Player Model's look: " + (e.InnerException ?? e).Message); }
                 var shared = body != null ? AccessTools.Property(body, "SharedMaterial")?.GetValue(null, null) as Material : null;
                 if (shared) cc.mat = shared;
                 AccessTools.Method(appearance, "ApplyLive", new[] { typeof(PsychoticLab.CharacterCustomizer) }).Invoke(Deserialize(look), new object[] { cc });
                 return true;
             }
-            catch (Exception e) { Plugin.Log.LogWarning("Trade office: the clerk's look not put on: " + (e.InnerException ?? e).Message); return false; }
+            catch (Exception e) { Plugin.Log.LogWarning("Trade office: Player Model's look not put on the NPC: " + (e.InnerException ?? e).Message); return false; }
         }
         internal static void Release(GameObject clerk)
         {
@@ -2461,7 +4188,7 @@ namespace EconomyOverhaul
         internal static int HouseOf(Component c) { var b = c ? c.GetComponent<OfficeBox>() : null; return b ? b.house : 0; }
     }
 
-    // ---- The office's scroll: the upgrades, the wages owed (§4.2) ----
+    // ---- The office's scroll: the upgrades, the wages owed ----
     // On the rental scroll's parchment (the mission screen's), the upgrades listed on the left, the chosen one's terms on the right, with Buy.
     public sealed class OfficePanel : MonoBehaviour
     {
@@ -2470,35 +4197,33 @@ namespace EconomyOverhaul
         private TextMesh title, status, infoTitle, infoText, infoPrice, infoCorner;
         private readonly TextMesh[] rows = new TextMesh[8]; private readonly BoxCollider[] rowBoxes = new BoxCollider[8];
         private LoanAction confirm, close, extra; private TextMesh confirmText, closeText, extraText; private Material confirmMaterial, extraMaterial; private Color confirmColor;
-        // The right side's text: its top, its own scale (shrunk for a long text), and its width.
-        // The right column .04 lower than first built, its title clear of the tab row (obk-2: a tab over the column touched its title), and .06 lower
-        // again under the bigger tabs on plates (the user's 2026-11-08 round).
-        // "Bought" stands in the right side's upper right corner (the user, 2026-11-08 night: "move the bought status to upper right corner"): its right
-        // edge at CornerX, on the title's line, the title narrowed to end CornerGap before it (TitleWidth otherwise).
+        // The right side's text: its top, its own scale (shrunk for a long text), and its width. The column's title sits low enough to stay clear of
+        // the tabs on plates above it.
+        // "Bought" stands in the right side's upper right corner: its right edge at CornerX, on the title's line, the title narrowed to end
+        // CornerGap before it (TitleWidth otherwise).
         private const float InfoTitleTop = .565f, InfoTop = .445f, InfoWidth = .78f, TitleWidth = .85f, CornerX = -.72f, CornerGap = .04f; private Vector3 infoScale;
-        // The text runs down to the status line, or to the buttons when there is no status (the user, 2026-11-08 night: "Use empty space"; before, it
-        // ended at -.24 with the status line at -.32, an empty band under it): the status line StatusGap above the buttons' plates, which Measure reads.
+        // The text runs down to the status line, or to the buttons when there is no status: the status line StatusGap above the buttons' plates,
+        // which Measure reads.
         private const float StatusGap = .02f;
         private float buttonsTop = -.49f, statusY = -.43f, bottomStatus = -.37f, bottomFree = -.47f;
-        // The route list (the user, 2026-11-08 night: "make route selection open a list to select from"): Assign route / Change route opens a plate for
-        // each route the ship's hull may take, over the right side above the buttons (its middle RouteX, RouteW wide, RouteH high, RouteGap apart).
+        // The route list: Assign route / Change route opens a plate for each route the ship's hull may take, over the right side above the buttons
+        // (its middle RouteX, RouteW wide, RouteH high, RouteGap apart).
         private const int RouteMax = 5; private const float RouteX = -.35f, RouteW = .74f, RouteH = .12f, RouteGap = .015f;
         private readonly GameObject[] routePlates = new GameObject[RouteMax]; private readonly TextMesh[] routeTexts = new TextMesh[RouteMax];
         private readonly BoxCollider[] routeBoxes = new BoxCollider[RouteMax]; private readonly LoanAction[] routeActions = new LoanAction[RouteMax], routeLabelActions = new LoanAction[RouteMax];
         private bool routeOpen; private int[] routeKinds = new int[0];
         // The tabs' row: its middle, a plate's height, the room each side of a label (the plate's curled ends) and between plates, and how far a
-        // label sits above the plate's middle (its font draws low from MiddleCenter) (the scroll's frame; obk-7: at .715 and .085 high the plates
-        // were lower than their labels and pressed against the title).
+        // label sits above the plate's middle (its font draws low from MiddleCenter) (the scroll's frame; at .715 and .085 high the plates sit
+        // lower than their labels and press against the title).
         private const float TabY = .67f, TabH = .135f, TabPad = .065f, TabGap = .025f, TabLabelLift = .018f;
         private readonly GameObject[] tabPlates = new GameObject[6]; private Material tabOnMat, tabOffMat;
         private int house, selected, tab, crewSelected; private float timer, lockedUntil;
         // An upgrade that can't be bought now. The game has no grey ink of its own (its shipyard marks parts red): a mid grey, readable on the parchment.
-        // In 8-bit steps (115 = 0.451), as a TextMesh keeps its colour: it reads back the same (of-4-a: 0.45 read back 0.451 and compared unequal).
-        // The game's text shader brightens a colour by its gamma curve: 115 drew at 179, hardly darker than the parchment (196, 164, 131; of-6-a), and
-        // the user (2026-11-08): "make the gray out text in trade office ui a bit darker, currently it's too bright". 48 draws at about 119.
+        // In 8-bit steps, as a TextMesh keeps its colour: it reads back the same (0.45 reads back 0.451 and compares unequal). The game's text shader
+        // brightens a colour by its gamma curve (115 draws at 179, hardly darker than the parchment's 196, 164, 131); 48 draws at about 119.
         internal static readonly Color Unavailable = new Color32(48, 48, 48, 255);
-        // The Items tab opens the unique items page (OfficeItemsPage; the user, 2026-11-08: "Use mission UI page for unique item purchase"), whose
-        // own buttons hold the regional and modded lists: the Regional and Modded tabs left the scroll (their slots kept, never shown).
+        // The Items tab opens the unique items page (OfficeItemsPage), whose own buttons hold the regional and modded lists: the Regional and Modded
+        // tabs are never shown (their slots kept).
         internal static readonly string[] TabNames = { "Upgrades", "Crew", "Items", "Regional", "Modded", "Fleet" };
         private readonly TextMesh[] tabs = new TextMesh[6]; private readonly BoxCollider[] tabBoxes = new BoxCollider[6];
         private int shipSelected;
@@ -2510,8 +4235,8 @@ namespace EconomyOverhaul
             t == 5 && Office.Has(house, OfficeUpgrade.Fleet);
         private string TabName(int t) => TabNames[t];
         internal int Tab { get => tab; set { tab = value; Refresh(); } }
-        // For the tests (QA officebooks: which right-side texts SetInfo shrinks; the user, 2026-11-08: "show me which text is too long"): the upgrade
-        // row chosen, the scale the last text got (1: full size) and its lines as wrapped.
+        // For the tests (QA officebooks: which right-side texts SetInfo shrinks): the upgrade row chosen, the scale the last text got (1: full size)
+        // and its lines as wrapped.
         internal int Selected { get => selected; set { selected = value; Refresh(); } }
         internal int Upgrades => listed.Length;
         internal float InfoShrink { get; private set; } = 1f;
@@ -2538,10 +4263,12 @@ namespace EconomyOverhaul
         internal float ButtonsTop => buttonsTop;
         internal List<OfficeCrew.Candidate> Candidates => candidates;
         internal int CrewSelected { get => crewSelected; set { crewSelected = value; Refresh(); } }
-        // The upgrades listed (crew recruitment only with Virtual Crew), in the user's order.
+        // The upgrades listed (crew recruitment only with Virtual Crew), in Office.Upgrades' order.
         private Office.UpgradeInfo[] listed = Office.Upgrades;
-        // The clerk's row, bought: Buy becomes "Move clerk" (Q18), the middle button "Clerk's look" with Player Model (Q16).
+        // The clerk's row, bought: Buy becomes "Move clerk", the middle button "Clerk's look" with Player Model.
         private bool ClerkRow => selected < listed.Length && listed[selected].Bit == OfficeUpgrade.Clerk && Office.Has(house, OfficeUpgrade.Clerk);
+        // The wharf's row, bought: the middle button "Wharfmaster's appearance" (two lines) with Player Model.
+        private bool WharfRow => selected < listed.Length && listed[selected].Bit == OfficeUpgrade.Wharf && Office.Has(house, OfficeUpgrade.Wharf);
         private float dismissAsked;
         private void Extra()
         {
@@ -2554,9 +4281,9 @@ namespace EconomyOverhaul
                 if (Time.unscaledTime > dismissAsked + 4f) { dismissAsked = Time.unscaledTime; Refresh(); return; }
                 dismissAsked = 0; OfficeFleet.Dismiss(ships[shipSelected]); shipSelected = 0; Refresh(); return;
             }
-            if (!ClerkRow) return;
+            if (!ClerkRow && !WharfRow) return;
             Click(); lockedUntil = Time.unscaledTime + BookUI.ClickLock;
-            var why = ClerkLook.Edit(OfficeSites.Site(house)); if (why != null) Loans.Notify(why);
+            var why = ClerkRow ? ClerkLook.Edit(OfficeSites.Site(house)) : ClerkLook.EditKeeper(house); if (why != null) Loans.Notify(why);
         }
         internal static bool IsOpen => Instance && Instance.root && Instance.root.activeSelf;
         internal static bool IsOpenFor(int h) => IsOpen && Instance.house == h;
@@ -2591,10 +4318,9 @@ namespace EconomyOverhaul
             details.localPosition = new Vector3(-.167f, -.005f, -.182f); details.localScale = new Vector3(.409766f, .27f, .270002f);
             var small = new Vector3(.0068f, .0085f, .0085f);
             title = Text(titleSource, details, "title", 0, .851f, .648f, null, null, null, 1.5f);
-            // The tabs (§4.2: "a tab appears when its upgrade is bought"), under the title, each label on a plate copied from the port's mission list's
-            // tab button, with its chosen and unchosen looks, the whole plate clickable (the user, 2026-11-08: "Make Upgrade, Item, Fleet option bigger,
-            // move other downward a bit. and make that 3 have button background so player know it can be click"); the plates sized and placed in
-            // Refresh. The chosen tab shows by its plate, as the game's tabs do (no brackets).
+            // The tabs (one appears when its upgrade is bought), under the title, each label on a plate copied from the port's mission list's tab button, with
+            // its chosen and unchosen looks, the whole plate clickable; the plates sized and placed in Refresh. The chosen tab shows by its plate, as the game's
+            // tabs do (no brackets).
             var tabSource = mission ? mission.Find("current mission buttons/page buttons/mission button (local)") : null;
             var worldTab = MissionListUI.instance ? Fields.Get<GPButtonMissionListWorld>(MissionListUI.instance, "localButton") : null;
             tabOnMat = worldTab ? worldTab.activeMat : null; tabOffMat = worldTab ? worldTab.inactiveMat : null;
@@ -2627,7 +4353,7 @@ namespace EconomyOverhaul
             for (int i = 0; i < rows.Length; i++)
             {
                 int index = i;
-                // .09 lower than first built, a little closer (.11 apart), under the bigger tabs; the eighth row still clears the status line.
+                // Under the tabs, .11 apart; the eighth row still clears the status line.
                 rows[i] = Text(valueSource, details, "row " + i, .676f, .53f - .11f * i, .648f, null, TextAnchor.UpperLeft, TextAlignment.Left, .62f);
                 rowBoxes[i] = rows[i].gameObject.AddComponent<BoxCollider>();
                 var a = rows[i].gameObject.AddComponent<LoanAction>(); a.action = () =>
@@ -2648,6 +4374,10 @@ namespace EconomyOverhaul
             extra = Button(buttonSource, "extra", 0f, Extra, out extraText, out extraMaterial);
             confirm = Button(buttonSource, "confirm", -.49f, Confirm, out confirmText, out confirmMaterial);
             foreach (var b in new[] { close, extra, confirm }) b.transform.parent.localScale = Vector3.Scale(b.transform.parent.localScale, new Vector3(.7f, .7f, 1f));
+            // The middle button's label shrunk to its plate when its widest line is wider ("Wharfmaster's / appearance"): at most as wide as the widest of the
+            // other labels, which fit with room each side, so none of those changes.
+            var extraFit = extraText.gameObject.AddComponent<LoanTextFit>(); extraFit.originalScale = extraText.transform.localScale;
+            extraFit.maxWidth = Mathf.Max(BookUI.MeasureLine(extraText, "Keeper's look"), BookUI.MeasureLine(extraText, "Sure? Dismiss"));
             confirmColor = confirmMaterial.HasProperty("_Color") ? confirmMaterial.color : Color.white;
             closeText.text = "Close"; close.lookText = "Close";
             Measure();
@@ -2690,7 +4420,7 @@ namespace EconomyOverhaul
         private void Show(int h)
         {
             TreasuryBook.Close(); OfficeItemsPage.Close();
-            house = h; listed = Office.Listed;
+            house = h; listed = Office.ListedAt(h);
             selected = Math.Max(0, Array.FindIndex(listed, u => !Office.Has(h, u.Bit))); tab = 0; crewSelected = 0; candidatesPeriod = -1;
             shipSelected = 0; routeOpen = false;
             if (!root.activeSelf) { MouseLook.ToggleMouseLookAndCursor(false); root.SetActive(true); Refs.SetPlayerControl(false); }
@@ -2714,8 +4444,7 @@ namespace EconomyOverhaul
             button.unclickable = !can;
             if (material.HasProperty("_Color")) material.color = can ? confirmColor : new Color(.604f, .604f, .604f, confirmColor.a);
         }
-        // Wages owed: the scroll opens only to pay them (Q17, the user: "you have to pay at office UI before you can proceed anything"). The
-        // Treasury book stays open to them (its coins pay the wages).
+        // Wages owed: the scroll opens only to pay them. The Treasury book stays open to them (its coins pay the wages).
         private bool Owed => Office.Wages(house) > 0;
         private void Confirm()
         {
@@ -2737,8 +4466,8 @@ namespace EconomyOverhaul
             int coin = Office.Coin(house);
             title.text = "Trade office · " + portName;
             if (!TabShown(tab)) tab = 0;
-            // The shown tabs side by side from the left (obk-2: with Regional and Modded gone from the scroll, Items alone in the third slot sat over
-            // the right column's title), each plate as wide as its label and the room each side, the next after a gap; the label centred on it.
+            // The shown tabs side by side from the left (in fixed slots a lone third tab would sit over the right column's title), each plate as wide as its
+            // label and the room each side, the next after a gap; the label centred on it.
             float tabX = .676f;
             for (int t = 0; t < tabs.Length; t++)
             {
@@ -2764,7 +4493,7 @@ namespace EconomyOverhaul
                 int owed = Office.Wages(house);
                 for (int i = 0; i < rows.Length; i++) { rows[i].text = ""; rowBoxes[i].enabled = false; }
                 infoTitle.text = "The clerk's wages";
-                // The user's words (2026-11-08), wrapped to the scroll's right side; how long before he quits under them (30 days unpaid).
+                // The wages notice, wrapped to the scroll's right side; how long before he quits under it (30 days unpaid).
                 SetInfo("You don't have enough gold in the treasury to pay the clerk. You cannot use the trade office until you have paid off their salary.",
                     "Owed: " + owed.ToString("N0") + " " + PlayerGold.GetCurrencyName(coin) + "\nTreasury: " + Office.Treasury(Office.Region(house), coin).ToString("N0") +
                     "\nHe quits in " + Days(Math.Max(1, Rules.ClerkOwedDays - Office.OwedDays(house))), "");
@@ -2774,18 +4503,19 @@ namespace EconomyOverhaul
             }
             if (tab == 1) { RefreshCrew(); return; }
             if (tab == 5) { RefreshFleet(); return; }
-            extra.transform.parent.gameObject.SetActive(ClerkRow && ClerkLook.Available);
-            if (ClerkRow && ClerkLook.Available) { extraText.text = "Clerk's look"; extra.lookText = "Clerk's look"; }
+            bool looks = (ClerkRow || WharfRow) && ClerkLook.Available;
+            extra.transform.parent.gameObject.SetActive(looks);
+            // the wharfmaster's on two lines; the pointer's text on one
+            if (looks) { extraText.text = ClerkRow ? "Clerk's look" : "Wharfmaster's\nappearance"; extra.lookText = ClerkRow ? "Clerk's look" : "Wharfmaster's appearance"; }
             for (int i = 0; i < rows.Length; i++)
             {
                 bool exists = i < listed.Length; var row = exists ? listed[i] : null;
                 bool has = exists && Office.Has(house, row.Bit);
-                // No "(bought)" after a bought upgrade (the user, 2026-11-08: "don't show (bought) behind the bought upgrade, it clog up ui too much");
-                // a bought one paused (no clerk) keeps "(paused)".
+                // No "(bought)" after a bought upgrade (it would crowd the list); a bought one paused (no clerk) keeps "(paused)".
                 rows[i].text = exists ? (i == selected ? "> " : "") + row.Name + (has && !Office.Working(house, row.Bit) ? "  (paused)" : "") : "";
                 rowBoxes[i].enabled = exists; if (exists) FitBox(rows[i], rowBoxes[i]);
-                // Grey when it can't be bought now: not enough gold, or the upgrade it needs not bought yet (the user, 2026-11-08). Bought rows
-                // stay black. Still clickable, so its text and reason can be read.
+                // Grey when it can't be bought now: not enough gold, or the upgrade it needs not bought yet. Bought rows stay black. Still clickable, so its text
+                // and reason can be read.
                 if (exists && !has && Office.UpgradeRefusal(house, row.Bit) != null) rows[i].color = Unavailable;
             }
             var u = listed[Mathf.Clamp(selected, 0, listed.Length - 1)];
@@ -2801,17 +4531,17 @@ namespace EconomyOverhaul
         }
         private static string Days(int n) => n + (n == 1 ? " day" : " days");
         // The right side's text, the price under it, the status line and the corner: the text wrapped to the side's width, shrunk (to 0.6 at most)
-        // until both end above the status line, or above the buttons when there is no status (the user, 2026-11-08 night: "Use empty space"), the price
-        // placed right under the text; the corner ("Bought") on the title's line, the title narrowed beside it.
-        // wholeRows: the text's first rows kept on one line each where one size smaller allows it (the Fleet tab's summary: its rows grown to 0.92 wrapped
-        // "Trader type: Free inter-region trader", obk-19, after the user's "shorten both" put the fee and the estimate on one line); else the biggest size that fits.
+        // until both end above the status line, or above the buttons when there is no status, the price placed right under the text; the corner
+        // ("Bought") on the title's line, the title narrowed beside it.
+        // wholeRows: the text's first rows kept on one line each where one size smaller allows it (the Fleet tab's summary, so "Trader type: Free
+        // inter-region trader" doesn't wrap); else the biggest size that fits.
         private void SetInfo(string text, string price, string statusText, string cornerText = "", int wholeRows = 0)
         {
             status.text = statusText ?? ""; infoCorner.text = cornerText ?? "";
             var titleFit = infoTitle.GetComponent<LoanTextFit>();
             float room = infoCorner.text.Length == 0 ? TitleWidth : Mathf.Min(TitleWidth, .02f - CornerX - BookUI.MeasureLine(infoCorner, infoCorner.text) - CornerGap);
-            // A title too long beside the corner goes on two lines at full size (shrunk to fit, "Local office cooperation" drew at about half its
-            // size, obk-16), and the text starts a title's line lower.
+            // A title too long beside the corner goes on two lines at full size (shrunk to fit, a long one drew at about half its size), and the text starts
+            // a title's line lower.
             if (infoCorner.text.Length > 0) infoTitle.text = WrapTo(infoTitle, infoTitle.text.Replace('\n', ' '), room);
             if (titleFit) titleFit.maxWidth = room;
             float titleLine = LineHeight(infoTitle) / Mathf.Max(1e-5f, Mathf.Abs(infoTitle.transform.localScale.y)) * Mathf.Abs((titleFit ? titleFit.originalScale : infoTitle.transform.localScale).y);
@@ -2829,7 +4559,7 @@ namespace EconomyOverhaul
                 return top - height - .02f - priceH >= bottom;
             }
             // the biggest size that fits; with wholeRows, one size smaller where that keeps those rows whole (not more: a ship with no route, its fee and
-            // estimate "none until its route is set", went from 0.85 to 0.72 for them, obk-20)
+            // estimate "none until its route is set", would shrink from 0.85 to 0.72)
             int normal = sizes.Length - 1;
             for (int k = 0; k < sizes.Length; k++) if (Try(sizes[k])) { normal = k; break; }
             int pick = normal;
@@ -2865,7 +4595,7 @@ namespace EconomyOverhaul
             }
             return result.ToString();
         }
-        // The Crew tab (§4.8): the 5 candidates of this period on the left, the chosen one's role and stats on the right, Hire.
+        // The Crew tab: the 5 candidates of this period on the left, the chosen one's role and stats on the right, Hire.
         private void RefreshCrew()
         {
             extra.transform.parent.gameObject.SetActive(false);
@@ -2884,9 +4614,9 @@ namespace EconomyOverhaul
                 c0 == null ? "" : c0.Hired ? "Hired" : "Hiring costs nothing", c0 != null && !c0.Hired ? why ?? "" : "");
             confirmText.text = c0 != null && c0.Hired ? "Hired" : "Hire"; confirm.lookText = confirmText.text; Enable(why == null);
         }
-        // The Fleet tab (§4.5): this office's ships on the left; the chosen one's summary on the right, the Treasury book's Trade fleet rows
+        // The Fleet tab: this office's ships on the left; the chosen one's summary on the right, the Treasury book's Trade fleet rows
         // (OfficeFleet.SummaryLabels); Assign route for a ship waiting for its route, else Change route: either opens the route list (the routes its
-        // hull may take, the user's names; a pick sets it, and a ship waiting starts trading), Cancel closes it; Dismiss (asked twice).
+        // hull may take, named by RouteName; a pick sets it, and a ship waiting starts trading), Cancel closes it; Dismiss (asked twice).
         private void RefreshFleet()
         {
             var s = Office.State; var ships = OfficeFleet.Of(house).ToList();
@@ -2921,8 +4651,7 @@ namespace EconomyOverhaul
             }
             HideRoutes();
             extra.transform.parent.gameObject.SetActive(true);
-            // The Treasury book's Trade fleet rows, label and value (the user, 2026-11-08: "please match the text from trade office fleet control to the
-            // trade fleet summary").
+            // The Treasury book's Trade fleet rows, label and value.
             var labels = OfficeFleet.SummaryLabels; var values = OfficeFleet.SummaryValues(k);
             // every row but the last (Location, free text) on one line where a size allows it
             SetInfo(string.Join("\n", Enumerable.Range(0, labels.Length).Select(r => labels[r] + ": " + values[r]).ToArray()), "", only ? "This hull takes only this route" : "", "", labels.Length - 1);
@@ -2930,10 +4659,10 @@ namespace EconomyOverhaul
             confirmText.text = button; confirm.lookText = button; Enable(!only && allowed.Length > 0);
             extraText.text = Time.unscaledTime < dismissAsked + 4f ? "Sure? Dismiss" : "Dismiss"; extra.lookText = extraText.text;
         }
-        // The route list: a plate for each route the hull may take, top to bottom in the routes' order, right under "Choose its route:" (at the
-        // buttons it stood apart from that line, obk-16); the ship's route on the tabs' chosen look, the others on the unchosen; every label at one size
-        // (the longest one's fit: obk-16's labels were each shrunk to its own); a route it can't take now pale on the dark plate (the scroll's grey was
-        // hardly seen there, obk-16), the scroll's grey on the light one; its click says why.
+        // The route list: a plate for each route the hull may take, top to bottom in the routes' order, right under "Choose its route:"; the
+        // ship's route on the tabs' chosen look, the others on the unchosen; every label at one size (the longest one's fit, not each shrunk to
+        // its own); a route it can't take now pale on the dark plate (the scroll's grey is hardly seen there), the scroll's grey on the light
+        // one; its click says why.
         internal static readonly Color RefusedOnPlate = new Color32(170, 170, 170, 255);
         private void ShowRoutes(int ship, int[] kinds)
         {
@@ -2952,9 +4681,8 @@ namespace EconomyOverhaul
                 routeTexts[r].text = name;
                 if (!shown) continue;
                 float y = first - r * (RouteH + RouteGap);
-                // The label at its plate's depth: at the labels' own depth (0.648) the UI camera's perspective drew each 9-15 px left of its plate, this
-                // far right of the screen's middle (obk-16, obk-17, obk-18; the user: "the text is not in the middle of the button for every route").
-                // A label draws over its plate whatever their depth.
+                // The label at its plate's depth: at the labels' own depth (0.648) the UI camera's perspective draws each 9-15 px left of its plate, this
+                // far right of the screen's middle. A label draws over its plate whatever their depth.
                 routeTexts[r].transform.localPosition = new Vector3(RouteX, y + TabLabelLift, PlateZ());
                 bool chosen = kinds[r] == current;
                 routeTexts[r].color = OfficeFleet.KindRefusal(ship, kinds[r]) == null ? Color.black : chosen ? Unavailable : RefusedOnPlate;
@@ -3001,9 +4729,8 @@ namespace EconomyOverhaul
         private float PlateZ() { var closeLook = close ? close.GetComponent<MeshRenderer>() : null; return closeLook ? BookUI.InFrameBounds(closeLook, details).center.z : .64f; }
         // A text button's collider: the text's own drawn box in its local space. Read with the text turned square to the world for that moment
         // (Unity 2019 has no Renderer.localBounds, and a TextMesh no MeshFilter for BookUI.InFrameBounds): the scroll hangs off the UI camera at a
-        // slant, and its world box is larger than the text; taken back into local space it made each collider about twice the text's width, over
-        // its neighbours, so the cursor lit the next row or none (officeuihover ouh-2: 100 stale; the user: "sometimes when cursor already on top
-        // of text, it don't highlight it").
+        // slant, and its world box is larger than the text; taken back into local space it would make each collider about twice the text's width,
+        // over its neighbours, so the cursor would light the next row or none.
         private static void FitBox(TextMesh text, BoxCollider box)
         {
             var r = text.GetComponent<Renderer>(); if (!r) return;
@@ -3040,9 +4767,9 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- The Treasury tab on the office's exchange screen (§4.4; the user's list item 4: its button where the Bottomry button is) ----
+    // ---- The Treasury tab on the office's exchange screen ----
     // At an office's chest the exchange (no fee, the daily rate) has a Treasury tab in the Bottomry tab's place; it closes the exchange and opens the
-    // Treasury book (the user, 2026-11-08: "maybe you should use ui same as log book": TreasuryBook).
+    // Treasury book (TreasuryBook).
     public sealed class OfficeTreasuryPage : MonoBehaviour
     {
         private CurrencyExchangeUI ui; private LoanAction tab; private int house; private bool ready;
@@ -3093,20 +4820,18 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(CurrencyExchangeUI), "OpenUI")] internal static class OfficeTreasuryOpenPatch
     { static void Postfix(CurrencyExchangeUI __instance) => OfficeTreasuryPage.For(__instance).Opened(OfficeBox.Opening); }
 
-    // ---- The office's books (from OfficeBooks.cs, merged here 2026-11-09 at the user's word: "Tradeoffice.cs and officebook.cs should be merged") ----
-    // ---- The treasury's records (the user, 2026-11-08: "recent transaction record, which day, amount, which office"; TRADE_OFFICE_DRAFT.md §3B,
-    // "The Treasury screen and the items page redesigned") ----
+    // ---- The office's books ----
+    // ---- The treasury's records ----
     // Every change to a region's treasury, saved in OfficeState's rec* arrays (newest last): the day, the office (house), what, the coin and the
     // signed amount. The clerk's wages, the route fees and the trips' shares of one office, coin and day add into one record each; the newest 40
     // of each region are kept.
-    // Removed: a fleet ship whose rig needs Shipyard Expansion, in a game without it (OfficeFleet.Loaded; paid as Dismissed).
+    // Removed: a fleet ship whose rig needs a mod this game doesn't have (OfficeFleet.Loaded; paid as Dismissed).
     internal enum RecordKind { Put = 0, Take = 1, Wages = 2, WagesPaid = 3, Fees = 4, Trip = 5, Dismissed = 6, Removed = 7 }
     internal static class OfficeRecords
     {
         internal const int PerRegion = 40;
-        // The events in the words of the buttons and the fleet summary (the user, 2026-11-08: Withdraw and Deposit, "Maintenance fee"); a save keeps
-        // the kind's number, so renaming changes nothing saved.
-        internal static readonly string[] Names = { "Deposit", "Withdrawal", "Clerk's wages", "Wages paid", "Maintenance fees", "Trip shares", "Ship dismissed", "Removed: mod missing" };   // Removed: Shipyard Expansion or another mod's sail gone at a load (OfficeFleet.Loaded; "no SE" until 2026-11-09)
+        // The events in the words of the buttons and the fleet summary; a save keeps the kind's number, so renaming changes nothing saved.
+        internal static readonly string[] Names = { "Deposit", "Withdrawal", "Clerk's wages", "Wages paid", "Maintenance fees", "Trip shares", "Ship dismissed", "Removed: mod missing" };   // Removed: Shipyard Expansion or another mod's sail gone at a load (OfficeFleet.Loaded)
         private static bool Merges(RecordKind k) => k == RecordKind.Wages || k == RecordKind.Fees || k == RecordKind.Trip;
         internal sealed class Record { internal int Day, House, Kind, Coin, Amount; }
         internal static void Add(int house, RecordKind kind, int coin, long amount)
@@ -3186,12 +4911,12 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- The Treasury book (the user, 2026-11-08: "maybe you should use ui same as log book ... the infos should be presented in form") ----
+    // ---- The Treasury book ----
     // Opened from the office chest's Treasury tab: a copy of the log book's book and bookmarks (the log book itself untouched), its pages drawn as
-    // the Loan ledger's (BookUI, the same frame: a child of the game's mission UI). Bookmarks Treasury and, once an office of the region has the
-    // fleet, Trade fleet; a Close bookmark under it. Treasury: the currency box's four coins to choose the coin (the user: "Use the currency box's
-    // currency selection instead of coins"), a form of each coin's treasury and wallet, Take out and Put in (a window of their own, AmountWindow),
-    // and the region's records. Trade fleet: the region's ships as a form, the chosen one's summary as a form.
+    // the Loan ledger's (BookUI, the same frame: a child of the game's mission UI), its information presented as forms. Bookmarks Treasury and,
+    // once an office of the region has the fleet, Trade fleet; a Close bookmark under it. Treasury: the currency box's four coins to choose the
+    // coin, a form of each coin's treasury and wallet, Take out and Put in (a window of their own, AmountWindow), and the region's records.
+    // Trade fleet: the region's ships as a form, the chosen one's summary as a form.
     public sealed class TreasuryBook : MonoBehaviour
     {
         internal static TreasuryBook Instance;
@@ -3205,9 +4930,8 @@ namespace EconomyOverhaul
         private Font[] regionFonts;
         private readonly TextMesh[] coinRows = new TextMesh[4], treasuryValues = new TextMesh[4], walletValues = new TextMesh[4];
         private TextMesh subtitle, status, pageLabel, recordsSubtitle;
-        // HistoryRows: a ship's trips a page (since the user's "you should have page to see all the trade history", 2026-11-08; its whole history is
-        // OfficeFleet.TripLog trips, paged).
-        // LifeRows: the rows under the line from the ship's whole life in the fleet (OfficeFleet.LifeRows; the user, 2026-11-08 evening).
+        // HistoryRows: a ship's trips a page (its whole history is OfficeFleet.TripLog trips, paged).
+        // LifeRows: the rows under the line from the ship's whole life in the fleet (OfficeFleet.LifeRows).
         private const int RecordRows = 10, ShipRows = 6, FormRows = 2, HistoryRows = 7, LifeRows = 3;
         private readonly TextMesh[] recDay = new TextMesh[RecordRows], recOffice = new TextMesh[RecordRows], recWhat = new TextMesh[RecordRows], recAmount = new TextMesh[RecordRows];
         private LoanAction take, put; private readonly Dictionary<Material, Texture> plateTextures = new Dictionary<Material, Texture>();
@@ -3254,8 +4978,7 @@ namespace EconomyOverhaul
             if (!book || modes == null) return false;
             logBook = book;
             font = OfficeUiParts.FontOf(log, "Architect", null); valueFont = OfficeUiParts.FontOf(log, "Kaushan", font);
-            // Each coin's name in its region's font, the game's reputation page's as the Loan ledger's region buttons (the user, 2026-11-08: "make the
-            // currecy name at treasure ui use regional font"); Gold in Chronos', as the ledger.
+            // Each coin's name in its region's font, the game's reputation page's as the Loan ledger's region buttons; Gold in Chronos', as the ledger.
             var reputation = Fields.Get<GameObject>(log, "reputationUI"); Component fontRoot = reputation ? reputation.transform : log.transform;
             regionFonts = new[] { "Callimundial", "Polo-SemiBold", "IMMORTAL", "IMMORTAL" }.Select(n => OfficeUiParts.FontOf(fontRoot, n, font)).ToArray();
             native = Fields.Get<EconomyUIButton>(trade, "buyButton").GetComponent<MeshRenderer>();
@@ -3290,8 +5013,8 @@ namespace EconomyOverhaul
         }
         private TextMesh T(Transform p, string text, float x, float y, float size, float width = 0, TextAnchor anchor = TextAnchor.LowerLeft, Font f = null) =>
             BookUI.Text(p, f ?? font, text, x, y, size, width, anchor);
-        // Emerald's font (Polo-SemiBold) draws its letters lower from a LowerLeft anchor than the book's: in obk-5 "Emerald Dragons" sat 9-10 px
-        // below its row's figures at size .0135 (the other regional fonts within 2 px). shortcut: measured for that font at a LowerLeft anchor only,
+        // Emerald's font (Polo-SemiBold) draws its letters lower from a LowerLeft anchor than the book's: "Emerald Dragons" sits 9-10 px below
+        // its row's figures at size .0135 (the other regional fonts within 2 px). shortcut: measured for that font at a LowerLeft anchor only,
         // replace with the fonts' own baselines if more regional text is added to the book.
         private static float Lift(Font f, float size) => f && f.name.IndexOf("Polo", StringComparison.OrdinalIgnoreCase) >= 0 ? .615f * size : 0f;
         private MeshRenderer Divider(Transform parent, float x, float y, float width, float thickness = .00055f)
@@ -3305,8 +5028,8 @@ namespace EconomyOverhaul
             var r = go.GetComponent<MeshRenderer>(); r.sharedMaterial = dividerMaterial; return r;
         }
         // Every text on the plates' plane (.014; the plates lie at .012). The game's text draws over every mesh whatever its depth, and in front of
-        // the page the camera's perspective spread it outward from the spine: at the ledger's depth (.032) the left page's text began left of the
-        // book's edge and each button's label sat off its plate (obk-2). On one plane one mapping holds: about 1,090 px a unit at 1280x720, the axis
+        // the page the camera's perspective spreads it outward from the spine: at the ledger's depth (.032) the left page's text would begin left of
+        // the book's edge and each button's label sit off its plate. On one plane one mapping holds: about 1,090 px a unit at 1280x720, the axis
         // at the spine (x .165, y .154); the left page's inside is x -.176 to .144, the right page's .214 to .51, y .39 to -.04.
         private static void Finish(GameObject view)
         {
@@ -3317,7 +5040,7 @@ namespace EconomyOverhaul
             treasuryPage = new GameObject("treasury page"); treasuryPage.layer = gameObject.layer; treasuryPage.transform.SetParent(transform, false);
             var p = treasuryPage.transform;
             // Left page: the title, the coins, the form, Take out and Put in.
-            // The left page starts .035 lower than the Loan ledger's: the log book's top bookmarks lie over its first line (obk-1). Its lines from
+            // The left page starts .035 lower than the Loan ledger's: the log book's top bookmarks lie over its first line. Its lines from
             // x -.168 to .14 (inside the page, Finish).
             T(p, "Treasury", -.168f, .345f, .026f, .30f);
             subtitle = T(p, "", -.168f, .318f, .0145f, .30f);
@@ -3333,8 +5056,7 @@ namespace EconomyOverhaul
                 // from its mesh and scale (a world box's width changes with the way the player faces). On the plates' plane, inside the page.
                 var mf = c.GetComponent<MeshFilter>(); float width = mf && mf.sharedMesh ? mf.sharedMesh.bounds.size.x * c.lossyScale.x / Mathf.Max(1e-5f, transform.lossyScale.x) : 0f;
                 if (width > 1e-4f) c.localScale *= .064f / width;
-                // The row's middle at x -.017, the page's middle between the book's edge and the spine (the user, 2026-11-08: "move the currency
-                // icon to middle of the page, now its a little bit off to the right"; at -.12 its middle was 8 px right of it).
+                // The row's middle at x -.017, the page's middle between the book's edge and the spine.
                 c.position = transform.TransformPoint(BookUI.Position(-.128f + .074f * i, .255f, .014f));
                 int k = i; OfficeUiParts.Action(c.gameObject, () => { OfficeUiParts.Click(); coin = k; Refresh(); }, PlayerGold.GetCurrencyName(i));
             }
@@ -3351,16 +5073,15 @@ namespace EconomyOverhaul
                 walletValues[i] = T(p, "", .14f, y, .0150f, .08f, TextAnchor.LowerRight, valueFont);
                 Divider(p, -.014f, y - .006f, .312f);
             }
-            // The user (2026-11-08): "take out -> Withdraw", "put in -> Deposit".
             take = BookUI.Button(p, native, font, "Withdraw", -.097f, -.006f, .135f, .032f, () => Ask(false), Plate, out _);
             put = BookUI.Button(p, native, font, "Deposit", .069f, -.006f, .135f, .032f, () => Ask(true), Plate, out _);
             status = T(p, "", -.014f, .021f, .0125f, .30f, TextAnchor.MiddleCenter);
-            // Right page: the region's records, from x .218 to .5; its title as low as the left page's (at .38 it lay on the book's top edge, obk-2),
-            // its page buttons inside the page (at -.054 they hung off its bottom edge).
+            // Right page: the region's records, from x .218 to .5; its title as low as the left page's (at .38 it would lie on the book's top edge),
+            // its page buttons inside the page (at -.054 they would hang off its bottom edge).
             T(p, "Recent records", .218f, .345f, .026f, .28f);
             recordsSubtitle = T(p, "", .218f, .318f, .0145f, .28f);
             LedgerOrnament.Create(p, "treasury records ornament", .212f, .504f, .303f);
-            // The rows' text .012 and the columns spread (obk-3: "Gold Rock City" ran into the What column).
+            // The rows' text .012 and the columns spread (else "Gold Rock City" runs into the What column).
             T(p, "Day", .216f, .277f, .0115f, .028f); T(p, "Office", .246f, .277f, .0115f, .092f); T(p, "Event", .346f, .277f, .0115f, .08f); T(p, "Amount", .502f, .277f, .0115f, .07f, TextAnchor.LowerRight);
             Divider(p, .359f, .271f, .286f);
             for (int i = 0; i < RecordRows; i++)
@@ -3378,7 +5099,7 @@ namespace EconomyOverhaul
         {
             fleetPage = new GameObject("trade fleet page"); fleetPage.layer = gameObject.layer; fleetPage.transform.SetParent(transform, false);
             var p = fleetPage.transform;
-            // The same frame as the treasury page (inside the pages, Finish; the right page's title as low as the left's, obk-2).
+            // The same frame as the treasury page (inside the pages, Finish; the right page's title as low as the left's).
             T(p, "Trade fleet", -.168f, .345f, .026f, .30f);
             fleetSubtitle = T(p, "", -.168f, .318f, .0145f, .30f);
             LedgerOrnament.Create(p, "trade fleet title ornament", -.172f, .144f, .303f);
@@ -3391,17 +5112,10 @@ namespace EconomyOverhaul
                 shipNames[i] = T(p, "", -.158f, y - .006f, .0135f, .115f); shipHulls[i] = T(p, "", -.035f, y - .006f, .0125f, .075f); shipKinds[i] = T(p, "", .045f, y - .006f, .0125f, .095f);
             }
             fleetEmpty = T(p, "", -.014f, .2f, .0135f, .30f, TextAnchor.MiddleCenter);
-            // Right page (the user, 2026-11-08: "make the lifetime profit, Days in fleet, current location on top, and the bottom show the trade history
-            // (where he sold, how much profit earned that trip(the share that gave to you). Don't need to show other info since it's in trade fleet UI
-            // of trade office ui already"): those three as a form, then the ship's last trips in the records page's columns.
-            // Then (the user, 2026-11-08: "you should have page to see all the trade history / Move the lifetime profit and days in fleet above the
-            // separation line, remove the summary text. So history occupied more space on page"): its name, lifetime profit and days in fleet above the
-            // line, which lay .025 lower than the left page's to hold the two rows (Claude's choice, OK'd by the user); then its whole trade history,
-            // HistoryRows a page, with the records page's page buttons (the location under the line, and the line itself, until the user's changes below).
+            // Right page: the ship's name and its five rows above the line, then its whole trade history, HistoryRows a page, with the records page's
+            // page buttons; the rest of its summary only on the office scroll's Fleet tab.
             shipTitle = T(p, "", .218f, .345f, .026f, .28f);
-            // The ship's five rows, then the line (the user, 2026-11-08 evening: "move the separation line under biggest profit trip, separate it from
-            // trade history"): Lifetime profit and Days in fleet, then from its whole life (the user, the same evening: "remove the location info, instead
-            // replace it with most visited port, most sold goods and biggest profit trip(show destination and trip profit)"), .0235 apart.
+            // The ship's five rows, .0235 apart: Lifetime profit and Days in fleet, then the three from its whole life (LifeRows).
             for (int i = 0; i < FormRows; i++)
             {
                 float y = .318f - i * .0235f;
@@ -3412,11 +5126,10 @@ namespace EconomyOverhaul
                 float y = .318f - (FormRows + i) * .0235f;
                 lifeLabels[i] = T(p, LifeLabelTexts[i], .218f, y, .0125f, .11f); lifeValues[i] = T(p, "", .335f, y, .0135f, .165f, TextAnchor.LowerLeft, valueFont);
             }
-            // the line .015 under the last row's baseline (as it lay under Days in fleet before), the history's title .028 under it (at .007 less a label
-            // touched the line's ornament, obk-12)
+            // the line .015 under the last row's baseline, the history's title .028 under it (at .007 less a label touches the line's ornament)
             LedgerOrnament.Create(p, "trade fleet summary ornament", .212f, .504f, .209f);
-            // the ship's trade history under the line: newest first, HistoryRows a page, in the records page's four columns (the user, the same evening: "At the
-            // history between port and profit, add traded cargo also, show cargo with most value and it's quantity"); the share in the coin's short name.
+            // the ship's trade history under the line: newest first, HistoryRows a page, in the records page's four columns; the share in the coin's
+            // short name.
             T(p, "Trade history", .218f, .181f, .0145f, .28f);
             T(p, "Day", .216f, .161f, .0115f, .028f); T(p, "Sold at", .246f, .161f, .0115f, .092f); T(p, "Cargo", .346f, .161f, .0115f, .08f); T(p, "Your share", .502f, .161f, .0115f, .07f, TextAnchor.LowerRight);
             Divider(p, .359f, .155f, .286f);
@@ -3518,8 +5231,8 @@ namespace EconomyOverhaul
             }
             int i0 = ships[shipSelected];
             shipTitle.text = s.fleetName[i0];
-            // The user (2026-11-08): "Life time profit stay gold"; then the page's own rows (BuildFleet): lifetime profit, days in fleet, the ship's
-            // whole life's three rows and its trade history; the rest of its summary only on the office scroll's Fleet tab (OfficeFleet.SummaryLabels).
+            // The page's own rows (BuildFleet): lifetime profit in gold, days in fleet, the ship's whole life's three rows and its trade history; the
+            // rest of its summary only on the office scroll's Fleet tab (OfficeFleet.SummaryLabels).
             string[] labels = { "Lifetime profit", "Days in fleet" };
             string[] values = { OfficeFleet.Gold(s.fleetLife[i0]).ToString("0.0") + " gold", OfficeFleet.DaysIn(i0).ToString() };
             for (int i = 0; i < FormRows; i++) { formLabels[i].text = labels[i]; formValues[i].text = values[i]; }
@@ -3544,8 +5257,8 @@ namespace EconomyOverhaul
             if (!plateTextures.TryGetValue(material, out var texture)) plateTextures[material] = texture = material.mainTexture;
             material.mainTexture = on ? texture : null; button.SetTint(on ? Plate : Disabled);
         }
-        // The window over the book: the page under it hidden meanwhile (the game's text draws over every mesh, so the page's lines showed through
-        // the parchment, obk-1), shown again by Refresh once the window closes.
+        // The window over the book: the page under it hidden meanwhile (the game's text draws over every mesh, so the page's lines would show
+        // through the parchment), shown again by Refresh once the window closes.
         private void Ask(bool deposit)
         {
             OfficeUiParts.Click();
@@ -3575,7 +5288,7 @@ namespace EconomyOverhaul
         internal Transform CoinButton(int i) => coins[i];
     }
 
-    // ---- The amount window (the user: "make put in/take out promt a new window and player key in the amount they want to took/put in") ----
+    // ---- The amount window: the player types the amount to take out or put in ----
     // Over the book: what it does and the coin, how much there is, the typed amount. The game has no typed input of its own (no inputString or
     // input field anywhere in its code): the digits typed (the top row and the keypad, Input.inputString) build the number, Backspace deletes,
     // Enter confirms, Escape cancels (OfficePanelEscapePatch); All, Confirm and Cancel do the same by click. While it is open the game's 1-5
@@ -3594,14 +5307,13 @@ namespace EconomyOverhaul
             // doesn't reach the book behind.
             var bg = OfficeUiParts.Clone(details, transform, false); bg.name = "amount window parchment";
             foreach (Transform child in bg.transform.Cast<Transform>().ToArray()) DestroyImmediate(child.gameObject);
-            // Three fifths high and nine tenths wide (obk-1: at three fifths across its Cancel ran past the edge).
+            // Three fifths high and nine tenths wide (at three fifths across its Cancel runs past the edge).
             bg.transform.localScale = Vector3.Scale(bg.transform.localScale, new Vector3(.9f, .6f, .6f));
             var r = bg.GetComponent<Renderer>();
             if (r) { var want = transform.TransformPoint(BookUI.Position(.165f, .175f, -.008f)); bg.transform.position += want - r.bounds.center; }
             // The collider a thin sheet at the parchment's back, away from the UI camera the game's cursor casts from (MouseButtonPointer's uiCam;
-            // the window's +y if it isn't there): the mesh's whole box reached in front of All, Confirm and Cancel over about two thirds of each, so
-            // the cursor met the parchment there and lit nothing (officeuihover ouh-3; the user: "sometimes when cursor already on top of text, it
-            // don't highlight it").
+            // the window's +y if it isn't there): the mesh's whole box would reach in front of All, Confirm and Cancel over about two thirds of each,
+            // so the cursor would meet the parchment there and light nothing.
             var mf = bg.GetComponent<MeshFilter>();
             if (mf && mf.sharedMesh)
             {
@@ -3623,7 +5335,7 @@ namespace EconomyOverhaul
             BookUI.Button(p, native, font, "Confirm", .165f, .108f, .09f, .03f, Confirm, new Color(.38f, .8f, 1), out _);
             BookUI.Button(p, native, font, "Cancel", .275f, .108f, .08f, .03f, () => { OfficeUiParts.Click(); Cancel(); }, Color.white, out _);
             note = BookUI.Text(p, font, "", .165f, .068f, .0105f, .25f, TextAnchor.MiddleCenter);
-            // Its text on its plates' plane, as the book's (TreasuryBook.Finish; obk-3: in front of them the labels sat to the side of All and Cancel).
+            // Its text on its plates' plane, as the book's (TreasuryBook.Finish: in front of them the labels sit to the side of All and Cancel).
             foreach (var text in GetComponentsInChildren<TextMesh>(true)) { var at = text.transform.localPosition; text.transform.localPosition = new Vector3(at.x, .014f, at.z); BlackBookText.Apply(text); }
             gameObject.SetActive(false);
             return true;
@@ -3648,8 +5360,7 @@ namespace EconomyOverhaul
             Redraw();
         }
         private long Typed => typed.Length == 0 ? 0 : long.TryParse(typed, out long v) ? v : 0;
-        // A number over what there is becomes all of it as it is typed (the user, 2026-11-08: "Make when player type more number than the
-        // treasury/wallet actually have, auto cap it at the treasury/wallet amount"); also when what there is drops while the window is open.
+        // A number over what there is becomes all of it as it is typed; also when what there is drops while the window is open.
         private void Redraw()
         {
             int most = Available();
@@ -3678,14 +5389,13 @@ namespace EconomyOverhaul
     }
     [HarmonyPatch(typeof(InventoryHotkeys), "Update")] internal static class InventoryHotkeysTypingPatch { static bool Prefix() => !TreasuryBook.Typing; }
 
-    // ---- The unique items page (the user, 2026-11-08: "Use mission UI page for unique item purchase. redesign it.") ----
+    // ---- The unique items page ----
     // From the office scroll's Items tab: copies of the port's mission list and mission page (the game's own untouched), in the same frame. The
     // list's seven rows (the game's five and two more) with its page buttons and "1 / N"; its Local and World buttons are Unique and Regional, and
     // Modded joins them when that list has items; back returns to the office scroll. On Regional and Modded the first row is a filter, a drop-down
     // list made of the list's own rows (the game has none): pressed, the rows below list "All" and each region or mod with its count; picked, the
-    // list shows only those (the user, 2026-11-08: "add a drop down list for filter function on the Ui so player can pick the mod and the list only
-    // show item from that mod", and the same for the regional variants). An item opens the mission page as a form: the item, where it is sold, the
-    // price in the port's coin and your wallet; Accept reads Buy and makes it at the office's drop point (OfficeItems.Buy), or says why it can't.
+    // list shows only those. An item opens the mission page as a form: the item, where it is sold, the price in the port's coin and your wallet;
+    // Accept reads Buy and makes it at the office's drop point (OfficeItems.Buy), or says why it can't.
     public sealed class OfficeItemsPage : MonoBehaviour
     {
         internal static OfficeItemsPage Instance;
@@ -3723,11 +5433,10 @@ namespace EconomyOverhaul
             tabOn = local.activeMat; tabOff = local.inactiveMat;
             var bg = OfficeUiParts.Clone(listBg, transform, false); bg.name = "items list parchment";
             var list = OfficeUiParts.Clone(buttons, transform, false).transform; list.name = "items list";
-            // Seven rows where the game has five, the list and its parchment longer by two rows into the place of the port's welcome box under it
-            // (the user, 2026-11-08: "remove the "Unique items of [Port name]" part, remove both the text and the background parch. Make the left side
-            // list longer instead to show more item per page"): rows 5 and 6 copies of the fifth, a row's step below each other.
+            // Seven rows where the game has five, the list and its parchment longer by two rows into the place of the port's welcome box under it (which
+            // the page doesn't copy): rows 5 and 6 copies of the fifth, a row's step below each other.
             var fourth = OfficeUiParts.Find(list, "mission button (3)"); var fifth = OfficeUiParts.Find(list, "mission button (4)"); if (!fourth || !fifth) return false;
-            // The parchment a little longer still than the two rows (obk-7: by the rows alone its bottom roll touched the back button).
+            // The parchment a little longer still than the two rows (by the rows alone its bottom roll touches the back button).
             float step = fourth.localPosition.y - fifth.localPosition.y, extra = step * (Rows - 5), roll = .012f;
             for (int i = 5; i < Rows; i++) { var c = Instantiate(fifth.gameObject, fifth.parent).transform; c.name = "mission button (" + i + ")"; c.localPosition = fifth.localPosition - new Vector3(0, step * (i - 4), 0); }
             for (int i = 0; i < Rows; i++)
@@ -3737,7 +5446,7 @@ namespace EconomyOverhaul
                 int k = i; OfficeUiParts.Action(rowButtons[i], () => PressRow(k), "Look");
             }
             rowLook = rowButtons[0].GetComponent<Renderer>() ? rowButtons[0].GetComponent<Renderer>().sharedMaterial : null;
-            // The filter's row tinted light blue, the treasury's buttons' colour lightened (obk-7: in the chosen tab's look it read as one more item).
+            // The filter's row tinted light blue, the treasury's buttons' colour lightened (in the chosen tab's look it reads as one more item).
             if (rowLook) { filterLook = new Material(rowLook) { name = "items filter row" }; if (filterLook.HasProperty("_Color")) filterLook.color = new Color(.7f, .88f, 1f); }
             // The parchment stretched down by those two rows, its top kept (its mesh's +y is up on the screen, as the rows' frame).
             var bgMesh = bg.GetComponent<MeshFilter>() ? bg.GetComponent<MeshFilter>().sharedMesh : null;
@@ -3782,10 +5491,10 @@ namespace EconomyOverhaul
             // Under the price, where the game's page has its reputation line: the wallet.
             TextMesh Under(string n, float down, float scale) { var t = Instantiate(price.gameObject, price.transform.parent).GetComponent<TextMesh>(); t.name = n; t.transform.localPosition = price.transform.localPosition + new Vector3(0, -down, 0); t.transform.localScale = price.transform.localScale * scale; return t; }
             have = Under("items wallet", .085f, .8f);
-            // The sellers wrapped at full size from under their label (Refresh; obk-2: fitted to .62, only 164 px of the page's 385, they shrunk
-            // unreadable). The page's lines are about 264 px a unit across at 1280x720. The game's Destination lines hidden: the user (2026-11-08):
-            // "remove both bought at and made at" (the office the item is bought at and its drop point); why an item can't be bought shows when Buy
-            // is pressed, as the game's notification (Buy), with no line left on the page for it.
+            // The sellers wrapped at full size from under their label (Refresh; fitted to .62, only 164 px of the page's 385, they would shrink
+            // unreadable). The page's lines are about 264 px a unit across at 1280x720. The game's Destination lines hidden (the office the item is
+            // bought at and its drop point); why an item can't be bought shows when Buy is pressed, as the game's notification (Buy), with no line left
+            // on the page for it.
             sold.anchor = TextAnchor.UpperLeft; Move(sold, .71f);
             atLabel.gameObject.SetActive(false); at.gameObject.SetActive(false);
             var fit = sold.gameObject.GetComponent<LoanTextFit>() ?? sold.gameObject.AddComponent<LoanTextFit>(); fit.originalScale = sold.transform.localScale; fit.maxWidth = SoldWidth;

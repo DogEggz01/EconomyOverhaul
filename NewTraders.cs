@@ -16,13 +16,11 @@ namespace EconomyOverhaul
     // ---- Rules ----
     public static partial class Rules
     {
-        // Trade book. A delivered report unlocks with the player's rep in the delivering boat's home region (the user,
-        // 2026-10-14; small locals 3/2/2 in Al'Ankh, 2/2/3 in Emerald and Aestrin, since 2026-10-15, Al'Ankh's eighth at rep 3 since 2026-11-04; TradeBook.BookGroup):
-        // rep 1, three (two in Emerald and Aestrin) of each region's small locals ("small") and
-        // Emerald's two FFL small locals; rep 2, two more small locals ("small2"), the mediums (Al'Ankh's two since 2026-10-24, M2 (a)), the first Aestrin heavy
-        // ("heavy"), the FFL-Emerald shuttle; rep 3, the other small locals ("small3"), the second heavy ("heavy2"), the regionals and the Happy Bay trader (rep 3 in any
-        // region); rep 4, one group of three independents per region (home = the independent's group, 0-2); rep 5, the
-        // region's Chronos trader.
+        // Trade book. A delivered report unlocks with the player's rep in the delivering boat's home region (TradeBook.BookGroup): rep 1, three (two
+        // in Emerald and Aestrin) of each region's small locals ("small") and Emerald's two FFL small locals; rep 2, two more small locals ("small2"),
+        // the mediums, the first Aestrin heavy ("heavy"), the FFL-Emerald shuttle; rep 3, the other small locals ("small3"), the second heavy
+        // ("heavy2"), the regionals and the Happy Bay trader (rep 3 in any region); rep 4, one group of three independents per region (home = the
+        // independent's group, 0-2); rep 5, the region's Chronos trader.
         public static int BookTier(string group) => group == "small" ? 1 : group == "small2" || group == "medium" || group == "heavy" || group == "shuttle" ? 2 :
             group == "small3" || group == "heavy2" || group == "regional" || group == "happy" ? 3 : group == "independent" ? 4 : group == "chronos" ? 5 : int.MaxValue;
         public static bool BookUnlocked(string group, int home, int[] reps)
@@ -31,11 +29,10 @@ namespace EconomyOverhaul
             if (group == "independent") { int count = 0; foreach (int r in reps) if (r >= 4) count++; return home >= 0 && count > home; }
             return home >= 0 && home < reps.Length && reps[home] >= BookTier(group);
         }
-        // Whether a port releases trader reports to the player at midnight: not where the player has rep 0. Reports are not
-        // held back by reputation otherwise (the 0.7.0 waits of 3/2/1 days were removed).
+        // Whether a port releases trader reports to the player at midnight: not where the player has rep 0. Reports are not held back by reputation
+        // otherwise.
         public static bool BookReleases(int portLevel) => portLevel > 0;
-        // A level up releases the trade-book reports at once instead of at the next midnight (the user, 2026-10-23,
-        // SMALL_REQUESTS_DRAFT.md: "every level up"): whether any account's level is above its last known one.
+        // A level up releases the trade-book reports at once instead of at the next midnight: whether any account's level is above its last known one.
         public static bool LevelRose(int[] before, int[] now)
         {
             if (before == null || now == null) return false;
@@ -53,14 +50,13 @@ namespace EconomyOverhaul
         // Tavern rumours by drink (the game's liquid number): rum, wine and coconut wine (2-4) buy the boat type and
         // the load size; mead, honey beer, rice beer and cider (5-8) the boat type; coffee and teas (10-13) basic news.
         // Water (1) and sea water (9) are refused.
-        // Port capacity a trader adds at each end of a trip (the user, 2026-10-14; was 0.1).
+        // Port capacity a trader adds at each end of a trip.
         public const float TraderCapacity = .25f;
         public static bool RumorAccepted(int drink) => drink >= 2 && drink <= 13 && drink != 9;
         public static bool RumorBoatType(int drink) => drink >= 2 && drink <= 8;
         public static bool RumorLoadSize(int drink) => drink >= 2 && drink <= 4;
-        // The pull toward a port no trader has called at lately (TRADER_NEXTLEG_DRAFT.md; the user, 2026-11-04: "test the unvisit port get
-        // more attractive", "Yes, draft both", 2026-11-06: "Use 0.05 for all"): a plan's percent grows with the age of the trader's report of that port, so a
-        // port with nothing worth carrying stays at 0.
+        // The pull toward a port no trader has called at lately: a plan's percent grows with the age of the trader's report of that port, so a port
+        // with nothing worth carrying stays at 0.
         public const double QuietPortPull = .05;
         public static double ReportPull(double percent, int ageDays, double perDay) => percent * (1 + perDay * Math.Max(0, ageDays));
         // forEvent: a trip toward a dynamic demand event the trader knows (to its producer, or with its good to its demanding port);
@@ -69,8 +65,8 @@ namespace EconomyOverhaul
             bool forEvent = false, int eventRegion = -1)
         {
             if (origin == destination || destination == 7 || destination == 33) return false;
-            // A Chronos trader sails between its home capital and Chronos; one elsewhere (a trade fleet ship given the Chronos route at an office
-            // outside its region's capital, or switched to it there) first sails home (the deep review of 2026-11-09: it waited 48 h for good).
+            // A Chronos trader sails between its home capital and Chronos; one elsewhere (a trade fleet ship given the Chronos route at an office outside
+            // its region's capital, or switched to it there) first sails home (else no trip from there is valid and it waits for good).
             if (group == "chronos") return (origin == 21 && destination == home) || (origin == home && destination == 21) || (origin != 21 && origin != home && destination == home);
             // Only Chronos traders sail to Chronos.
             if (destination == 21) return false;
@@ -80,8 +76,8 @@ namespace EconomyOverhaul
             // This also filters the empty nearest-port fallback before it is chosen.
             if (group == "heavy")
                 return origin == 19 || origin == 26 || origin == 28 || destination == 19 || destination == 26 || destination == 28;
-            // An event's trips at any range (the user, 2026-10-30, EVENT_REACH_WATER_DRAFT.md, "E1: yes", "E2: yes"): an independent
-            // anywhere; a regional only for an event whose two ports are both in its home region, to a port there (inside it too).
+            // An event's trips at any range: an independent anywhere; a regional only for an event whose two ports are both in its home region, to a port
+            // there (inside it too).
             if (forEvent && (group == "independent" || group == "regional" && eventRegion == home && destinationRegion == home)) return true;
             if (group == "regional" || group == "independent")
                 return distance > 140 && (group == "independent" || (originRegion == home) != (destinationRegion == home));
@@ -110,9 +106,8 @@ namespace EconomyOverhaul
         private static int RandomPort(int[] network) => network[UnityEngine.Random.Range(0, network.Length)];
         internal int[] Network()
         {
-            // Happy Bay, Emerald (with FFL) and Aestrin, and of Al'Ankh Oasis and Mirage Mountain (the user, 2026-10-19: "Happy bay
-            // trader now also goes to Oasis and Mirage Mountain"); every route touches Happy Bay (Rules.ValidRoute). Chronos and
-            // Saffron excluded.
+            // Happy Bay, Emerald (with FFL) and Aestrin, and of Al'Ankh Oasis and Mirage Mountain; every route touches Happy Bay (Rules.ValidRoute).
+            // Chronos and Saffron excluded.
             if (Group == "happy") return Supply.ManagedRows().Where(p => p.Port != 21 && p.Port != 33 && (p.Region != 0 || HappyAlAnkh.Contains(p.Port))).Select(p => p.Port).OrderBy(p => p).ToArray();
             if (Group == "chronos") return new[] { Home, 21 };
             if (Ffl) return new[] { 22, 23, 24, 25 };
@@ -126,15 +121,9 @@ namespace EconomyOverhaul
     }
     internal static class FleetDefinitions
     {
-        // Speeds are m/s, converted from the approved knots and rounded to two decimals. The small locals 5 knots since the
-        // user's buff of 2026-10-18 (4.5 before; VISIBLE_TRADERS_DRAFT.md, its last section), the heavy ones 4 knots again since
-        // 2026-10-30 (the user: "reduce heavy ship weight by 0.5 knots", HEAVY_CARGO_DRAFT.md; 4.5 from 2026-10-18); a save's
-        // traders take these speeds and waits when it loads (StateCodec.Finish). The medium locals 5.5 knots and 5 h, the Happy Bay
-        // trader 6.5 knots and 7 h since the sail plans (the user, 2026-10-19: "Medium local: 5.5 knots", "make wait stay 5 hour",
-        // "Happy bay trader: 6.5 knots, wait 7 hour"; 5 knots and 4 h, 6 knots and 6.5 h before; TRADER_RIGS_DRAFT.md).
+        // Speeds are m/s, converted from knots and rounded to two decimals: small locals 5 knots, heavies 4, medium locals 5.5 (5 h wait), the Happy
+        // Bay trader 6.5 (7 h wait). A save's traders take these speeds and waits when it loads (StateCodec.Finish).
         internal static readonly FleetDefinition[] Current = {
-            // Al'Ankh 2 medium locals since 2026-10-24 (the user: "use 2 local medium and 7 local small"; SMALL_REQUESTS_DRAFT.md section 5)
-            // and 8 small locals since 2026-11-04 (the user: "add 1 more small local to al'ankh, default rigged"; TRADER_NEXTLEG_DRAFT.md):
             // 53 traders. A save with fewer (1.1.5 and older 52, 1.0.2 and older 51) gets the missing ones at load (Fleet.TopUp).
             new FleetDefinition("small", 0, 8, 20, 1000, 2.57f, 2.5f),
             new FleetDefinition("small", 1, 7, 20, 1000, 2.57f, 2.5f),
@@ -144,15 +133,14 @@ namespace EconomyOverhaul
             new FleetDefinition("medium", 0, 2, 40, 4000, 2.83f, 5),
             new FleetDefinition("medium", 1, 1, 40, 4000, 2.83f, 5),
             new FleetDefinition("medium", 2, 1, 40, 4000, 2.83f, 5),
-            // Regionals carry 55 units since 2026-11-07 (the user: "make regional trader got 55 slot instead"; 40 before, which filled 96% of
-            // their slots and 27% of their weight limit; TRADE_OFFICE_DRAFT.md §3B). A saved game's regionals take it at the load (StateCodec.Finish).
+            // Regionals carry 55 units (at 40 they filled 96% of their slots but 27% of their weight limit). A saved game's regionals take it at the load
+            // (StateCodec.Finish).
             new FleetDefinition("regional", 0, 3, 55, 10000, 3.60f, 8),
             new FleetDefinition("regional", 1, 3, 55, 10000, 3.60f, 8),
             new FleetDefinition("regional", 2, 3, 55, 10000, 3.60f, 8),
             new FleetDefinition("independent", -1, 9, 70, 10000, 4.12f, 12),
             new FleetDefinition("shuttle", 1, 1, 40, 5000, 3.09f, 6.5f),
             new FleetDefinition("happy", 2, 1, 40, 5000, 3.34f, 7, startPort: 20),
-            // Chronos traders wait 48 h since 2026-10-30 (the user: "Change chronos trader waiting time to 48 hours"; 24 before).
             new FleetDefinition("chronos", 0, 1, 130, 13000, 4.37f, 48),
             new FleetDefinition("chronos", 9, 1, 130, 13000, 4.37f, 48),
             new FleetDefinition("chronos", 15, 1, 130, 13000, 4.37f, 48)
@@ -174,10 +162,10 @@ namespace EconomyOverhaul
         public List<ReportState> reports = new List<ReportState>();
         // Trade-book snapshots carried for the ports on this boat's route, newest per port.
         public List<int> book = new List<int>();
-        // Dynamic demand events this trader knows of (learnt at their ports; 2026-10-16): optional, none in older saves.
+        // Dynamic demand events this trader knows of (learnt at their ports): optional, none in older saves.
         [System.Runtime.Serialization.OptionalField] public List<int> knownEvents;
-        // Visible traders (VISIBLE_TRADERS.md): which of a pair's two or three lanes between regions this trip takes, picked at
-        // its departure; optional, 0 (the first lane) in older saves.
+        // Visible traders: which of a pair's two or three lanes between regions this trip takes, picked at its departure; optional, 0 (the first
+        // lane) in older saves.
         [System.Runtime.Serialization.OptionalField] public int lane;
         // State version 6 (SaveState.reportTable): reports written as numbers into the save's report table; null in memory, and in
         // a version-4 or -5 save.
@@ -211,8 +199,8 @@ namespace EconomyOverhaul
                 for (int j = i + 1; j < live.Count; j++) { sumLive += Vector2.Distance(live[i], live[j]); sumVanilla += Vector2.Distance(vanilla[i], vanilla[j]); }
             return sumVanilla > 0 ? sumLive / sumVanilla : 1;
         }
-        // How far the ports the map has now lie from their vanilla places, relative to port 0 (the largest, m; 0 with no port 0).
-        // Visible traders are not drawn when the islands were moved (Scrambled Seas: the user's rule).
+        // How far the ports the map has now lie from their vanilla places, relative to port 0 (the largest, m; 0 with no port 0). Visible traders
+        // take a moved map for Scrambled Seas' and make routes for it (ScrambledLanes).
         internal static double MaxMove()
         {
             var zero = Port.ports != null && Port.ports.Length > 0 ? Port.ports[0] : null;
@@ -333,10 +321,10 @@ namespace EconomyOverhaul
                 World.State.fleet.Add(b);
             }
         }
-        // A save made with fewer traders than the table (a game of 1.1.5 or older has 7 Al'Ankh small locals, the table 8 since 2026-11-04; of
-        // 1.0.2 or older 1 Al'Ankh medium local, the table 2 since 2026-10-24): each definition short of its count gets new traders with the next ids, waiting at a port of its network (in
-        // turn), the hold empty, given each network port's own report from the save's markets, as a new game's traders are. Only
-        // while the fleet is short of the table's total (a made-up fleet of that total, as the tests build, is left alone).
+        // A save made with fewer traders than the table (a game of 1.1.5 or older has 7 Al'Ankh small locals, the table 8; of 1.0.2 or older 1
+        // Al'Ankh medium local, the table 2): each definition short of its count gets new traders with the next ids, waiting at a port of its network
+        // (in turn), the hold empty, given each network port's own report from the save's markets, as a new game's traders are. Only while the fleet
+        // is short of the table's total (a made-up fleet of that total, as the tests build, is left alone).
         internal static int TopUp(SaveState s)
         {
             if (s?.fleet == null || s.markets == null || s.fleet.Any(b => b?.network == null) || s.fleet.Count >= FleetDefinitions.Total) return 0;
@@ -437,7 +425,7 @@ namespace EconomyOverhaul
             finally { Economy.BatchDepth--; }
             if (mine) OfficeFleet.Arrived(b, Fx.Currency(m));
             b.goods = new int[0];
-            // Also during the new game's preparation (the user, 2026-10-17: capacity should already grow there; was play only).
+            // Also during the new game's preparation, so capacity already grows there.
             if (Available(b.origin) && b.origin != b.destination) Economy.Award(b.origin, Rules.TraderCapacity);
             Economy.Award(b.destination, Rules.TraderCapacity);
             m.debugTraderVisits++;
@@ -450,7 +438,7 @@ namespace EconomyOverhaul
                 if (Startup.Running) Publish(m, data, r);
                 else PutReport(data.incoming ?? (data.incoming = new List<ReportState>()), r);
             }
-            if (!mine) TradeBook.Arrive(b, b.destination);   // the office's ships stay out of the trade book (TRADE_OFFICE_DRAFT.md §4.5)
+            if (!mine) TradeBook.Arrive(b, b.destination);   // the office's ships stay out of the trade book
             Demand.Learn(b, b.destination);
             Economy.Refresh(m); b.origin = b.destination; b.destination = -1; b.remaining = b.wait;
         }
@@ -461,8 +449,8 @@ namespace EconomyOverhaul
             Economy.EnsureKnownPrices(m);
             var known = TradeBook.Native(m);
             if (known[r.port] == null || known[r.port].day <= r.day)
-                // The game writes only a market's own entry in place (IslandMarket.UpdateSelfPriceReport), and no installed mod writes any: another port's entry holds the report's arrays,
-                // which never change, so the game's save holds them once (the user's Q38: "share arrays"); a market's own entry keeps copies.
+                // The game writes only a market's own entry in place (IslandMarket.UpdateSelfPriceReport), and no installed mod writes any: another port's
+                // entry holds the report's arrays, which never change, so the game's save holds them once; a market's own entry keeps copies.
                 known[r.port] = r.port == m.GetPortIndex()
                     ? new PriceReport { day = r.day, approved = r.approved, buyPrices = (int[])r.buy.Clone(), sellPrices = (int[])r.sell.Clone() }
                     : new PriceReport { day = r.day, approved = r.approved, buyPrices = r.buy, sellPrices = r.sell };
@@ -512,7 +500,7 @@ namespace EconomyOverhaul
             var result = new Candidate { destination = dest };
             var m = World.Market(b.origin); var destinationMarket = World.Market(dest);
             if (!m || !destinationMarket || !Supply.Contains(b.origin) || !Supply.Contains(dest)) return result;
-            // A port the published report doesn't cover is skipped; no price is fetched from it live (0.7.0).
+            // A port the published report doesn't cover is skipped; no price is fetched from it live.
             var report = Report(b.reports, dest);
             if (report == null || !report.approved || report.supply == null) return result;
             // Common-value comparison, rescaled to origin price units so same-currency
@@ -563,8 +551,8 @@ namespace EconomyOverhaul
         // Told of each plan: the trader, its milliseconds, whether the pull changed the destination, the chosen trip's percent and the
         // best percent before the pull. Set only by -DemandStudy; null in play.
         internal static Action<BoatState, double, bool, double, double> OnPlanned;
-        // The pull's strength: a destination scored by its plan's percent times 1 + this x its report's age in days (Rules.ReportPull,
-        // TRADER_NEXTLEG_DRAFT.md). The -DemandStudy suite may set it from EO_PULL; at 0 the choice is the hold's profit over its cost alone.
+        // The pull's strength: a destination scored by its plan's percent times 1 + this x its report's age in days (Rules.ReportPull). The
+        // -DemandStudy suite may set it from EO_PULL; at 0 the choice is the hold's profit over its cost alone.
         internal static double PullPerDay = Rules.QuietPortPull;
         // Told of each port a trader may trade with, with its plan's percent (0: nothing worth carrying). Set only by -DemandStudy; null in play.
         internal static Action<BoatState, int, double> OnCandidate;
@@ -587,7 +575,7 @@ namespace EconomyOverhaul
         {
             var m = World.Market(b.origin); if (!m || !Supply.Contains(b.origin)) { b.remaining = b.wait; yield break; }
             bool mine = OfficeFleet.Is(b);
-            // Traders plan with, and carry on, the port's report as published at the last midnight (0.7.0).
+            // Traders plan with, and carry on, the port's report as published at the last midnight.
             b.reports = World.MarketData(b.origin).reports.Where(r => r.approved).ToList();
             Candidate best = null; int closest = -1; double closestDistance = double.MaxValue;
             var buys = new double[65, b.units];
@@ -600,8 +588,8 @@ namespace EconomyOverhaul
             bool CanSail(int from, int to, DemandEvent e = null) => from != to && LivePort(from) && LivePort(to) && World.Market(to) && Supply.Contains(to) && b.network.Contains(to) &&
                 Rules.ValidRoute(b.group, from, to, b.home, (int)LivePort(from).region, (int)LivePort(to).region, Distance(from, to), e != null, e != null ? EventRegion(e) : -1);
             var serve = Demand.Serve(b, m, e => CanSail(b.origin, e.demand, e), out int need);
-            // Not able to serve from here: an event it knows whose two ports it can both reach sends it to the producer (the user,
-            // 2026-10-16), carrying whatever profits on the way.
+            // Not able to serve from here: an event it knows whose two ports it can both reach sends it to the producer, carrying whatever profits on
+            // the way.
             var fetch = serve == null ? Demand.Fetch(b, (e, from, to) => CanSail(from, to, e)) : null;
             Candidate served = null, fetched = null;
             // The best percent after the pull so far and, apart for the study, the best before it.
@@ -678,8 +666,8 @@ namespace EconomyOverhaul
         }
         internal static string RumorCargo(string good, int count, bool loadSize) => count <= 0 ? "The hold was empty." :
             "Carrying " + (loadSize && count > 12 ? "a large load of " : loadSize && count > 4 ? "a sizeable load of " : "some ") + good + ".";
-        // The trade office's clerk (TradeOffice.cs; TRADE_OFFICE_DRAFT.md §4.3, Q19): the last departure and the next arrival, each when there is
-        // one, in full detail (boat type and load size, as the best drink), "Boss" in place of the tavern's voice. Null for one there isn't.
+        // The trade office's clerk (TradeOffice.cs): the last departure and the next arrival, each when there is one, in full detail (boat type and
+        // load size, as the best drink), "Boss" in place of the tavern's voice. Null for one there isn't.
         internal static void ClerkShips(int port, out string left, out string expected)
         {
             left = expected = null;
@@ -711,8 +699,8 @@ namespace EconomyOverhaul
         }
         internal static string Rumor(int port, int detail)
         {
-            // 0.7.0: the drink decides the detail (Rules.RumorBoatType / RumorLoadSize). With no drink known, vanilla's own
-            // level: 0 for drink numbers 5 and up, 2 below 5 (the bottle's "amount" holds the liquid number, not a quantity).
+            // The drink decides the detail (Rules.RumorBoatType / RumorLoadSize). With no drink known, vanilla's own level: 0 for drink numbers 5 and
+            // up, 2 below 5 (the bottle's "amount" holds the liquid number, not a quantity).
             int drink = RumorDrink;
             bool boatType = drink > 0 ? Rules.RumorBoatType(drink) : detail == 0, loadSize = drink > 0 ? Rules.RumorLoadSize(drink) : detail > 0;
             var currentPort = LivePort(port);
@@ -753,7 +741,7 @@ namespace EconomyOverhaul
         static bool Prefix(PortRumors __instance, int level, ref string __result)
         { if (!World.Ready) return true; __result = Fleet.Rumor(__instance.GetComponent<Port>().portIndex, level); return false; }
     }
-    // 0.7.0: the drink handed over decides the rumour's detail; sea water is refused like water.
+    // The drink handed over decides the rumour's detail; sea water is refused like water.
     [HarmonyPatch(typeof(TavernRumorsDude), "ClickDrinkButton")] internal static class RumorDrinkPatch
     {
         static void Prefix(ShipItemBottle ___currentDrink) => Fleet.RumorDrink = ___currentDrink ? Mathf.RoundToInt(___currentDrink.amount) : -1;
@@ -790,8 +778,8 @@ namespace EconomyOverhaul
 
     internal static partial class Economy
     {
-        // A good's price at supply 0 comes out the same in every report (compared here at each capture): the reports hold one array, never written once made (a report never changes), so the
-        // save holds it once (TRADE_OFFICE_DRAFT.md, the user's Q38: "share arrays"; every number stays).
+        // A good's price at supply 0 comes out the same in every report (compared here at each capture): the reports hold one array, never written
+        // once made (a report never changes), so the save holds it once; every number stays.
         private static float[] sharedValues, valuesBuffer;
         private static float[] SharedValues(IslandMarket m)
         {
@@ -871,8 +859,8 @@ namespace EconomyOverhaul
         }
         internal static BookSnapshot Get(int id) => Snapshots.TryGetValue(id, out var s) ? s : null;
         internal static BookSnapshot Add(int port, int day, double seen, int[] buy, int[] sell) => AddShared(port, day, seen, (int[])buy.Clone(), (int[])sell.Clone());
-        // The arrays kept as they are: for a report's, which never change once made, so the save holds them once (the user's Q38: "share arrays"). Not for a market's own
-        // native prices, which the game writes in place (TradeBook.See goes through Add).
+        // The arrays kept as they are: for a report's, which never change once made, so the save holds them once. Not for a market's own native
+        // prices, which the game writes in place (TradeBook.See goes through Add).
         internal static BookSnapshot AddShared(int port, int day, double seen, int[] buy, int[] sell)
         {
             var map = Snapshots; var state = World.State;
@@ -896,10 +884,9 @@ namespace EconomyOverhaul
             return b.home;
         }
 
-        // The class a delivering boat files under, by boat number within its kind: of Al'Ankh's eight small locals the
-        // first three "small" (rep 1), the next two "small2" (rep 2), the last three "small3" (rep 3; the user, 2026-10-15,
-        // was two, two, three; the eighth since 2026-11-04, S2 (a) of SMALL_REQUESTS_DRAFT.md); in Emerald (home 1) and Aestrin (home 2) two, two, three (the user, 2026-10-15); the Lagoon's two small
-        // locals stay "small"; of the two Aestrin heavies the first "heavy" (rep 2), the second "heavy2" (rep 3).
+        // The class a delivering boat files under, by boat number within its kind: of Al'Ankh's eight small locals the first three "small" (rep 1),
+        // the next two "small2" (rep 2), the last three "small3" (rep 3); in Emerald (home 1) and Aestrin (home 2) two, two, three; the Lagoon's two
+        // small locals stay "small"; of the two Aestrin heavies the first "heavy" (rep 2), the second "heavy2" (rep 3).
         internal static string BookGroup(BoatState b)
         {
             if (b.group != "small" && b.group != "heavy") return b.group;
@@ -910,8 +897,8 @@ namespace EconomyOverhaul
             int rep1 = b.home == 1 || b.home == 2 ? 2 : 3, rep2 = b.home == 1 || b.home == 2 ? 4 : 5;
             return i >= rep2 ? "small3" : i >= rep1 ? "small2" : "small";
         }
-        // Entries saved before the 2026-10-14 tiers carry their boat's old class: once per loaded game, each entry whose boat
-        // is still in the fleet takes the class it files under now.
+        // Entries in an older save may carry their boat's old class: once per loaded game, each entry whose boat is still in the fleet takes the
+        // class it files under now.
         private static SaveState reclassed;
         internal static void Reclass()
         {
@@ -1136,18 +1123,15 @@ namespace EconomyOverhaul
         static void Prefix(out bool __state) => __state = TradeBook.HideView();
         static Exception Finalizer(Exception __exception, bool __state) { if (__state) TradeBook.ShowView(); return __exception; }
     }
-    // The good page's two lines (the user, 2026-11-01, TUTORIAL_UI_DRAFT.md U3 and §3): the good's category on a smaller line under
-    // its name (none for goods outside the four), and "Port price update at midnight everyday" above the price list. Each a copy of
-    // the name's own text (its font, ink and turn), made once under the same parent.
+    // The good page's two lines: the good's category on a smaller line under its name (none for goods outside the four), and "Port price update
+    // at midnight everyday" above the price list. Each a copy of the name's own text (its font, ink and turn), made once under the same parent.
     internal static class GoodPageLines
     {
-        // The price line on one row in the free band above the price list's headings, under Size and Weight (their rows end about
-        // .83, the headings' row tops at .751): tut-7, at .700 across the page, it ran through the headings; tut-8, in their left cell
-        // on two rows, through "days ago" and the first port.
+        // The price line on one row in the free band above the price list's headings, under Size and Weight (their rows end about .83, the headings'
+        // row tops at .751): at .700 across the page it runs through the headings; in their left cell on two rows, through "days ago" and the first port.
         internal const string PriceLine = "Port price update at midnight everyday";
-        // In the parent's units: the name at (.294, .872); the category under it at .790, clear of a "g" or "y" in the name (the
-        // user's option 3 of four pictured, tut-24; at .808 the tails touched it); the price line centred at x -.25 (Size's label
-        // ends at -.208, its value starts at -.258), 65% of the port names' size.
+        // In the parent's units: the name at (.294, .872); the category under it at .790, clear of a "g" or "y" in the name (at .808 the tails touch
+        // it); the price line centred at x -.25 (Size's label ends at -.208, its value starts at -.258), 65% of the port names' size.
         internal const float CategoryY = .790f, CategorySize = .55f, PriceX = -.25f, PriceY = .79f, PriceSize = .65f;
         private static TextMesh category, price;
         private static TextMesh Copy(TextMesh source, string label, float x, float y, float size)
@@ -1186,15 +1170,14 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- Visible traders on a Scrambled Seas map (SCRAMBLED_TRADERS_DRAFT.md section 2, the user's answers S1-S6; built 2026-11-02) ----
+    // ---- Visible traders on a Scrambled Seas map ----
     // Once the islands are moved and read (VisibleTraders' first scan after a load), the harbours and routes for this map are made on a
-    // background thread from the island charts and the lane map's harbour data; no trader is drawn until they are ready (S2). Every
-    // port's harbour moves with its island; a berth another island's land comes within 20 m of is closed (S1); each arrival point is
-    // made again by S5's rule; one lane per pair of Scrambled Seas' groups, A* only round each blocked stretch (the prototype
-    // outputs/economyoverhaul_scrambled/tools/routetime, measured in the draft's section 5). Nothing is saved.
+    // background thread from the island charts and the lane map's harbour data; no trader is drawn until they are ready. Every port's harbour
+    // moves with its island; a berth another island's land comes within 20 m of is closed; each arrival point is made again for the moved
+    // harbour; one lane per pair of Scrambled Seas' groups, A* only round each blocked stretch. Nothing is saved.
 
-    // One island's own land (probe scrambled_charts, Data/islands.bin made by Data/MakeIslands.py): 10 m cells where it lies in the
-    // vanilla game, as bit rows. Cell (i, j) is the square x 10 i .. 10 i + 10, z 10 j .. 10 j + 10 (real, vanilla).
+    // One island's own land (Data/islands.bin, made by Data/MakeIslands.py): 10 m cells where it lies in the vanilla game, as bit rows.
+    // Cell (i, j) is the square x 10 i .. 10 i + 10, z 10 j .. 10 j + 10 (real, vanilla).
     internal sealed class LandChart
     {
         internal const double Cell = 10;
@@ -1302,9 +1285,8 @@ namespace EconomyOverhaul
         }
     }
 
-    // Scrambled Seas' archipelagos (7.1.9's WorldScrambler.GenerateDefs, no regions.json): island 30 is in groups 6 and 7 and group
-    // 7, placed later, wins; an island in no group joins its closest region's group: Better Ports' Bottleneck (67) Emerald's (its
-    // region 15.8 km off, probe scrambled_charts' REGION lines).
+    // Scrambled Seas' archipelagos (7.1.9's WorldScrambler.GenerateDefs, no regions.json): island 30 is in groups 6 and 7 and group 7, placed
+    // later, wins; an island in no group joins its closest region's group: Better Ports' Bottleneck (67) Emerald's (its region 15.8 km off).
     internal static class ScrambleGroups
     {
         private static readonly int[][] Defs = {
@@ -1400,7 +1382,7 @@ namespace EconomyOverhaul
         private readonly Dictionary<long, LanePath> trips = new Dictionary<long, LanePath>();
         internal TraderHarbour HarbourOf(int port) => Harbours.TryGetValue(port, out var h) ? h : null;
         internal int Choices(int from, int to) => Trip(from, to) != null ? 1 : 0;
-        // Lanes 120 m wide at sea, 40 m within 800 m of a lagoon port (LaneMap.InLagoon's lagoon ring no longer exists).
+        // Lanes 120 m wide at sea, 40 m within 800 m of a lagoon port (LaneMap.InLagoon's lagoon ring is not there on this map).
         internal float HalfWidth(Vector2 p)
         {
             foreach (var q in LagoonPorts) if ((q - p).sqrMagnitude < LagoonReach * LagoonReach) return LagoonHalf;
@@ -1452,9 +1434,8 @@ namespace EconomyOverhaul
                 double dx = x - Cx, dz = z - Cz, r = R + d; return dx * dx + dz * dz < r * r;
             }
         }
-        // The harbours' rules (section 2): the arrival point keeps 120 m clear of every island (40 m at a lagoon port); a berth with
-        // another island's land within 20 m of it is closed (S1); a harbour way keeps 12 m from its own island and S1's 20 m from
-        // any other, dearer within 40 m of land.
+        // The harbours' rules: the arrival point keeps 120 m clear of every island (40 m at a lagoon port); a berth with another island's land within
+        // 20 m of it is closed; a harbour way keeps 12 m from its own island and those 20 m from any other, dearer within 40 m of land.
         internal const double ClearSea = 120, ClearLagoon = 40, Close = 20, OwnPass = 12, NearLand = 40, Walk = 5;
         internal static readonly int[] LagoonPortIds = { 22, 23, 24, 25 };
         private readonly ScrambledInput input;
@@ -1514,7 +1495,7 @@ namespace EconomyOverhaul
             return false;
         }
 
-        // ---- The harbours (section 2: "Harbours kept", S1, S5) ----
+        // ---- The harbours ----
         private sealed class Harbour
         {
             internal int Port, Island; internal Vector2 O; internal double Clear; internal List<Placed> Lands;
@@ -1559,8 +1540,8 @@ namespace EconomyOverhaul
             hb.Lands = lands.Where(l => l.X1 >= x0 - reach && l.X0 <= x1 + reach && l.Z1 >= z0 - reach && l.Z0 <= z1 + reach).ToList();
             var h = new TraderHarbour { Port = v.Port, PortPoint = v.PortPoint + o, Anchorage = v.Anchorage + o, AnchorRadius = v.AnchorRadius };
             var berths = v.Berths.OrderBy(b => b.Number).ToList();
-            // The arrival point (S5): berth 1's leg (else the anchorage's, from its centre) walked out to its first point clear of every
-            // island; a leg that never gets there goes on by a harbour way to the nearest clear water.
+            // The arrival point: berth 1's leg (else the anchorage's, from its centre) walked out to its first point clear of every island; a leg that
+            // never gets there goes on by a harbour way to the nearest clear water.
             LanePath first = berths.Count > 0 ? berths[0].Leg.Moved(o) : v.AnchorLeg?.Moved(o).Reversed();
             if (first == null) return null;
             float cut = Cut(hb, first);
@@ -1586,15 +1567,16 @@ namespace EconomyOverhaul
                     var s = b.Second.Moved(o); keptSecond = Kept(hb, s, out float cs);
                     second = Join(hb, s, cs, arrival);
                 }
-                // S1: another island's land within 20 m of its hull, the kept part of its leg or of its second way
+                // closed: another island's land within 20 m of its hull, the kept part of its leg or of its second way
                 if (joined == null || OthersNear(hb, Outline(b.Centre + o, b.Heading, b.Length, b.Beam)) || OthersNear(hb, Samples(kept)) || keptSecond != null && OthersNear(hb, Samples(keptSecond)))
                 { closed.Add(b.Number); map.BerthsClosed++; continue; }
-                var nb = new TraderBerth { Port = b.Port, Number = b.Number, Class = b.Class, Side = b.Side, Centre = b.Centre + o, Heading = b.Heading, Length = b.Length, Beam = b.Beam, WayOut = b.WayOut, Leg = joined, Second = second };
+                var nb = new TraderBerth { Port = b.Port, Number = b.Number, Class = b.Class, Side = b.Side, Centre = b.Centre + o, Heading = b.Heading, Length = b.Length, Beam = b.Beam, WayOut = b.WayOut, Leg = joined, Second = second, FleetOnly = b.FleetOnly, Slides = b.Slides };
                 if (b.Direct != null)
                 {
                     var d = b.Direct.Moved(o);
                     if (OthersNear(hb, Samples(d))) map.DirectDropped++; else nb.Direct = d;
                 }
+                LaneMap.SetStraights(nb);     // the joined ways' straight ends from the berth, as at load
                 h.Berths.Add(nb);
             }
             bool anchorOpen = false;
@@ -1722,8 +1704,8 @@ namespace EconomyOverhaul
                 }
             }
             if (found < 0) return null;
-            // the start cell itself qualifies (it holds `to`, or is clear water already): one point, as the smoothing below needs two
-            // cells and gave none (MakeHarbour's last point threw, Join left a leg short; the deep review of 2026-11-02, Claude's fix)
+            // the start cell itself qualifies (it holds `to`, or is clear water already): one point, as the smoothing below needs two cells and would
+            // give none (MakeHarbour's last point would throw, Join would leave a leg short)
             if (prev[found] < 0) return new List<Vector2> { to ?? Centre(found) };
             var cells = new List<Vector2>();
             for (int k = found; k >= 0; k = prev[k]) cells.Add(Centre(k));
@@ -1863,9 +1845,9 @@ namespace EconomyOverhaul
             private static double Sq(double v) => v * v;
             private bool IsBlocked(long cx, long cz) => Blocked.Contains(Key(cx, cz));
 
-            // Open sea: a cell whose 1 km tile no land's box touches. A cell is open when clear cells join it to open sea (8 moves, no
-            // corner cut, as A*); with `end`, cells within 200 m of p are clear. A fill's result is kept only when it had no free end
-            // (one through an end's free cells holds water joined only that way: EconomyOverhaul_FAILED.md).
+            // Open sea: a cell whose 1 km tile no land's box touches. A cell is open when clear cells join it to open sea (8 moves, no corner cut, as
+            // A*); with `end`, cells within 200 m of p are clear. A fill's result is kept only when it had no free end (one through an end's free cells
+            // holds water joined only that way).
             private bool OpenSea(long cx, long cz)
             {
                 if (tiles == null)
@@ -2092,10 +2074,10 @@ namespace EconomyOverhaul
         }
     }
 
-    // The routes' work on a background thread (S2): asked for as soon as the islands are moved while a game loads or prepares
-    // (VisibleTraders.AskEarly, the user's 10) and again at the first scan after, dropped by the next load or new game
-    // (VisibleTraders.Reset: Cancel); the last map made is kept for the session and taken again for the same islands' places (a
-    // reload of the same game). The thread is a background one, so quitting the game ends it.
+    // The routes' work on a background thread: asked for as soon as the islands are moved while a game loads or prepares (VisibleTraders.AskEarly)
+    // and again at the first scan after, dropped by the next load or new game (VisibleTraders.Reset: Cancel); the last map made is kept for the
+    // session and taken again for the same islands' places (a reload of the same game). The thread is a background one, so quitting the game
+    // ends it.
     internal static class ScrambledLanes
     {
         private static int generation;

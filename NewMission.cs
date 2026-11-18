@@ -8,8 +8,7 @@ using UnityEngine;
 
 namespace EconomyOverhaul
 {
-    // A good's mission category (MISSIONS_DRAFT.md stage 2). None: mail, the unused slot 45, or a mission accepted before
-    // the rework (its record has no category).
+    // A good's mission category. None: mail, the unused slot 45, or a mission record from an older save (it has no category).
     public enum MissionCategory { None, Staple, ConsumerGoods, Industrial, Luxury }
     // A mission's modifiers (saved as MissionState.modifiers).
     // Fragile (stage 3): the cargo breaks in hull impacts; shown as "(FRAGILE)" after the category, not in the name.
@@ -35,12 +34,11 @@ namespace EconomyOverhaul
         }
         public static string CategoryName(MissionCategory c) =>
             c == MissionCategory.Staple ? "Staple" : c == MissionCategory.ConsumerGoods ? "Consumer goods" : c == MissionCategory.Industrial ? "Industrial" : c == MissionCategory.Luxury ? "Luxury" : "";
-        // The reputation level a category needs (also the game's due-day tier, Port.GetDueDay), and its factors (gold and
-        // reputation revised by the user, 2026-10-15). An old record (None) gets the game's reputation.
+        // The reputation level a category needs (also the game's due-day tier, Port.GetDueDay), and its factors. An old record (None)
+        // gets the game's reputation.
         public static int CategoryRep(MissionCategory c) => c == MissionCategory.Industrial ? 1 : c == MissionCategory.Luxury ? 2 : 0;
-        // A good's own gate, over its category's: the dearest Luxury missions later (the user, 2026-10-30, MISSION_GATES_DRAFT.md:
-        // "make silver, marble, blue tobacco, sculptures unlock at rep 3. Gem at rep 4, Gold at rep 5"). Every gate of 2 or more
-        // gets the same due days in the game (Port.GetDueDay), so theirs stay Luxury's ("keep their mission due day same").
+        // A good's own gate, over its category's: the dearest Luxury missions later. Every gate of 2 or more gets the same due days in
+        // the game (Port.GetDueDay), so their due days stay Luxury's.
         public static int GoodRep(int good)
         {
             switch (good)
@@ -55,9 +53,9 @@ namespace EconomyOverhaul
             c == MissionCategory.Staple ? 1.1f : c == MissionCategory.ConsumerGoods ? 1.25f : c == MissionCategory.Industrial ? 1.5f : c == MissionCategory.Luxury ? 2 : 1;
         public static float CategoryReputation(MissionCategory c) =>
             c == MissionCategory.Staple ? 1.3f : c == MissionCategory.ConsumerGoods ? 1.1f : c == MissionCategory.Industrial ? .9f : c == MissionCategory.Luxury ? .7f : 1;
-        // The distance part of the gold: x1.5 for Staple, x1.1 for Consumer goods (the user, 2026-10-15).
+        // The distance part of the gold: x1.5 for Staple, x1.1 for Consumer goods.
         public static float CategoryDistance(MissionCategory c) => c == MissionCategory.Staple ? 1.5f : c == MissionCategory.ConsumerGoods ? 1.1f : 1;
-        // Cargo: the table x the factor, then the offset (the user, 2026-10-15: Staple x2 - 2, Consumer goods x2 - 3, Luxury - 1).
+        // Cargo: the table x the factor, then the offset (Staple x2 - 2, Consumer goods x2 - 3, Luxury - 1).
         public static float CategoryCargo(MissionCategory c) => c == MissionCategory.Staple || c == MissionCategory.ConsumerGoods ? 2 : 1;
         public static int CategoryCargoOffset(MissionCategory c) => c == MissionCategory.Staple ? -2 : c == MissionCategory.ConsumerGoods ? -3 : c == MissionCategory.Luxury ? -1 : 0;
         // Port capacity on completion, local (origin / destination): Staple 3/3, Consumer goods 2/2, Industrial 1/3, Luxury 3/1;
@@ -75,8 +73,7 @@ namespace EconomyOverhaul
             }
             return world ? 2 * local : local;
         }
-        // Cargo per mission by reputation level: 3-8 at levels 0-5 (the game's), 9 at 6, 10 at 7, 11 at 8, no limit from 9 (the
-        // user, 2026-10-16; was no limit from 6).
+        // Cargo per mission by reputation level: 3-8 at levels 0-5 (the game's), 9 at 6, 10 at 7, 11 at 8, no limit from 9.
         public const int NoCargoLimit = 999999;
         public static int CargoTable(int level) => level < 6 ? Math.Max(0, level) + 3 : level == 6 ? 9 : level == 7 ? 10 : level == 8 ? 11 : NoCargoLimit;
         // The table x the category's factor (2 or 1, so a whole number), plus its offset, at least 1 (the warehouse's stock caps
@@ -95,25 +92,24 @@ namespace EconomyOverhaul
             (profit * (ocean ? WorldProfitShare : LocalProfitShare) + distance * DistanceFee * CategoryDistance(c)) * RewardMult * CategoryGold(c);
         public static bool MissionWorthwhile(float profit, float distance) => distance * DistanceFee <= profit;
         // An offer's gold for its crates (unitProfit: one crate's profit), rounded down to whole crates. The game's
-        // PruneNoSupplyMissions cuts an offer's count to the warehouse but keeps its gold (2 crates were paid as 12): a cut offer
-        // is priced again by this for its new count (the user, 2026-10-18, D-B1 (b)).
+        // PruneNoSupplyMissions cuts an offer's count to the warehouse but keeps its gold (2 crates would be paid as 12): a cut
+        // offer is priced again by this for its new count.
         public static int MissionTotal(float unitProfit, int count, float distance, bool ocean, MissionCategory c) =>
             count <= 0 ? 0 : Mathf.RoundToInt(MissionGold(unitProfit * count, distance, ocean, c)) / count * count;
-        // Missions open at once: the game's level + 2, at most 5 (the game's mission slots; 6 at rep 6 dropped by the user,
-        // 2026-10-14).
+        // Missions open at once: the game's level + 2, at most 5 (the game's mission slots).
         public static int MaxMissions(int level) => Math.Min(5, Math.Max(0, level) + 2);
         public const int MissionListCap = 30;
         // Which offers of a tab (in its sorted order) stay: the cap counts cargo offers only, the best paid first; every mail
-        // offer stays and takes no room (the user, 2026-10-15: cargo and mail never limit each other). A cut of the mixed list
-        // by pay dropped all mail at the big ports (Fort Aestrin, Dragon Cliffs), as mail pays the least per mile.
+        // offer stays and takes no room, so cargo and mail never limit each other: a cut of the mixed list by pay would drop all
+        // mail at the big ports (Fort Aestrin, Dragon Cliffs), as mail pays the least per mile.
         public static bool[] KeepOffers(bool[] mail, int cap)
         {
             int cargo = 0;
             return mail.Select(m => m || cargo++ < cap).ToArray();
         }
         // The same cap by each offer's pay as it is now (pay: its pay a mile), the list left in its order: an offer cut to the
-        // warehouse is paid less once priced again for its new count (D-B1), so its place in the game's order, made from its uncut
-        // pay, is no longer its rank; the best paid stay (ties in list order). The deep review of 2026-10-19, Claude's fix.
+        // warehouse is paid less once priced again for its new count, so its place in the game's order, made from its uncut
+        // pay, is not its rank; the best paid stay (ties in list order).
         public static bool[] KeepOffersByPay(float[] pay, bool[] mail, int cap)
         {
             var byPay = Enumerable.Range(0, pay.Length).OrderByDescending(i => pay[i]).ToArray();   // a stable sort
@@ -124,19 +120,19 @@ namespace EconomyOverhaul
         }
         // After an accept, which of the origin's other offers of that good stay (counts: their crates; stock: what the warehouse
         // holds now): each one the warehouse still holds whole, on its own, as when the offers were made (each capped by the
-        // warehouse alone, the other offers not counted: the user, 2026-10-17); each later accept checks again. An offer stays as
-        // offered or goes (a cut Bulk would no longer double), so an offer that doesn't fit goes (the review of 2026-10-18,
-        // Claude's fix; the game builds its lists again after every accept, from the warehouse the crates just left).
+        // warehouse alone, the other offers not counted); each later accept checks again. An offer stays as offered or goes (a cut
+        // Bulk would not double), so an offer that doesn't fit goes (the game builds its lists again after every accept, from the
+        // warehouse the crates just left).
         public static bool[] KeepAfterAccept(int[] counts, int stock) => counts.Select(c => c > 0 && c <= stock).ToArray();
         public const int NoMissionsFrom = 33;   // Saffron Island
 
-        // ---- The mission board's sort, region filter and quantity (BOARD_PLANK_DRAFT.md; the user's request of 2026-11-08) ----
-        // The sort (the user: "Per mile, Gold, Rep"): every one high to low, by real value across the coins ("Make value sorting by actual
-        // value, currently vanilla game sort with currency number, so mission paid in Emerald dragon always come up on top").
+        // ---- The mission board's sort, region filter and quantity ----
+        // The sort: every one high to low, by real value across the coins (the game's own sort compares the coin numbers, whatever
+        // the currency).
         public enum BoardSort { PerMile, Gold, Reputation }
         public static readonly string[] BoardSortNames = { "Gold per mile", "Gold reward", "Reputation reward" };
-        // The region filter ("another one filter region, so it only show the quest from that region"): the destination's reputation
-        // account (every offer starts at this port; Chronos' port 21 is "Chronos", its own account 3); index 0 all, 1-4 the accounts 0-3.
+        // The region filter: the destination's reputation account (every offer starts at this port; Chronos' port 21 is "Chronos", its own
+        // account 3); index 0 all, 1-4 the accounts 0-3.
         public static readonly string[] BoardRegionNames = { "All regions", "Al'Ankh", "Emerald", "Aestrin", "Chronos" };
         // A coin amount's real value: the game turns a base price into a coin by multiplying by its rate (CurrencyMarket.currentPrices,
         // GetSellPriceInCurrency), so the amount over the rate.
@@ -146,10 +142,8 @@ namespace EconomyOverhaul
         // The board's order: the offers whose region passes (region -1: all), high to low by key, ties in list order (a stable sort).
         public static int[] BoardOrder(double[] keys, int[] regions, int region) =>
             Enumerable.Range(0, keys.Length).Where(i => region < 0 || regions[i] == region).OrderByDescending(i => keys[i]).ToArray();
-        // The quantity ("player can click the arrow to decide how many cargo he want to take from that mission. Reduce the reward
-        // accordingly. mission with modifier cannot change the quantity"; "Quantity minimal 1, maximum as current's quantity"; the user's
-        // answers: "Gold, rep and capacity", Fragile "No, only Bulk/Pristine/Rush"): 1 to the offered count; the gold, the reputation and the
-        // port capacity award each x chosen / offered (gold and capacity rounded to the nearest).
+        // The quantity: 1 to the offered count, chosen on a mission without Bulk, Pristine or Rush (Fragile does not lock it); the gold,
+        // the reputation and the port capacity award each x chosen / offered (gold and capacity rounded to the nearest).
         public static bool QuantityLocked(MissionModifier m) => (m & (MissionModifier.Bulk | MissionModifier.Pristine | MissionModifier.Rush)) != 0;
         public static int ChosenCount(int chosen, int offered) => Math.Max(1, Math.Min(Math.Max(1, offered), chosen));
         public static int ChosenShare(int whole, int chosen, int offered) =>
@@ -162,8 +156,8 @@ namespace EconomyOverhaul
         public static string ModifierPrefix(MissionModifier m) =>
             ((m & MissionModifier.Bulk) != 0 ? "Bulk " : "") + ((m & MissionModifier.Pristine) != 0 ? "Pristine " : "") + ((m & MissionModifier.Rush) != 0 ? "Rush " : "");
         // Gold at generation: each modifier x2 (Bulk on its doubled cargo); a Pristine mission pays its x2 only when delivered dry.
-        // Bulk's gold before its x2 (the user, 2026-10-15: option 1): the normal mission's pay per crate x Bulk's crates, so the
-        // game's distance pay, made once per mission, is not spread thin over the bigger cargo.
+        // Bulk's gold before its x2: the normal mission's pay per crate x Bulk's crates, so the game's distance pay, made once per
+        // mission, is not spread thin over the bigger cargo.
         public static int BulkGold(int normalTotal, int normalCount, int bulkCount) => normalCount > 0 ? normalTotal / normalCount * bulkCount : normalTotal;
         public static int ModifierGold(MissionModifier m) =>
             ((m & MissionModifier.Bulk) != 0 ? 2 : 1) * ((m & MissionModifier.Pristine) != 0 ? 2 : 1) * ((m & MissionModifier.Rush) != 0 ? 2 : 1) * ((m & MissionModifier.Fragile) != 0 ? 2 : 1);
@@ -177,15 +171,14 @@ namespace EconomyOverhaul
         public static int RushDays(float missionDistance, float knots, float realDaySeconds) =>
             Mathf.RoundToInt(missionDistance / 10f / (knots * 1.852f * realDaySeconds / 3600f));
         // The water hint's damage percent (CargoCondition.RefreshHint): Pristine pays its x2 at 0% (fully dry); at 100% (ruined)
-        // it costs 50 reputation a unit with both regions, as a reward is given (the user, 2026-10-14).
+        // it costs 50 reputation a unit with both regions, as a reward is given.
         public static int WaterHintPercent(float health) => Mathf.RoundToInt(100 - Mathf.Clamp(health, 0, 100));
         public const int PristineRuinedRep = -50;
         // Which offers get a modifier, rolled once per tab list: per category one mission at most (Luxury two), at random among
         // that category's offers (Pristine only on goods water can damage). Rep 3: each 50% (Luxury's two independently); rep 4+:
         // always, Luxury's Pristine and Rush on one mission or on two, 50/50. roll: random numbers in [0, 1).
-        // Bulk (the user, 2026-10-17): twice the normal cargo, only where the port's warehouse holds that many of the good (the tab's
-        // other offers not counted); an offer that can't double never gets Bulk. Was: up to twice the limit as far as the
-        // warehouse held beyond the other offers, which often left it at the normal cargo with x2 gold.
+        // Bulk: twice the normal cargo, only where the port's warehouse holds that many of the good (the tab's other offers not
+        // counted); an offer that can't double never gets Bulk, so a Bulk mission is never left at the normal cargo with x2 gold.
         public static bool BulkDoubles(int normalCount, int stock) => normalCount > 0 && stock >= 2 * normalCount;
         // doublable: which offers Bulk may go to (Rules.BulkDoubles); null for all.
         public static MissionModifier[] RollModifiers(MissionCategory[] categories, bool[] damageable, int level, Func<double> roll, bool[] doublable = null)
@@ -216,22 +209,22 @@ namespace EconomyOverhaul
         public const int FragileTools = 33; public const float FragileChance = .5f;
         // A crate's impact damage 0-100 (0 intact): each counted hull hit adds the hull damage it added x 100 x 2.5.
         public static float FragileDamage(float impact, float hullAdded) => Math.Min(100, Math.Max(0, impact) + Math.Max(0, hullAdded) * 250);
-        // The hint's "Cargo Damage" line counts up from 0% intact (the user, 2026-10-16; was 100% counting down), as the water
-        // line does; a fragile mission pays its x2 at 0%, at 100% 100 reputation a crate lost in both regions (and its gold / 2 x its
-        // condition, a few coins at most). The crack look follows this rounded value, so it matches the hint's percent.
+        // The hint's "Cargo Damage" line counts up from 0% intact, as the water line does; a fragile mission pays its x2 at 0%, at
+        // 100% 100 reputation a crate lost in both regions (and its gold / 2 x its condition, a few coins at most). The crack look
+        // follows this rounded value, so it matches the hint's percent.
         public static int DamagePercent(float impact) => Mathf.RoundToInt(Mathf.Clamp(impact, 0, 100));
         public static float IntactFactor(float impact) => (100 - Mathf.Clamp(impact, 0, 100)) / 100f;
         public const int FragileRuinedRep = -100;
         // ---- The warehouse ----
-        // Its slots: the port's capacity (rounded) + 100 (the user, 2026-10-15). A new game, and an older save once, start it 80% full.
+        // Its slots: the port's capacity (rounded) + 100. A new game, and an older save once, start it 80% full.
         public static int WarehouseCapacity(float portCapacity) => Math.Max(1, (int)Math.Round(portCapacity, MidpointRounding.AwayFromZero)) + 100;
         public static int PrefillSlots(int capacity) => (int)Math.Round(capacity * .8, MidpointRounding.AwayFromZero);
         public static bool WarehouseGood(int good, float[] production) => good > 0 && good < production.Length && production[good] > 0 && Category(good) != MissionCategory.None;
         // The good for the next slot. counts: each good's slots besides the one being filled; production: the market's;
         // stocked: goods it can sell now; roll: a random number in [0, 1]. Each produced good is kept within ±15% of its
-        // production share of the slots (the user, 2026-10-15; was ±10%): one under 85% comes first (the furthest under), else a
-        // random one under 115%, weighted by its share. 0: no produced good in stock (the warehouse waits for production); -1:
-        // every one in stock is at 115% or more (the slot stays as it is).
+        // production share of the slots: one under 85% comes first (the furthest under), else a random one under 115%, weighted
+        // by its share. 0: no produced good in stock (the warehouse waits for production); -1: every one in stock is at 115% or
+        // more (the slot stays as it is).
         public const double WarehouseBand = .15;
         public static int WarehousePick(int[] counts, float[] production, bool[] stocked, int capacity, double roll)
         {
@@ -321,7 +314,7 @@ namespace EconomyOverhaul
         static void Postfix(MissionListUI __instance, PortDude dude) => PortCapacityUI.Show(__instance, dude);
     }
 
-    // ---- The mission page (MISSIONS_DRAFT.md stage 2: the layout the user approved, mockup round 3) ----
+    // ---- The mission page ----
     // Every mission page, mail included. Postal Expansion (1.1.3) draws no reputation line of its own while a type
     // EconomyOverhaul.MissionPage exists: keep this name and namespace. Runs after Postal Expansion's page postfixes and places
     // its letter lines too.
@@ -370,7 +363,7 @@ namespace EconomyOverhaul
             // count, as of today), and the note just above Accept.
             reputation.text = DeliveryRep(mission) * mission.goodCount + " reputation";
             note.text = (mods & MissionModifier.Pristine) != 0 ? "Only get increased reward\nwhen fully dry" : (mods & MissionModifier.Fragile) != 0 ? "Only get increased reward\nwhen intact" : "";
-            QuantityArrows.Show(page, mission);   // the cargo count's arrows (BOARD_PLANK_DRAFT.md, 2026-11-08)
+            QuantityArrows.Show(page, mission);   // the cargo count's arrows
         }
 
         private static bool Build(MissionDetailsUI page)
@@ -425,8 +418,8 @@ namespace EconomyOverhaul
         [System.Runtime.Serialization.OptionalField] public int category;
         // Its modifiers (MissionModifier flags); 0 for none and for records from before them.
         [System.Runtime.Serialization.OptionalField] public int modifiers;
-        // The offer's crates when fewer were chosen with the board's arrows (BOARD_PLANK_DRAFT.md, 2026-11-08): its reputation per crate and
-        // port capacity award are scaled by the count / this. 0 for a mission taken whole and for every record from before.
+        // The offer's crates when fewer were chosen with the board's arrows: its reputation per crate and port capacity award are scaled
+        // by the count / this. 0 for a mission taken whole and for every record from an older save.
         [System.Runtime.Serialization.OptionalField] public int offered;
     }
     internal static class Missions
@@ -434,8 +427,8 @@ namespace EconomyOverhaul
         private static readonly Dictionary<int, List<Mission>> offers = new Dictionary<int, List<Mission>>();
         private static readonly Dictionary<Mission, bool> sources = new Dictionary<Mission, bool>();
         private static readonly Dictionary<Mission, MissionModifier> offerModifiers = new Dictionary<Mission, MissionModifier>();
-        // Each cargo offer of this opening as offered (its crates and its gold in the destination's coin), for the board's arrows and order
-        // (BOARD_PLANK_DRAFT.md, 2026-11-08): the arrows change the offer's own goodCount and totalPrice.
+        // Each cargo offer of this opening as offered (its crates and its gold in the destination's coin), for the board's arrows and
+        // order: the arrows change the offer's own goodCount and totalPrice.
         private static readonly Dictionary<Mission, (int count, int total)> offered = new Dictionary<Mission, (int count, int total)>();
         internal static readonly HashSet<int> DeliveredItems = new HashSet<int>();
         [ThreadStatic] internal static Good Delivering;
@@ -491,10 +484,10 @@ namespace EconomyOverhaul
             }
             Board.Changed();
             // The game builds its lists again after every accept (MissionDetailsUI.ClickButton), from the warehouse the accepted
-            // crates just left. The lists of this opening stay (their rolls kept): the taken offer leaves them (it was left as an
-            // empty row that still counted in the pages), and each of the origin's other offers of that good, on both tabs, stays
-            // while the warehouse still holds it whole (Rules.KeepAfterAccept). Was: the other tab's offers still counted the crates
-            // just taken (12 rice, an offer on each tab: 24 crates; the review of 2026-10-18, Claude's fix).
+            // crates just left. The lists of this opening stay (their rolls kept): the taken offer leaves them (else it is an empty row
+            // that still counts in the pages), and each of the origin's other offers of that good, on both tabs, stays while the
+            // warehouse still holds it whole (Rules.KeepAfterAccept): the other tab's offers must not count the crates just taken
+            // (12 rice with an offer on each tab would make 24 crates).
             int port = m.originPort.portIndex; bool worldTab = sources.TryGetValue(m, out bool fromWorld) ? fromWorld : m.distance >= 140;
             var lists = new[] { port * 2 + (worldTab ? 1 : 0), port * 2 + (worldTab ? 0 : 1) }.Where(offers.ContainsKey).Select(k => offers[k]).ToArray();
             foreach (var list in lists)
@@ -503,8 +496,8 @@ namespace EconomyOverhaul
             int good = GoodIndex(m); var office = m.originPort.GetComponent<IslandMissionOffice>(); var warehouse = office ? office.GetData() : null;
             var same = lists.SelectMany(l => l.Where(x => !Postal(x) && GoodIndex(x) == good)).ToArray();
             // Each kept offer judged at its offered count, not the count chosen with the arrows: Choose can raise a kept offer back to it
-            // without a stock check (the deep review of 2026-11-09: two offers of 12 rice on 12 in the warehouse, both cut to 6, one taken;
-            // the other, kept at 6, raised to 12 and taken, made 12 crates from 6).
+            // without a stock check (two offers of 12 rice on 12 in the warehouse, both cut to 6, one taken: the other, kept at 6, could be
+            // raised to 12 and taken, making 12 crates from 6).
             var keep = Rules.KeepAfterAccept(same.Select(OfferedCount).ToArray(), warehouse == null ? 0 : warehouse.Count(x => x == good));
             var gone = new HashSet<Mission>(same.Where((x, i) => !keep[i]));
             if (gone.Count > 0) foreach (var list in lists) list.RemoveAll(gone.Contains);
@@ -525,8 +518,7 @@ namespace EconomyOverhaul
             if (delta > 0)
             {
                 int g = PrefabsDirectory.ItemToGoodIndex(r.prefab); var market = World.Market(r.destination);
-                // a delivery lifts a demanding port's supply as a sale does, so it can end its event too (it never went through
-                // SellGood's check; the deep review of 2026-11-02, Claude's fix)
+                // a delivery lifts a demanding port's supply as a sale does, so it can end its event too (it doesn't go through SellGood's check)
                 if (market && g > 0 && g < market.currentSupply.Length)
                 {
                     market.currentSupply[g] += .5f * delta; Economy.Refresh(market);
@@ -538,7 +530,7 @@ namespace EconomyOverhaul
             {
                 var c = (MissionCategory)r.category; var mods = (MissionModifier)r.modifiers;
                 r.awarded = true;
-                // fewer crates chosen than offered: the award x chosen / offered, rounded (the user, 2026-11-08: "Gold, rep and capacity")
+                // fewer crates chosen than offered: the award x chosen / offered, rounded
                 Economy.Award(r.origin, Rules.ChosenShare(Rules.CapacityAward(c, r.world, true) + Rules.ModifierCapacity(c, mods, true), m.goodCount, r.offered));
                 Economy.Award(r.destination, Rules.ChosenShare(Rules.CapacityAward(c, r.world, false) + Rules.ModifierCapacity(c, mods, false), m.goodCount, r.offered));
             }
@@ -599,7 +591,7 @@ namespace EconomyOverhaul
             if (item && pristine && Ruined(item, true)) return Rules.PristineRuinedRep;
             if (item && fragile && Ruined(item, false)) return Rules.FragileRuinedRep;
             if (rep <= 0) return rep;
-            // fewer crates chosen than offered: the offered crate's figure (BOARD_PLANK_DRAFT.md, Rules.RepScale)
+            // fewer crates chosen than offered: the offered crate's figure (Rules.RepScale)
             float factor = Rules.CategoryReputation(c) * ((mods & MissionModifier.Bulk) != 0 ? 2 : 1) * Rules.RepScale(m.goodCount, OfferedCount(m));
             if (!item) factor *= (pristine ? 2 : 1) * (fragile ? 2 : 1);
             else if ((pristine || fragile) && Kept(item, pristine)) factor *= 2;
@@ -607,8 +599,8 @@ namespace EconomyOverhaul
             return Mathf.RoundToInt(rep * factor);
         }
         // After a load the game rebuilds each mission's name from its good: the modifiers go back in front.
-        // The option "Enable fragile cargo" off (the user, 2026-10-15): every mission drops its Fragile modifier for good, with
-        // its x2 gold (a taken mission's record and price, the offers on show); a fragile mission's tools crates are plain again.
+        // The option "Enable fragile cargo" off: every mission drops its Fragile modifier for good, with its x2 gold (a taken
+        // mission's record and price, the offers on show); a fragile mission's tools crates are plain again.
         // Runs when the option is turned off and after a load while it is off.
         internal static void DropFragile()
         {
@@ -713,7 +705,7 @@ namespace EconomyOverhaul
         }
         // A save of the mod from before the warehouse rework (state version 4: 0.8.5-0.9.5), once: the old contents go back to
         // the market they were bought from, then the warehouse is resized and prefilled. A first install into a vanilla save does
-        // not come here: its stock and warehouses are cleared by the new game's preparation (MIDSAVE_DRAFT.md).
+        // not come here: its stock and warehouses are cleared by the new game's preparation.
         // The sales are batched as a trader's arrival is (Fleet.Arrive): the market's own report is set once afterwards, by
         // World.Load's Economy.Refresh of every market.
         internal static void Migrate(IslandMarket m, IslandMissionOffice office, MarketState s)
@@ -737,7 +729,7 @@ namespace EconomyOverhaul
                 list = Build(office, world); offers.Add(key, list);
                 foreach (var mission in list) sources[mission] = world;
             }
-            // The board's order and region (BOARD_PLANK_DRAFT.md, 2026-11-08): the game's paging and Mission Rework read this view.
+            // The board's order and region: the game's paging and Mission Rework read this view.
             var view = Board.View(list);
             m.GetPort().SetMissonCount(view.Count);
             var result = new Mission[5];
@@ -788,7 +780,7 @@ namespace EconomyOverhaul
             foreach (var dest in Port.ports)
             {
                 // Only to ports the mod manages (Supply): a mission to another mod's port fails the save's check of its port
-                // (StateCodec.PortId) and saving goes off (the review of 2026-10-18, Claude's fix).
+                // (StateCodec.PortId) and saving goes off.
                 if (!dest || dest == origin || dest.portIndex == 7 || dest.portIndex == 33 || !Supply.Contains(dest.portIndex)) continue;
                 var report = m.knownPrices[dest.portIndex];
                 if (report == null || !report.approved) continue;
@@ -821,10 +813,9 @@ namespace EconomyOverhaul
             list.Sort((a, b) => b.pricePerKm.CompareTo(a.pricePerKm));
             var before = list.ToDictionary(x => x, x => x.goodCount);
             list = (List<Mission>)Fields.Call(office, "PruneNoSupplyMissions", list);
-            // An offer the prune cut to the warehouse's stock is priced again for its new count (D-B1; Bulk then pays per crate of
+            // An offer the prune cut to the warehouse's stock is priced again for its new count (Bulk then pays per crate of
             // the cut offer). The list keeps the game's order; the 30-offer cap counts each offer's pay as it is now.
-            // A cut offer the game would not make at its new count (its worth test: the distance fee over the profit) is dropped
-            // (the user, 2026-10-19, Q1: "b").
+            // A cut offer the game would not make at its new count (its worth test: the distance fee over the profit) is dropped.
             var unworthy = new HashSet<Mission>();
             foreach (var mission in list)
                 if (pricing.TryGetValue(mission, out var p) && mission.goodCount < before[mission])
@@ -846,7 +837,7 @@ namespace EconomyOverhaul
             return list;
         }
     }
-    // ---- The mission board's order and region (BOARD_PLANK_DRAFT.md; the user's request of 2026-11-08) ----
+    // ---- The mission board's order and region ----
     // The sort and the region chosen on the board's dropdowns, kept for the game session (not saved). A tab's view: its offers in that order
     // and region, made again only after a change (a choice, an accept, a new opening, the fragile option); an offer is sorted as offered, so
     // an arrow's click doesn't move it. Postal Expansion sorts its own list again (by the coin number): its result is put in this order too.
@@ -869,8 +860,8 @@ namespace EconomyOverhaul
         internal static List<Mission> Ordered(List<Mission> list)
         {
             var items = list.Where(x => x != null && x.destinationPort).ToList();
-            // The filter's region is the reputation account (Chronos' port 21 lies in region 2 but is its own account 3, the filter's "Chronos";
-            // the deep review of 2026-11-09). Rate keeps the game's region: a mission is paid in currency[(int)destinationPort.region].
+            // The filter's region is the reputation account (Chronos' port 21 lies in region 2 but is its own account 3, the filter's "Chronos").
+            // Rate keeps the game's region: a mission is paid in currency[(int)destinationPort.region].
             var keys = items.Select(Key).ToArray(); var regions = items.Select(x => Reputations.Account(x.destinationPort)).ToArray();
             return Rules.BoardOrder(keys, regions, Region).Select(i => items[i]).ToList();
         }
@@ -884,18 +875,18 @@ namespace EconomyOverhaul
         private static readonly Func<Mission, int> GameRep = AccessTools.MethodDelegate<Func<Mission, int>>(AccessTools.Method(typeof(Mission), "GetDeliveryRep"));
         private static double Key(Mission m) => Rules.BoardKey(Sort, RealTotal(m), m.distance, Sort == Rules.BoardSort.Reputation ? Reputation(m) : 0);
     }
-    // The two dropdowns on the port's mission list (the user: "Mission UI now have 2 drop down list as filter"): each a plate copied from the
-    // list's back button (the game's row plate), narrower, left of the list, under the list's page buttons, so they show exactly while the port's
-    // offers do (the game hides the page buttons in the log book, Mission Rework while it shows the player's own missions). A click on a plate
-    // opens its choices as plates under it, the chosen one in the plate's own shade and the others darker; a choice closes it and the list goes
-    // back to page 1 (the game's ResetPage, which Postal Expansion takes over for its own paging).
+    // The two dropdowns on the port's mission list: each a plate copied from the list's back button (the game's row plate), narrower, left of
+    // the list, under the list's page buttons, so they show exactly while the port's offers do (the game hides the page buttons in the log
+    // book, Mission Rework while it shows the player's own missions). A click on a plate opens its choices as plates under it, the chosen one
+    // in the plate's own shade and the others darker; a choice closes it and the list goes back to page 1 (the game's ResetPage, which Postal
+    // Expansion takes over for its own paging).
     internal sealed class BoardUI : MonoBehaviour
     {
         // In the page buttons' frame (+x the screen's left): the list's tabs stand at y .19, its rows .049 apart. X and Width (a share of the
         // back button's width) only where the room left of the list can't be measured; else the plates fill that room (Room).
         internal const float X = .40f, SortY = .19f, RegionY = .12f, Step = .049f, Width = .62f, Shade = .78f;
         // Between the plates and the list, and the screen's edge kept free (a share of its width: the room is read on the plates' pivot plane, and
-        // their tilted, deep plates came out about 10 px wider there at 1280 x 720, mb-4); the narrowest plate (a share of the back button).
+        // their tilted, deep plates come out about 10 px wider there at 1280 x 720); the narrowest plate (a share of the back button).
         internal const float ListGap = .016f, EdgeMargin = .02f, MinWidth = .3f;
         internal sealed class Drop
         {
@@ -921,8 +912,8 @@ namespace EconomyOverhaul
         }
         // The room left of the list on the player's screen, in the page buttons' frame: from the list's left edge (its back button's and welcome
         // box's) to the screen's edge where the plates stand, seen through the camera that draws the board (the game's "UI camera", its field of
-        // view fixed, found by name as MouseButtonPointer does). NaN where it can't be measured. Was a fixed place: at 1280 x 720 it ran 61 px off
-        // the screen (mb-2, 2026-11-08), and the room changes with the screen's shape (about 190 px at 16:9, little at 4:3).
+        // view fixed, found by name as MouseButtonPointer does). NaN where it can't be measured. Measured, not a fixed place: the room changes
+        // with the screen's shape (about 190 px at 16:9, little at 4:3; a fixed place can run 61 px off a 1280 x 720 screen).
         internal static float Room(MissionListUI list, out float listLeft)
         {
             listLeft = 0;
@@ -1034,8 +1025,7 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(MissionListUI), "EnablePortMissionUI")] internal static class BoardOpenPatch
     { static void Postfix(MissionListUI __instance) => BoardUI.Opened(__instance); }
 
-    // The quantity arrows beside the mission page's cargo count (the user: "Add 2 arrow beside mission UI's cargo quantity, player can click the
-    // arrow to decide how many cargo he want to take from that mission"): the list's own page arrows (left, fewer; right, more), at half their
+    // The quantity arrows beside the mission page's cargo count: the list's own page arrows (left, fewer; right, more), at half their
     // size, either side of the count, the count moved right by an arrow's width so the left one stands where the count stood. Shown only on an
     // offer whose crates can be chosen (Missions.CanChoose); a click changes the offer and the page shows it at once (its texts and lines).
     internal static class QuantityArrows
@@ -1055,8 +1045,8 @@ namespace EconomyOverhaul
             var p = amount.transform.localPosition;
             if (!on) { p.x = amountX; amount.transform.localPosition = p; less.SetActive(false); more.SetActive(false); return; }
             // +x is the screen's left: the left arrow where the count began, or a gap right of the "Amount:" label where the count began closer to it
-            // (mb-2, 2026-11-08: the arrow's plate 2 px into the label at the count's place); the count an arrow's width and a gap to its right,
-            // the right arrow after it.
+            // (at the count's place the arrow's plate can stand 2 px into the label); the count an arrow's width and a gap to its right, the right
+            // arrow after it.
             float from = label ? Mathf.Min(amountX, LabelRight(label, amount.transform.parent) - LabelGap) : amountX;
             float start = from - 2 * half - Gap, width = BookUI.MeasureLine(amount, amount.text);
             p.x = start; amount.transform.localPosition = p;
@@ -1104,7 +1094,9 @@ namespace EconomyOverhaul
         {
             var page = built; if (!page || current == null || !Missions.Choose(current, delta)) return;
             OfficeUiParts.Click();
-            Fields.Call(page, "UpdateTexts"); MissionPage.Show(page, current);
+            // UpdateTexts empties the location line, which UpdateMap writes (the game's "(map unavailable) approximate location", and
+            // NANDTweaks' and Scrambled Seas' patches on it): both run, as InsertMissionData runs them, without its sound and map unzoom.
+            Fields.Call(page, "UpdateTexts"); Fields.Call(page, "UpdateMap"); MissionPage.Show(page, current);
         }
         // For tests: an arrow clicked as the player clicks it.
         internal static void Click(int delta) { var a = delta < 0 ? less : more; if (a) a.GetComponentInChildren<LoanAction>(true)?.OnActivate(); }
@@ -1127,9 +1119,8 @@ namespace EconomyOverhaul
         private static void Ordered(List<Mission> __result) { if (__result != null && !Startup.BlocksGameplay) Board.InPlace(__result); }
     }
 
-    // Mission Rework (written for 1.0.3; 1.0.4 in the workspace) handles this method in its own prefix and shows the list there: the
-    // offers are cleared before it runs (HarmonyBefore), and page 0 is built here so the count is set (the game fetches the same
-    // page anyway).
+    // Mission Rework (1.0.3, 1.0.4) handles this method in its own prefix and shows the list there: the offers are cleared before it
+    // runs (HarmonyBefore), and page 0 is built here so the count is set (the game fetches the same page anyway).
     [HarmonyPatch(typeof(PortDude), "ActivateMissionListUI")] internal static class OfficeOpenPatch
     {
         [HarmonyBefore("com.nandbrew.missionrework")]
@@ -1147,8 +1138,7 @@ namespace EconomyOverhaul
             if(mission==null||mission.missionIndex>=0)return false;
             return PlayerMissions.missions==null||PlayerMissions.GetMissionCount()<Reputations.MaxMissions(mission.originPort);
         }
-        // Only when the game's own method ran: a refused accept (this prefix's, or another mod's) took no mission (the deep review
-        // of 2026-11-02, Claude's fix)
+        // Only when the game's own method ran: a refused accept (this prefix's, or another mod's) takes no mission
         static void Postfix(Mission mission, bool __runOriginal) { if (__runOriginal && mission != null) Missions.Accepted(mission); }
     }
     [HarmonyPatch(typeof(Good), "Deliver")] internal static class DeliveryContextPatch
@@ -1219,7 +1209,7 @@ namespace EconomyOverhaul
         }
     }
 
-    // Mission crates are placed as trade-book cargo is (the user, 2026-10-16): all of a mission's crates made at once at the game's
+    // Mission crates are placed as trade-book cargo is: all of a mission's crates made at once at the game's
     // own spots (Port.DoSpawnGoods: 1 m apart along the port's forward, a new row up after 7) and registered with the mission as
     // the game does, then the whole order placed in the market's warehouse box by the trade book's rules (CargoPlacement.Place:
     // as faced, else a quarter turn either way; crate by crate at the rough ports). An order that finds no room stays at the

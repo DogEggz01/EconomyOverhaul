@@ -13,10 +13,9 @@ namespace EconomyOverhaul
     // ---- Rules ----
     public static partial class Rules
     {
-        // Fragile cargo's cracks (crack mockup 10, the user 2026-10-16): the game's hull damage texture shows a texel where its
-        // alpha passes the cut. The game's own cut (0.033 x the damage) marks 17% of the surface at full damage, two thirds of
-        // it by 30%; this cut marks a share growing evenly from 1% at damage 1 to the same 17% at 100: the texture alpha's
-        // quantiles at damage 0.01, 0.1, 0.2 ... 1 ("damage tex 4" read from the game's files). 2 (nothing) at 0.
+        // Fragile cargo's cracks: the game's hull damage texture shows a texel where its alpha passes the cut. The game's own cut (0.033 x the
+        // damage) marks 17% of the surface at full damage, two thirds of it by 30%; this cut marks a share growing evenly from 1% at damage 1 to the
+        // same 17% at 100: the texture alpha's quantiles at damage 0.01, 0.1, 0.2 ... 1 ("damage tex 4" read from the game's files). 2 (nothing) at 0.
         private static readonly float[] CrackCuts = { .8471f, .5725f, .4824f, .3804f, .2941f, .2275f, .1647f, .1098f, .0745f, .0471f, .0353f };
         public static float CrackCut(int damagePercent)
         {
@@ -54,8 +53,7 @@ namespace EconomyOverhaul
         // the clear-day rate, cloudy night at 1/2.
         public const double ClearDayDryingPerHour = 30 / (11 + 13 * .75);
         public static float EffectiveRain(float raw) => float.IsNaN(raw) || float.IsInfinity(raw) || raw < RainThreshold ? 0 : raw;
-        // Water aboard (bilge) or the sea damages cargo once it reaches 14% of the cargo's height (user, 2026-10-10; was 5%).
-        // Shallower water neither damages nor lets it dry.
+        // Water aboard (bilge) or the sea damages cargo once it reaches 14% of the cargo's height. Shallower water neither damages nor lets it dry.
         public const double ImmersionStart = .14;
         public static bool DamagingImmersion(double depth, double cargoHeight) => cargoHeight > 0 && depth > 0 && depth >= cargoHeight * ImmersionStart;
         // Proportional to rain with no minimum, scaled by the exposed share of the cargo's top face.
@@ -68,45 +66,52 @@ namespace EconomyOverhaul
         }
         // Only the open share dries, with the weather: drying falls in a straight line to nothing at full cover.
         public static double DryingPerHour(double exposed, double clouds, double hour) => Clamp(exposed, 0, 1) * OpenDryingPerHour(clouds, hour);
+        // The configurator's speeds: multipliers on the rates above (water aboard or the sea and rain; drying), nothing else (where cargo wets
+        // or dries, the ceilings and the ruin line stay). Indexed by Settings' enums: water damage 0.25x to 1x; drying as the water damage speed
+        // (0) or 1x to 3x.
+        public static readonly double[] WaterDamageSpeeds = { .25, .5, .75, 1 };
+        public static readonly double[] DryingSpeeds = { 0, 1, 1.5, 2, 2.5, 3 };   // 0: as the water damage speed
+        public static double WaterDamageSpeed(int choice) => WaterDamageSpeeds[Math.Max(0, Math.Min(WaterDamageSpeeds.Length - 1, choice))];
+        public static double DryingSpeed(int choice, double waterDamageSpeed)
+        {
+            double speed = DryingSpeeds[Math.Max(0, Math.Min(DryingSpeeds.Length - 1, choice))];
+            return speed > 0 ? speed : waterDamageSpeed;
+        }
         // noDry: sealed liquids (alcohol and water). coverKnown: the shelter scan has run since the
-        // cargo settled. exposed: open share of the top face, 0-1. ceiling: how far this good dries back.
+        // cargo settled. exposed: open share of the top face, 0-1. ceiling: how far this good dries back. damageSpeed, dryingSpeed:
+        // the configurator's multipliers (1: as designed).
         public static float AdvanceCondition(float health, double gameHours, bool noDry, bool waterContact,
-            bool damagingWater, double rain, bool coverKnown, double exposed, double clouds, double hour, float ceiling = DryingCeiling)
+            bool damagingWater, double rain, bool coverKnown, double exposed, double clouds, double hour, float ceiling = DryingCeiling,
+            double damageSpeed = 1, double dryingSpeed = 1)
         {
             gameHours = Math.Max(0, gameHours);
-            double damage = (damagingWater ? ImmersionPerHour : 0) + (coverKnown ? RainDamagePerHour(rain, exposed) : 0);
+            double damage = ((damagingWater ? ImmersionPerHour : 0) + (coverKnown ? RainDamagePerHour(rain, exposed) : 0)) * Math.Max(0, damageSpeed);
             if (damage > 0) return (float)Math.Max(0, health - gameHours * damage);
+            if (damagingWater || coverKnown && RainDamagePerHour(rain, exposed) > 0) return health;   // getting wetter, only slower: no drying
             if (waterContact || rain > 0 || noDry || !coverKnown || Ruined(health) || health >= ceiling) return health;
-            return (float)Math.Min(ceiling, health + gameHours * DryingPerHour(exposed, clouds, hour));
+            return (float)Math.Min(ceiling, health + gameHours * DryingPerHour(exposed, clouds, hour) * Math.Max(0, dryingSpeed));
         }
-        // Whether cargo is getting wetter now, the conditions AdvanceCondition takes condition off under (the user, 2026-10-23,
-        // SMALL_REQUESTS_DRAFT.md: "if it's out of the condition that will get wet, it don't show blue outline anymore", "rain should
-        // mark blue outline if it's not fully covered"): water at ImmersionStart or more, or rain on a top not fully covered once its
-        // cover is known. Wet cargo out of the water and the rain is not.
+        // Whether cargo is getting wetter now, the conditions AdvanceCondition takes condition off under: water at ImmersionStart or more, or rain
+        // on a top not fully covered once its cover is known. Wet cargo out of the water and the rain is not.
         public static bool WettingNow(bool damagingWater, double rain, bool coverKnown, double exposed) => damagingWater || coverKnown && rain > 0 && exposed > 0;
-        // No water damage counted for this long after a load or a wake (the user, 2026-11-06, LOAD_WAKE_COVER_DRAFT.md: "let water
-        // damage start counting after 5 sec player load into game or wake up from sleep", then "make the water immune time to 10 sec
-        // instead"): seconds at the game's normal speed.
+        // No water damage counted for this long after a load or a wake: seconds at the game's normal speed.
         public const float WaterHoldSeconds = 10;
-        // Opened cargo (the user, 2026-10-30, EVENT_REACH_WATER_DRAFT.md §3: "If player unseal or drink from the cargo. the cargo will
-        // get their water damage turned off and resume their original looks"): a barrel holding fewer units, or a crate fewer
-        // items, than its prefab. Read from the units, so a sip, a pour, a spill or another mod's drink all count.
+        // Opened cargo (its water damage off, its original look back): a barrel holding fewer units, or a crate fewer items, than its prefab. Read
+        // from the units, so a sip, a pour, a spill or another mod's drink all count.
         public static bool Opened(float units, float full) => full > 0 && units < full;
-        // Out of the trade ("P1 yes"): opened at 100% water damage (condition 0, where a liquid's price drops to x0.1), so a top-up
+        // Out of the trade: opened at 100% water damage (condition 0, where a liquid's price drops to x0.1), so a top-up
         // can't sell it at full price: the market takes it as not full, a shopkeeper pays an empty barrel's 25.
         public static bool OutOfTrade(bool opened, float health) => opened && health <= 0;
         public const int OpenedBarrelPrice = 25;
-        // The outline of a looked-at crate getting wetter (the user: S5 (b), "use blue A for outline"), in place of the game's look
-        // colour.
+        // The outline of a looked-at crate getting wetter, in place of the game's look colour.
         public static readonly Color WetOutlineColor = new Color(.05f, .15f, .75f);
-        // The cargo hint's own lines, added to the item's description below the game's look text. LookUI draws the look text
-        // (extraText: name, crate quantity, a mission's destination and due day) down from its anchor, and the description
-        // (hintText) centred on an anchor 1.3 look lines lower, in lines 0.6 as tall (QA -HintProbe, 0.39.1). So a blank line
-        // before our lines moves them down only half a hint line, 0.3 of a look line, and each line after the first lifts them
-        // as much. Three blank lines clear a two-line look text (the crate quantity layout of 0.5.5); each further look line
-        // needs 10/3 more, rounded up.
-        // cover: the share of the cargo's top under cover in whole percent, or -1 for no line (user, 2026-10-10: an option, off
-        // by default). With a one-line look text a third line lifts the block too: one more blank line per line beyond two.
+        // The cargo hint's own lines, added to the item's description below the game's look text. LookUI draws the look text (extraText: name,
+        // crate quantity, a mission's destination and due day) down from its anchor, and the description (hintText) centred on an anchor 1.3 look
+        // lines lower, in lines 0.6 as tall. So a blank line before our lines moves them down only half a hint line, 0.3 of a look line, and each
+        // line after the first lifts them as much. Three blank lines clear a two-line look text (a crate's name and quantity); each further look
+        // line needs 10/3 more, rounded up.
+        // cover: the share of the cargo's top under cover in whole percent, or -1 for no line (an option, off by default). With a one-line look
+        // text a third line lifts the block too: one more blank line per line beyond two.
         public static string HintSuffix(string description, string lookText, int percent, bool loan, int cover = -1, int damage = -1)
         {
             var lines = new List<string>(3);
@@ -174,16 +179,16 @@ namespace EconomyOverhaul
         // unit in the same currency queues exactly this back. Zero when there is none to unwind.
         public int fxCurrency;
         public double fxPressure;
-        // Fragile cargo (stage 3 of MISSIONS_DRAFT.md): impact damage 0-100 (0 intact; a save from before reads 0), and whether
-        // this crate is fragile though its good is not (tools spawned by a fragile mission).
+        // Fragile cargo: impact damage 0-100 (0 intact; an older save reads 0), and whether this crate is fragile though its good is not (tools
+        // spawned by a fragile mission).
         [System.Runtime.Serialization.OptionalField] public float impact;
         [System.Runtime.Serialization.OptionalField] public bool fragile;
-        // Respondentia: the port the crate was financed at, + 1 (0: unknown, as for a crate financed before this field); its
-        // sale's reputation counts the distance from there (Loans.Reward, LOAN_REP_DRAFT.md).
+        // Respondentia: the port the crate was financed at, + 1 (0: unknown, as for a crate financed before this field); its sale's reputation
+        // counts the distance from there (Loans.Reward).
         [System.Runtime.Serialization.OptionalField] public int financedPort;
         // Opened (Rules.Opened): water damage off, its condition kept as it was then. False in a save from before (set again at load).
         [System.Runtime.Serialization.OptionalField] public bool opened;
-        // Bought at a trade office's book (TradeOffice.cs): its port + 1, where it can't be sold (Q23); 0 for every other crate.
+        // Bought at a trade office's book (TradeOffice.cs): its port + 1, where it can't be sold; 0 for every other crate.
         [System.Runtime.Serialization.OptionalField] public int officePort;
     }
     public sealed class CargoCondition : MonoBehaviour
@@ -195,9 +200,9 @@ namespace EconomyOverhaul
         internal static readonly HashSet<int> LiquidCargo = new HashSet<int> { 10, 11, 12, 13, 36, 58 };   // also the office book's drinkable barrels (TradeOffice.cs, OfficeBook.Offered)
         private const int CoverGrid = 5;                                  // 5x5 rays over the top face
         private static readonly int[] CoverFirst = { 0, 4, 20, 24, 12 };  // corner cells and centre cell
-        // Rays start this far above the cargo: under the invisible ceilings the cities have for the player (Gold Rock City's
-        // COL slab 10-35 m over its streets, its col_1/col_2 at 139 m; the user, 2026-10-11: cargo there read 100% cover in
-        // open air; was 400 m). Real shelter (roofs, cabins, tarps, stacked cargo) is within a few metres.
+        // Rays start this far above the cargo: under the invisible ceilings the cities have for the player (Gold Rock City's COL slab 10-35 m over
+        // its streets, its col_1/col_2 at 139 m: from higher, cargo there reads 100% cover in open air). Real shelter (roofs, cabins, tarps, stacked
+        // cargo) is within a few metres.
         private const float CoverRayHeight = 15;
         // Layer 12 (OnlyPlayerCol): the invisible walls and ceilings the cities have for the player (Gold Rock City's COL slab is
         // one). Cargo bodies pass through them (the physics settings: layer 12 ignores loose items, 2, and those aboard, 8), so
@@ -372,8 +377,8 @@ namespace EconomyOverhaul
             if (Rules.FragileGood(c.good) || c.fragile) return true;
             return FragileMission(c, item ? item.GetComponent<Good>() : null);
         }
-        // The same for this crate, with its Good kept from the last look (RefreshHint asks every frame per crate, a GetComponent
-        // each time; the deep review of 2026-11-09): looked up again whenever the kept one is gone, as before.
+        // The same for this crate, with its Good kept from the last look (RefreshHint asks every frame per crate, a GetComponent each time): looked
+        // up again whenever the kept one is gone.
         private bool FragileNow()
         {
             if (state == null || !Settings.FragileEnabled) return false;
@@ -466,15 +471,14 @@ namespace EconomyOverhaul
         // Something was set on, lifted off or removed from above this cargo. Runs a frame later
         // so a destroyed item is gone and a lifted one is already in a hand.
         internal void RequestCoverRecheck() { if (state != null && state.exposure != 0) coverRecheckAt = Time.frameCount + 1; }
-        // Downward rays over a 5x5 grid on the cargo's outline seen from above; each blocked ray covers its share of the cells on
-        // the cargo. Each ray ends 1 cm over the cargo's own top on its line (A1, HULL_SIDE_WET_DRAFT.md): ended over the highest
-        // corner of the cargo's turned box, a barrel rolled under a low deck read the rays ending above the deck, open (swt-1: 0%
-        // rolled 45 degrees, 100% at 0). A cell whose line misses the cargo (a round barrel's box corners) is left out. Corners
-        // and centre first: if those on the cargo agree (open deck or a full roof) the rest take the same value, unless something
-        // was just set on top, when all are cast so a small item still counts. Aboard, "down" is the ship's own (F1,
-        // LOAD_WAKE_COVER_DRAFT.md): the reading is kept, so it must not hold the ship's tilt of the moment. A scan aboard (other than the one the boat's
-        // own move asks for) is checked once more after the boat has gone 100 m: a pier or a cliff it found may be behind.
-        // The ship roofs' cloth points are read once for the whole scan (Tarps.BeginScan; the deep review of 2026-11-09).
+        // Downward rays over a 5x5 grid on the cargo's outline seen from above; each blocked ray covers its share of the cells on the cargo. Each
+        // ray ends 1 cm over the cargo's own top on its line: ended over the highest corner of the cargo's turned box, a barrel rolled under a low
+        // deck would read the rays ending above the deck, open (0% rolled 45 degrees, 100% at 0). A cell whose line misses the cargo (a round
+        // barrel's box corners) is left out. Corners and centre first: if those on the cargo agree (open deck or a full roof) the rest take the same
+        // value, unless something was just set on top, when all are cast so a small item still counts. Aboard, "down" is the ship's own: the reading
+        // is kept, so it must not hold the ship's tilt of the moment. A scan aboard (other than the one the boat's own move asks for) is checked once
+        // more after the boat has gone 100 m: a pier or a cliff it found may be behind. The ship roofs' cloth points are read once for the whole
+        // scan (Tarps.BeginScan).
         private void ScanCover(bool full, bool afterMove = false)
         {
             Tarps.BeginScan();
@@ -484,9 +488,9 @@ namespace EconomyOverhaul
         private void ScanCoverOnce(bool full, bool afterMove)
         {
             var boat = item.currentActualBoat; var walk = item.currentWalkCol;
-            // Whatever lies above the cargo counts, whatever its tilt. Aboard along the ship's own up, so its heel of the moment isn't read (the
-            // user, 2026-11-06, "Implement F1 only": a load or a sleep at sea read cargo at a cover's edge at 96% against 80%, kept until a
-            // put-down; cl-5c). Past 45 degrees, or a hull whose frame isn't upright, straight up in the world. On land always the world's.
+            // Whatever lies above the cargo counts, whatever its tilt. Aboard along the ship's own up, so its heel of the moment isn't read (a load or a
+            // sleep at sea would read cargo at a cover's edge at 96% against 80%, kept until a put-down). Past 45 degrees, or a hull whose frame isn't
+            // upright, straight up in the world. On land always the world's.
             Vector3 up = boat && boat.up.y > .7f ? boat.up : Vector3.up;
             moveRecheck = boat && !afterMove; if (moveRecheck) moveFrom = Real(boat.position);
             Bounds local = LocalMeshBounds();
@@ -601,7 +605,7 @@ namespace EconomyOverhaul
                 if (itemsOnly && !copy) continue;
                 if (hit.transform.IsChildOf(transform) || copy == item.itemRigidbodyC) continue;
                 if (CoverEvents.NotCover(hit.collider)) continue;   // an item in a hand, the inventory or the cart is never a roof
-                // nor the player's own body (aboard on the ship's walk copy, layer 11; the deep review of 2026-11-02, Claude's fix)
+                // nor the player's own body (aboard on the ship's walk copy, layer 11)
                 if (Refs.charController && hit.collider.transform.IsChildOf(Refs.charController.transform)) continue;
                 return true;
             }
@@ -666,21 +670,23 @@ namespace EconomyOverhaul
             bool coverKnown = state.exposure != 0;
             double exposed = coverKnown ? 1 - coveredFraction : 0;
             Wetting = Rules.WettingNow(damagingWater, rain, coverKnown, exposed);
-            double waterDamage = damagingWater ? elapsedHours * Rules.ImmersionPerHour : 0;
+            // The configurator's speeds scale the stains as they scale the condition, so the look keeps pace with it.
+            double damageSpeed = Settings.WaterDamageSpeed, dryingSpeed = Settings.DryingSpeed;
+            double waterDamage = damagingWater ? elapsedHours * Rules.ImmersionPerHour * damageSpeed : 0;
             // Stains: open cells get the full rain rate, covered cells none (the history applies the mask).
-            double rainDamage = coverKnown && exposed > 0 ? elapsedHours * Rules.RainDamagePerHour(rain, 1) : 0;
+            double rainDamage = coverKnown && exposed > 0 ? elapsedHours * Rules.RainDamagePerHour(rain, 1) * damageSpeed : 0;
             // Surface moisture may finish evaporating at the ceiling; the permanent stain never decreases. Liquids and
             // ruined cargo cannot dry; open cells dry with the weather and time of day, covered cells not at all.
             bool canDry = near && !LiquidCargo.Contains(state.good) && !Rules.Ruined(state.health) && depth <= 0 && rain == 0
                 && coverKnown && exposed > 0;
-            double dryOpen = canDry ? elapsedHours * Rules.OpenDryingPerHour(clouds, hour) : 0;
+            double dryOpen = canDry ? elapsedHours * Rules.OpenDryingPerHour(clouds, hour) * dryingSpeed : 0;
             if (waterDamage > 0 || rainDamage > 0 || history != null && canDry)
             {
                 EnsureHistory();
                 history.Accumulate(wetVolumes, waterDamage, rainDamage, dryOpen, coveredCells, transform.localToWorldMatrix, b);
             }
             state.health = Rules.AdvanceCondition(state.health, elapsedHours, LiquidCargo.Contains(state.good) || !near, depth > 0,
-                damagingWater, rain, coverKnown, exposed, clouds, hour, Rules.Ceiling(state.good));
+                damagingWater, rain, coverKnown, exposed, clouds, hour, Rules.Ceiling(state.good), damageSpeed, dryingSpeed);
             CaptureParent(); if (Math.Abs(visualHealth - state.health) >= .1f) RefreshAppearance();
         }
         private float WaterDepth(Bounds bounds)
@@ -820,7 +826,7 @@ namespace EconomyOverhaul
                     var source = original[i];
                     // Queue 1999: drawn before anything at the opaque queue (2000), so a mark another mod draws on the crate's
                     // surface without writing depth (NANDTweaks' mission logo: Standard in fade mode at 2000) paints over the wet
-                    // crate as over the dry one; the shader's Offset covers marks that do write depth (user, 2026-10-10).
+                    // crate as over the dry one; the shader's Offset covers marks that do write depth.
                     if (source) { owned[i] = new Material(source) { shader = CargoStainMaterial.Shader, name = source.name + " (EconomyOverhaul instance)" }; owned[i].renderQueue = WetQueue; }
                 }
                 var binding = new AppearanceBinding { renderer = r, mesh = mesh, originals = original, owned = owned };
@@ -934,11 +940,10 @@ namespace EconomyOverhaul
         // Within 1 km of the player.
         internal static bool Near(Vector3 p) { Read(); return !hasPlayer || (p - player).sqrMagnitude <= Reach * Reach; }
     }
-    // The look outline of a crate getting wetter drawn blue (SMALL_REQUESTS_DRAFT.md, request 3). The game draws every looked-at
-    // outline in one colour, slot 1 of the main camera's OutlineEffect (its scene colour, a pale tan); only one item is looked at
-    // at a time, so that colour is set to Rules.WetOutlineColor while the looked-at item is a wet crate (CargoCondition.Want each
-    // frame) and given back its scene colour otherwise, just before the camera draws. Other outlines in that slot at that moment (a
-    // new mission's crates, outlined until first picked up) turn blue with it (the user: "keep the shared colour limit").
+    // The look outline of a crate getting wetter drawn blue. The game draws every looked-at outline in one colour, slot 1 of the main camera's
+    // OutlineEffect (its scene colour, a pale tan); only one item is looked at at a time, so that colour is set to Rules.WetOutlineColor while
+    // the looked-at item is a wet crate (CargoCondition.Want each frame) and given back its scene colour otherwise, just before the camera
+    // draws. Other outlines in that slot at that moment (a new mission's crates, outlined until first picked up) turn blue with it.
     internal static class WetOutline
     {
         private static int wanted = -1;

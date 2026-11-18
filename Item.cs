@@ -22,8 +22,19 @@ namespace EconomyOverhaul
             double planks = boatPrice > 0 && lumberValue > 0 ? boatPrice * 3.5 * .01 * capacity * .1 / (lumberValue / 128) : capacity / 120;
             return double.IsNaN(planks) || planks < 1.5 ? 1 : (int)Math.Min(1000000, Math.Round(planks, MidpointRounding.AwayFromZero));
         }
-        // The setting "Planks needed: Fixed 0.5% per plank" (the user, 2026-10-27): every ship, 2 planks for 1%.
-        public const int FixedPlanksPerPercent = 2;
+        // The setting "Planks needed: Fixed per plank", a slider from 0.5% to 10% in 0.5% steps, default 0.5%: every ship, one plank repairs that
+        // percent of its hull. A stored value is snapped to the step and the range.
+        public const double PlankRepairLeast = .5, PlankRepairMost = 10, PlankRepairStep = .5;
+        public static double PlankRepairPercent(double percent) =>
+            double.IsNaN(percent) ? PlankRepairLeast : Math.Max(PlankRepairLeast, Math.Min(PlankRepairMost, Math.Round(percent / PlankRepairStep, MidpointRounding.AwayFromZero) * PlankRepairStep));
+        // A percent as shown: "0.5", "1", "1.5" ... "10".
+        public static string PercentText(double percent) => percent.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+        // The fixed way's hint: its last line the share one plank repairs ("Repaired per plank"), not planks per 1%.
+        public static string HullHintFixed(double progress, double damage, double percent)
+        {
+            var lines = HullHint(progress, damage, 1).Split('\n');
+            return lines[0] + "\n" + lines[1] + "\nHull repaired per plank: " + PercentText(PlankRepairPercent(percent)) + "%";
+        }
         // A caulked hull halves plank hammering: its oakum covers 1% of the hull's capacity, or all of the remaining damage
         // when less than 1% is left (oakum never exceeds damage x capacity). Vanilla oakum cannot fill the last 0.01, so
         // that shortfall is tolerated.
@@ -41,38 +52,28 @@ namespace EconomyOverhaul
         // layer above it (8-23), the same for every layer.
         public static int PlankLook(bool lumber, int i, int k, int j) => lumber ? 8 + 4 * i + j : 4 * i + 2 * k + j;
 
-        // The wood plank's size and attach mode (PALLET_PLANK_DRAFT.md, the user, 2026-10-24: "press Q/E to length/shorten the plank,
-        // from 0.5m to 4m"; "narrowest should be half the current width, widest should be 4 times"; "K4 use 0.25x then"; K3 "press
-        // H(same as bracing button) to switch attachment mode, default is current mode"), kept in its saved health with its look: look +
-        // 24 x (length code + 37 x (width code + 15 x mode)). Length code 0 today's 0.872 m, 1-36 0.5-4.0 m in 0.1 m steps; width code 0
-        // today's 0.152 m (1.0x), 1-12 1.25x-4.0x, 13 and 14 0.5x and 0.75x (steps of 0.25 from 1.0x, -2 to 12); mode 0 flat, 1 by one
-        // end. Every plank saved before (0-23) reads as today's plank, flat. Weight by area (K5 (a)), then by volume; today's plank 5 lb (the user,
-        // 2026-11-08: "change the standard plank weight to 6 lbs, and scale from here", "sorry 6.5 lbs", then "change the weight of plank to 5 lbs";
-        // 9.375 lb before, the game's lumber 1,200 lb / 128).
-        // Width and thickness on one 50 mm grid, for square beams (BOARD_PLANK_DRAFT.md, "Width and thickness on a 50 mm grid"; the user, 2026-11-08:
-        // "the width and thickness's step should be matching so player can create proper square beam", then "50 mm steps"; before it "make the
-        // biggest size of plank 4m x 1m x 1m"): 0.05 m to 1 m, 20 sizes (PlankGridSizes). The width starts at today's 0.152 m and a press goes to
-        // the next size on the grid (0.2 m wider, 0.15 m narrower); the thickness starts at today's 45 mm, then 0.05 m to 1 m. A plank saved with
-        // a released width (0.5x-4.0x in 0.25x steps, the width field) keeps it until O or L is pressed. Kept on top of the released code:
-        // + 26,640 x (thickness + 21 x width on the grid), 0 for none, the decode's limit 11,748,239, a whole number a float holds (under 16,777,216),
-        // so every plank saved before reads its own width and 45 mm. Weight by volume.
+        // The wood plank's size and attach mode, kept in its saved health with its look: look + 24 x (length code + 37 x (width code
+        // + 15 x mode)). Length code 0 today's 0.872 m, 1-36 0.5-4.0 m in 0.1 m steps; width code 0 today's 0.152 m (1.0x), 1-12
+        // 1.25x-4.0x, 13 and 14 0.5x and 0.75x (steps of 0.25 from 1.0x, -2 to 12); mode 0 flat, 1 by one end. A plank saved with
+        // health 0-23 reads as today's plank, flat. Today's plank weighs 5 lb, others by volume.
+        // Width and thickness on one 50 mm grid, for square beams: 0.05 m to 1 m, 20 sizes (PlankGridSizes). The width starts at
+        // today's 0.152 m and a press goes to the next size on the grid (0.2 m wider, 0.15 m narrower); the thickness starts at today's
+        // 45 mm, then 0.05 m to 1 m. A plank saved with a released width (0.5x-4.0x in 0.25x steps, the width field) keeps it until O
+        // or L is pressed. Kept on top of the released code: + 26,640 x (thickness + 21 x width on the grid), 0 for none, the decode's
+        // limit 11,748,239, a whole number a float holds (under 16,777,216), so every plank saved before reads its own width and 45 mm.
         public const int PlankLooks = 24, PlankLengthCodes = 37, PlankWidthCodes = 15, PlankMinWidthSteps = -2, PlankMaxWidthSteps = 12, PlankGridSizes = 20;
         public const float PlankLength0 = .872f, PlankWidth0 = .152f, PlankThickness = .045f, PlankMass0 = 5;
-        // The plank bundle the shops sell: 8 planks, weighing what they weigh (the user, 2026-11-08, asked whether the bundle should weigh 40 lb to match:
-        // "yes"; 75 lb before).
+        // The plank bundle the shops sell: 8 planks, weighing what they weigh.
         public const int PlankBundleCount = 8;
         public const float PlankBundleMass = PlankBundleCount * PlankMass0;
         public const float PlankMinLength = .5f, PlankMaxLength = 4, PlankLengthStep = .1f, PlankWidthStep = .25f, PlankGridStep = .05f;
-        // Its thickness (BOARD_PLANK_DRAFT.md; the user, 2026-11-08: "Make plank also able to increase thickness, current thickness is the
-        // minimal, allow to increase to 5 times the thickness. use IK for control"; "placement mode"; then the grid above): 0 today's 45 mm, 1-20 on
-        // the grid (PlankMaxThickSteps).
+        // Its thickness: 0 today's 45 mm, 1-20 on the grid (PlankMaxThickSteps).
         public const int PlankMaxThickSteps = PlankGridSizes, PlankGridCodes = PlankGridSizes + 1, PlankCodeSpan = PlankLooks * PlankLengthCodes * PlankWidthCodes * 2;
         // length: its code; width: the released steps from 1.0x (-2 to 12) while grid is 0; grid: the width on the 50 mm grid (1-20), 0 none; thick: 0 today's
         // 45 mm, 1-20 on the grid.
         public struct PlankShape { public int look, length, width, grid, thick; public bool end; }
-        // A plank as a vanilla table (PLANK_TABLE_DRAFT.md, the user, 2026-10-26: T1 only nailed, T2 any angle, T3 wall items still
-        // attach): the game's own `allowPlacingItems` on while it is bought, nailed and in placement mode (by one end), and the hand
-        // holds no wall item (a hook, a pole or a plank aimed at it attaches to it instead).
+        // A plank as a vanilla table: the game's own `allowPlacingItems` on while it is bought, nailed and in placement mode (by one
+        // end), at any angle, and the hand holds no wall item (a hook, a pole or a plank aimed at it attaches to it instead).
         public static bool PlankTable(bool sold, bool nailed, bool placement, bool wallItemHeld) => sold && nailed && placement && !wallItemHeld;
         public static float PlankCode(PlankShape s)
         {
@@ -118,31 +119,28 @@ namespace EconomyOverhaul
         public static float PlankMass(PlankShape s) => PlankMass0 * PlankLength(s.length) * PlankWidth(s) / (PlankLength0 * PlankWidth0) * PlankThickScale(s.thick);
         // Today's plank exactly: the look meshes are used for it.
         public static bool PlankPlain(PlankShape s) => s.length == 0 && s.width == 0 && s.grid == 0 && s.thick == 0 && !s.end;
-        // A held pole's or plank's weight after its size on the line under the view (the configurator's "Show pole and plank weight", 2026-11-08):
+        // A held pole's or plank's weight after its size on the line under the view (the configurator's "Show pole and plank weight"):
         // ", 10.0 lb" under 100 lb, ", 3353 lb" above.
         public static string WeightText(float lb) => ", " + (lb < 99.95f ? lb.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) : Math.Round(lb).ToString("F0", System.Globalization.CultureInfo.InvariantCulture)) + " lb";
-        // How far a rod (a pole, or a plank by one end) attached to a surface is lifted out of it so it rests on it, not in it (the
-        // user, 2026-10-24: a plank leaned 90 degrees "attached to the middle of the other plank"; asked, "Same, poles too"). It turns
-        // about the middle of its end face, so tilted or leaned part of that face would go into the surface. `side` and `up`: how much
-        // of the end face's two axes (a plank's width and thickness; a pole's across) lie along the surface's normal (their dot with
-        // it); `halfSide` and `halfUp` the face's half sizes. A pole's end is round (its corners on the circle), a plank's a rectangle.
-        // 0 standing straight out; leaned 90 a plank rests on its long edge (half its width), tilted 90 on its wide face.
+        // How far a rod (a pole, or a plank by one end) attached to a surface is lifted out of it so it rests on it, not in it. It
+        // turns about the middle of its end face, so tilted or leaned part of that face would go into the surface. `side` and `up`:
+        // how much of the end face's two axes (a plank's width and thickness; a pole's across) lie along the surface's normal (their
+        // dot with it); `halfSide` and `halfUp` the face's half sizes. A pole's end is round (its corners on the circle), a plank's a
+        // rectangle. 0 standing straight out; leaned 90 a plank rests on its long edge (half its width), tilted 90 on its wide face.
         public static float RestLift(float side, float up, float halfSide, float halfUp, bool round) =>
             round ? halfSide * (float)Math.Sqrt(side * side + up * up) : halfSide * Math.Abs(side) + halfUp * Math.Abs(up);
 
-        // The wood pole (user, 2026-10-12): 0.2-8 m in 0.1 m steps (user, 2026-10-13; was 0.5-5), 2 kg a metre, price 60; 2 m in
-        // the shops.
+        // The wood pole: 0.2-8 m in 0.1 m steps, 2 kg a metre, price 60; 2 m in the shops.
         public const float PoleMin = .2f, PoleMax = 8, PoleStep = .1f, PoleShopLength = 2, PoleKgPerMetre = 2;
-        // Pushing with a braced pole (user, 2026-10-13): 1.25 times the game's own push without one.
+        // Pushing with a braced pole: 1.25 times the game's own push without one.
         public const float PolePush = 1.25f;
-        // The fender from aboard (the user, 2026-10-14; 1.115 for 5 knots before): the dock push 1.908 times, so an 8 m pole stops at
-        // most 3.09 m/s (6 knots) within its 7.6 m reach (a 2 m pole about 1.8 m/s).
+        // The fender from aboard: the dock push 1.908 times, so an 8 m pole stops at most 3.09 m/s (6 knots) within its 7.6 m reach
+        // (a 2 m pole about 1.8 m/s).
         public const float PoleFender = 1.908f;
-        // The pole's wood strip in the items' atlas is one dark brown only from v .25 to .61, a lighter wood above it (the user's
-        // picture, 2026-10-13: a light tip from about 3.9 m; pole-brace-48 measured the change at .61) and a lighter line below .25
-        // (an 8 m pole, turning back at v .25, showed a brown ring there: the user). 3.4 m of it is used, from v .26 to .5745 (clear
-        // of both edges), a longer pole running back along it, mirrored (the user: one colour along the whole pole). Where along the
-        // strip a point d metres from the pole's base lies.
+        // The pole's wood strip in the items' atlas is one dark brown only from v .25 to .61, a lighter wood above it and a lighter
+        // line below .25 (a pole turning back at v .25 shows a brown ring there). 3.4 m of it is used, from v .26 to .5745 (clear of
+        // both edges), a longer pole running back along it, mirrored, so the whole pole is one colour. Where along the strip a point
+        // d metres from the pole's base lies.
         public const double PoleStrip = 3.4;
         public static double PoleGrain(double d) => Mirrored(d, PoleStrip);
         // A point d along a strip `strip` long, run to and fro (mirrored at each end): the pole's grain, a long plank's.
@@ -150,16 +148,15 @@ namespace EconomyOverhaul
         // Eased 0-1 at both ends (smoothstep): a pole laid down and raised.
         public static double Eased(double t) { t = Clamp(t, 0, 1); return t * t * (3 - 2 * t); }
         public const int PoleValue = 60;
-        // The wood pole bundle the shops sell (user, 2026-10-12): four 2 m poles, four poles' price and weight.
+        // The wood pole bundle the shops sell: four 2 m poles, four poles' price and weight.
         public const int PoleBundleCount = 4, PoleBundleValue = PoleValue * PoleBundleCount;
         public static float PoleBundleMass => PoleMass(PoleShopLength) * PoleBundleCount;
         public static int PoleTenths(double metres) => double.IsNaN(metres) || double.IsInfinity(metres) ? (int)Math.Round(PoleShopLength * 10) : (int)Math.Round(Clamp(metres, PoleMin, PoleMax) * 10);
         public static float PoleLength(double metres) => PoleTenths(metres) / 10f;
         public static float PoleMass(double metres) => PoleLength(metres) * PoleKgPerMetre;
-        // The pole's diameter (the user, 2026-10-24: "press O/L to increase/decrease diameter. Current diameter is the minimum, up to
-        // 10x thickness, each step 0.2x"): 1.0x (8 cm) to 10.0x in 0.2x steps (0-45). Kept in the saved health with the length:
-        // length + 10 x steps, so every pole saved before (health 0.2-8) reads as 1.0x. Weight by cross-section (the user: "By
-        // cross-section"): 2 a metre x the scale squared (a 2 m pole 4 lb at 1.0x, 16 at 2.0x, 400 at 10.0x).
+        // The pole's diameter: 1.0x (8 cm) to 10.0x in 0.2x steps (0-45). Kept in the saved health with the length: length + 10 x
+        // steps, so every pole saved before (health 0.2-8) reads as 1.0x. Weight by cross-section: 2 a metre x the scale squared (a
+        // 2 m pole 4 lb at 1.0x, 16 at 2.0x, 400 at 10.0x).
         public const int PoleMaxDiameterSteps = 45; public const float PoleDiameterStep = .2f, PoleCodeSpan = 10;
         public static int PoleDiameterSteps(double health) =>
             double.IsNaN(health) || double.IsInfinity(health) || health < PoleCodeSpan ? 0 : Clamp((int)Math.Floor(health / PoleCodeSpan), 0, PoleMaxDiameterSteps);
@@ -168,19 +165,19 @@ namespace EconomyOverhaul
         public static float PoleDiameterScale(int steps) => 1 + PoleDiameterStep * Clamp(steps, 0, PoleMaxDiameterSteps);
         public static float PoleMass(double metres, int steps) { float k = PoleDiameterScale(steps); return PoleMass(metres) * k * k; }
 
-        // Canvas tarps: health 0-100, worn 10 a game day while tied. Repair with a held pack (user, 2026-10-09): the tarp's
-        // health plus the pack's, at most 100 (the rest is lost; the pack is always used up).
+        // Canvas tarps: health 0-100, worn 10 a game day while tied. Repair with a held pack: the tarp's health plus the pack's, at
+        // most 100 (the rest is lost; the pack is always used up).
         public const float TarpFullHealth = 100, TarpWearPerDay = 10;
         public static float RepairedHealth(float tarp, float pack) =>
             Math.Min(TarpFullHealth, Math.Max(0, Finite(tarp)) + Math.Max(0, Finite(pack)));
-        // A tarp's health from its health and the game's clock when it was tied, loaded or re-based. With the option "Tarp
-        // wearing" off (user, 2026-10-09) it stays where it is.
+        // A tarp's health from its health and the game's clock when it was tied, loaded or re-based. With the option "Tarp wearing"
+        // off it stays where it is.
         public static float TarpHealth(float startHealth, double startClock, double now, bool wearing) =>
             (float)Clamp(wearing ? Finite(startHealth) - TarpWearPerDay * Math.Max(0, now - startClock) : Finite(startHealth), 0, TarpFullHealth);
         private static float Finite(float x) => float.IsNaN(x) || float.IsInfinity(x) ? 0 : x;
-        // A torn tarp's holes are seeded by its sides (to 0.1 m), in order of length: the order of the sides round the tarp can
-        // start at either of two corners after a load (Tarps.Order: the corner opposite the first lies at an angle of +-pi, its sign
-        // a float's), which moved the holes (the review of 2026-10-18, Claude's fix; each torn tarp's holes move once with it).
+        // A torn tarp's holes are seeded by its sides (to 0.1 m), in order of length: the order of the sides round the tarp can start
+        // at either of two corners after a load (Tarps.Order: the corner opposite the first lies at an angle of +-pi, its sign a
+        // float's), which would move the holes.
         // shortcut: a side within float noise of a 0.05 m boundary can still round the other way after a load; replace it by a
         // seed saved with the tarp if holes are seen to move.
         public static int TearSeed(float[] sides)
@@ -191,8 +188,8 @@ namespace EconomyOverhaul
         }
         // Which of the touching points that would fix one sheet point (each its height, whether it is a pole's end, its distance
         // seen from above to that sheet point's spot) fixes it: the highest, heights within 1 cm a tie, a pole's end first, then the
-        // nearest. By height alone float noise decided along a level pole and one end could be left with no fixed point (the pole
-        // end poking through: up to 40% of the grid's spacing; the user, 2026-10-18, B-B2 (b)). -1 when there are none.
+        // nearest. By height alone float noise decides along a level pole, and one end can be left with no fixed point (the pole end
+        // poking through, up to 40% of the grid's spacing). -1 when there are none.
         public const float TarpTie = .01f;
         public static int TarpClaim(IList<(float h, bool end, float dist)> c)
         {
@@ -207,11 +204,8 @@ namespace EconomyOverhaul
         }
 
         // ---- The wooden pallet and the wood vendors ----
-        // The wood prices (PALLET_JUNK_CREW_DRAFT.md §4): hundredths of what Kicia Bay's trade book asks for one lumber (Kicia Bay
-        // makes the lumber), at every vendor in its own port's coin. Kicia Bay: a plank bundle 10/100 and a pallet 20/100, as before
-        // ("Kicia bay wood bundle price stay as it is", "Pallet price is double from wood plank bundle (in code use the actual
-        // number...)"); the other ports 20% more (the user, 2026-10-24: "Change the price to let it be only 20% more expensive at
-        // this 3 city compare to kicia bay"): 12/100 and 24/100.
+        // The wood prices: hundredths of what Kicia Bay's trade book asks for one lumber (Kicia Bay makes the lumber), at every vendor
+        // in its own port's coin. Kicia Bay: a plank bundle 10/100 and a pallet 20/100; the other ports 20% more: 12/100 and 24/100.
         public const int BundleHundredthsKicia = 10, BundleHundredthsElsewhere = 12, PalletHundredthsKicia = 20, PalletHundredthsElsewhere = 24;
         public const int KiciaPort = 22;
         public static int WoodHundredths(bool pallet, int port) =>
@@ -219,27 +213,23 @@ namespace EconomyOverhaul
         // A share of a lumber price, rounded up (as the bundle's 1/10 was); an exact quotient stays exact in the division.
         public static int WoodShare(int lumber, int hundredths) => (int)Math.Ceiling(lumber * (long)hundredths / 100.0);
 
-        // The wooden pallet (the user, 2026-10-24): its top 1.45 x 1.28 m (P8), 0.25 m high, 45 lb (the user, 2026-11-08: "Reduce pallet
-        // weight to 45 lbs"; 80 from 2026-10-24; the game's mass is in pounds, as its mission board prints it), from its template
-        // (WoodPallets.Register): the game saves no mass (SavePrefabData), so a whole pallet loads with the template's 45 lb; only a
-        // half pallet's weight is set again at load (WoodPallets.ApplyHalf, from PlankLoadPatch). A sale takes 2/16 of a lumber from
-        // the port's stock (a plank bundle 1/16).
+        // The wooden pallet: its top 1.45 x 1.28 m, 0.25 m high, 45 lb (the game's mass is in pounds, as its mission board prints it),
+        // from its template (WoodPallets.Register): the game saves no mass (SavePrefabData), so a whole pallet loads with the
+        // template's 45 lb; only a half pallet's weight is set again at load (WoodPallets.ApplyHalf, from PlankLoadPatch). A sale
+        // takes 2/16 of a lumber from the port's stock (a plank bundle 1/16).
         public const float PalletWidth = 1.45f, PalletDepth = 1.28f, PalletHeight = .25f, PalletMass = 45, PalletLumber = 2f / 16;
         public const int PalletValue = 750;
-        // The half pallet (HALF_PALLET_DRAFT.md; the user, 2026-11-02: "Sold price and weight also half, other property should remain
-        // same as pallet"; H1 "cut across", H2 "2 half pallet", H4 "5", H5 "keep in pallet's prefab"): the pallet cut across its 1.28 m
-        // into two halves 1.45 x 0.64 m, each 375 and 22.5 lb (half the pallet's 45); kept in prefab 645 by a mark in its saved health (a whole pallet's is the
-        // lumber prefab's, never this; the mod reads a pallet's health nowhere else). A half cut again gives 5 planks (230 of its 375, a
-        // bundle gives 8 for 375: the user, "this way of generating plank should be less efficient").
+        // The half pallet: the pallet cut across its 1.28 m into two halves 1.45 x 0.64 m, each 375 and 22.5 lb (half the pallet's
+        // price and weight), all else the pallet's; kept in prefab 645 by a mark in its saved health (a whole pallet's is the lumber
+        // prefab's, never this; the mod reads a pallet's health nowhere else). A half cut again gives 5 planks (230 of its 375; a
+        // bundle gives 8 for 375), a less efficient way to make planks.
         public const float HalfDepth = PalletDepth / 2, HalfMass = PalletMass / 2, HalfMark = -645f;
         public const int HalfValue = PalletValue / 2, HalfPlanks = 5;
         public static bool IsHalfMark(float health) => health == HalfMark;
 
-        // The control hints of a held pole or plank (HALF_PALLET_DRAFT.md §4; the user, 2026-11-02, H7: "All 3"): each line its key and
-        // what it does, in the order shown. A pole: length, diameter, brace; a plank in placement mode (by one end): length, width,
-        // repair mode; in repair mode (flat) only H to placement mode. With things on it (its size fixed) only the H line.
-        // A plank in placement mode also its thickness (BOARD_PLANK_DRAFT.md, 2026-11-08). The keys' names are the configurator's (the user,
-        // 2026-11-08: "Add hotkey configuration for length/radius control of poles, and lenght/width/thickness control of plank").
+        // The control hints of a held pole or plank: each line its key and what it does, in the order shown. A pole: length,
+        // diameter, brace; a plank in placement mode (by one end): length, width, thickness, repair mode; in repair mode (flat) only
+        // H to placement mode. With things on it (its size fixed) only the H line. The keys' names are the configurator's.
         public static List<(string key, string what)> RodHintLines(bool pole, bool endMode, bool sizeFixed, string brace, string length = "Q/E", string width = "O/L", string thick = "I/K")
         {
             var lines = new List<(string, string)>();
@@ -251,8 +241,7 @@ namespace EconomyOverhaul
             else lines.Add((brace, "placement mode"));
             return lines;
         }
-        // Only the size keys: a held rod's first lines, and all of a pointed one's (attached, not nailed: no brace or mode there; the user, 2026-11-08,
-        // "Show them").
+        // Only the size keys: a held rod's first lines, and all of a pointed one's (attached, not nailed: no brace or mode there).
         public static List<(string key, string what)> RodSizeLines(bool pole, string length = "Q/E", string width = "O/L", string thick = "I/K")
         {
             var lines = new List<(string, string)> { (length, "length"), (width, pole ? "diameter" : "width") };
@@ -269,16 +258,14 @@ namespace EconomyOverhaul
             for (int i = from; i < parts.Length; i++) lines.Add(parts[i]);
             return lines;
         }
-        // Its top boards 40 mm (PALLET_PLANK_DRAFT.md P9, the user: "Make the wood plank at top of pallet be thicker a bit"; was 25 mm;
-        // Data/MakePallet.py), the height kept. Its wood the planks' material 15% darker (P8, the user: "pick 15% darker for pallet",
-        // from the pictures of probe palletshow run 20261024-162516): the material's colour times 0.85.
+        // Its top boards 40 mm (Data/MakePallet.py), within the pallet's 0.25 m. Its wood the planks' material 15% darker: the
+        // material's colour times 0.85.
         public const float PalletTopBoards = .04f, PalletShade = .85f;
 
-        // The ropes round a full pallet whose every crate is nailed (P4, the user: "rope appear when pallet is full and every crate is
-        // nailed"; "couple rope to tie up all cargo, vertical one goes below pallet"): two vertical loops across the pallet's width,
-        // under its top boards through the openings between its three runners (z ±0.295, the openings' middles: the runners stand at
-        // the ends and the middle, 0.10 m wide), and one band round the load at 55% of its height. Each loop in the pallet's frame
-        // (x across, y up, z along), the rope's middle line, `r` its half thickness; closed (the last point joins the first).
+        // The ropes round a full pallet whose every crate is nailed: two vertical loops across the pallet's width, under its top
+        // boards through the openings between its three runners (z ±0.295, the openings' middles: the runners stand at the ends and
+        // the middle, 0.10 m wide), and one band round the load at 55% of its height. Each loop in the pallet's frame (x across, y up,
+        // z along), the rope's middle line, `r` its half thickness; closed (the last point joins the first).
         public const float RopeHalf = .0125f, RopeOpening = .295f, RopeBand = .55f;
         public static bool Roped(int slots, int loaded, int nailed) => slots > 0 && loaded == slots && nailed == slots;
         public static (Vector3 min, Vector3 max) LoadBox(PalletLoad load, bool half = false)
@@ -304,7 +291,7 @@ namespace EconomyOverhaul
             loops.Add(new[] { new Vector3(-bx, y, -bz), new Vector3(-bx, y, bz), new Vector3(bx, y, bz), new Vector3(bx, y, -bz) });
             return loops;
         }
-        // What one pallet holds, one size at a time (the first crate decides), no higher than the large crate (P4 (c), P2, P8).
+        // What one pallet holds, one size at a time (the first crate decides), no higher than the large crate.
         public enum PalletLoad { None, LargeCrate, StandardCrate, SmallCrate, LargePackage, MediumPackage, StandardPackage, SmallPackage }
         public static PalletLoad LoadOf(string sizeDescription)
         {
@@ -320,12 +307,12 @@ namespace EconomyOverhaul
                 default: return PalletLoad.None;
             }
         }
-        // Each load's drawn size as it stands on the pallet (across its 1.45 m, up, along its 1.28 m: the meshes measured by the probe
-        // palletshow, 2026-10-24) and its slots: the bottom middles on the pallet's top, in the pallet's frame (x across, z along).
+        // Each load's drawn size as it stands on the pallet (across its 1.45 m, up, along its 1.28 m: the meshes measured) and its
+        // slots: the bottom middles on the pallet's top, in the pallet's frame (x across, z along).
         public static Vector3 LoadSize(PalletLoad load, bool half = false)
         {
-            // On a half pallet (1.45 x 0.64 m) the standard crate and the medium package stand turned, their length across (the user,
-            // 2026-11-02, H3: "yes"; 3.5 and 2.9 cm over each long side); the others as on the pallet.
+            // On a half pallet (1.45 x 0.64 m) the standard crate and the medium package stand turned, their length across (3.5 and
+            // 2.9 cm over each long side); the others as on the pallet.
             if (half && load == PalletLoad.StandardCrate) return new Vector3(1.270f, 1.029f, .710f);
             if (half && load == PalletLoad.MediumPackage) return new Vector3(1.216f, 1.016f, .698f);
             switch (load)
@@ -340,9 +327,8 @@ namespace EconomyOverhaul
                 default: return Vector3.zero;
             }
         }
-        // A half pallet takes half a pallet's count, rounded down (the user, 2026-11-02: "if normal pallet only take 1 crate, then half
-        // pallet can no longer take those crate"): no large crate or package, one standard crate, medium, standard or small package in
-        // its middle, three small crates in one row across.
+        // A half pallet takes half a pallet's count, rounded down, so none of a load a pallet takes only one of: no large crate or
+        // package, one standard crate, medium, standard or small package in its middle, three small crates in one row across.
         public static Vector3[] LoadSlots(PalletLoad load, bool half)
         {
             if (!half) return LoadSlots(load);
@@ -378,19 +364,16 @@ namespace EconomyOverhaul
             }
             return (Array.IndexOf(best, 2), Array.IndexOf(best, 1));
         }
-        // The vendor's stock (the user, 2026-10-24: "they will sell multiple pallet at once, stacking high"; then "make plank bundle
-        // sell 12 at GRC, Dragon cliff and Fort Aestrin", "pole bundle sell 10 at GRC, Dragoncliff and fort aestrin"): 8 pallets a
-        // stack, 2 mm apart so no two touch; 12 plank bundles (2 across, 6 high); 9 pole bundles 3 across and 3 high, 0.60 m, lower
-        // than the planks' 0.71 m ("please make the pole stack higher instead of wider", "remove 2 bundle of wood pole so it's still
-        // lower than plank", then "9 bundle, 3x3"). Kicia Bay keeps 6 pole bundles (3 across, 2 high; "all vendor sell 6 wood poles
-        // bundle"); its plank bundles are the stall's own 8.
+        // The vendor's stock: 8 pallets a stack, 2 mm apart so no two touch; 12 plank bundles (2 across, 6 high); 9 pole bundles 3
+        // across and 3 high, 0.60 m, lower than the planks' 0.71 m. Kicia Bay has 6 pole bundles (3 across, 2 high); its plank
+        // bundles are the stall's own 8.
         public const int VendorPallets = 8, VendorPlankBundles = 12, VendorPoleBundles = 9, KiciaPoleBundles = 6;
         public static int PoleBundlesAt(bool shared) => shared ? KiciaPoleBundles : VendorPoleBundles;
         public static int PoleColumnsAt(bool shared) => 3;
         public const float PalletStep = .252f, PlankBundleStep = .119f, PlankBundleAcross = .34f, PoleBundleStep = .2f;
         // Rows (against a building), the middles from the block's back: the plank bundles (0.71 m high) right before the pallets, at z
         // 1.43..2.11, the lower pole stack (0.60 m) in front at z 2.21..2.81, so the rows step down to the front and none hides
-        // another (the user: "so pallet stack don't block other 2 item").
+        // another.
         public const float PlankRowsZ = 1.77f, PoleRowsZ = 2.51f;
     }
 
@@ -401,7 +384,7 @@ namespace EconomyOverhaul
     {
         internal const int BundleIndex = 640, PlankIndex = 641, LumberIndex = 217, PaintingIndex = 120, LumberGood = 47, KiciaScene = 27;
         internal const float SwingSpeed = 275;   // vanilla nailing swings at 550 degrees per second
-        internal static float PlankSeconds => Settings.HammerSeconds;   // uncaulked; 20 until 2026-10-27, now the user's setting
+        internal static float PlankSeconds => Settings.HammerSeconds;   // uncaulked
         internal const float BundleLumber = 1f / 16;   // a bundle holds 1/16 of a lumber's wood
         internal const float SurfaceTolerance = .01f;   // a hull plank's back face lies on the boat within 1 cm
         // Plank looks: 0-7 are the halves of the bundle's 4 boards, 8-23 the pieces of the lumber's top layer
@@ -467,7 +450,7 @@ namespace EconomyOverhaul
             o.GetComponent<SaveablePrefab>().prefabIndex = index;
             return o;
         }
-        // Its look, size and attach mode, all in its saved health (Rules.PlankCode; PALLET_PLANK_DRAFT.md, "The plank's build plan").
+        // Its look, size and attach mode, all in its saved health (Rules.PlankCode).
         internal static readonly HashSet<ShipItem> Live = new HashSet<ShipItem>();   // every wood plank in the game (PlankMark)
         internal static Rules.PlankShape Shape(ShipItem plank) => Rules.PlankDecode(plank ? plank.health : 0);
         internal static int Look(ShipItem plank) => Shape(plank).look;
@@ -475,7 +458,7 @@ namespace EconomyOverhaul
         internal static float Length(ShipItem plank) => Rules.PlankLength(Shape(plank).length);
         internal static float Width(ShipItem plank) => Rules.PlankWidth(Shape(plank));
         internal static float Thick(ShipItem plank) => Rules.PlankThick(Shape(plank).thick);
-        // Its thickness only once thicker than today's (BOARD_PLANK_DRAFT.md, 2026-11-08).
+        // Its thickness only once thicker than today's.
         internal static string SizeText(ShipItem plank) =>
             Length(plank).ToString(Shape(plank).length == 0 ? "F2" : "F1", CultureInfo.InvariantCulture) + " m x " + Width(plank).ToString("F2", CultureInfo.InvariantCulture) + " m"   // today's 0.87 m, not rounded to 0.9
             + (Shape(plank).thick > 0 ? " x " + Thick(plank).ToString("F2", CultureInfo.InvariantCulture) + " m" : "");
@@ -507,9 +490,9 @@ namespace EconomyOverhaul
             if (made.TryGetValue(key, out var cached) && cached) return cached;
             var map = MapOf(s.look);
             float L = Rules.PlankLength(s.length), W = Rules.PlankWidth(s), T = Rules.PlankThick(s.thick), L0 = Rules.PlankLength0, W0 = Rules.PlankWidth0;
-            // The long edges' wood across the thickness as it is up to one board's width; a thicker plank (BOARD_PLANK_DRAFT.md: up to 1 m)
-            // stretches that board over it, as a wide face does, so its edge never reads past its piece of the atlas. The ends' grain the same
-            // way, up to one board's length (0.872 m; the thickest is 1 m).
+            // The long edges' wood across the thickness as it is up to one board's width; a thicker plank (up to 1 m) stretches that
+            // board over it, as a wide face does, so its edge never reads past its piece of the atlas. The ends' grain the same way, up
+            // to one board's length (0.872 m; the thickest is 1 m).
             float edge = Math.Min(T, W0), endGrain = Math.Min(T, L0);
             var v = new List<Vector3>(); var n = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
             // A point along it (sl from its end), across it (sw from its side), out of its back (z): where it lies, and a normal turned the same.
@@ -523,8 +506,7 @@ namespace EconomyOverhaul
                 else tri.AddRange(new[] { i, i + 2, i + 1, i, i + 3, i + 2 });
             }
             // Cut points along (every 0.872 m, its grain turning back). Across, one board at any width: the look's board stretched over
-            // the whole width (the user, 2026-10-24: "i want the widen plank to show widen plank, not multiple plank attached together";
-            // repeated every 0.152 m until then, which drew a wide plank as boards side by side).
+            // the whole width, so a wide plank shows as one plank, not boards side by side.
             var alongCuts = new List<float> { 0 }; for (float d = L0; d < L - .001f; d += L0) alongCuts.Add(d); alongCuts.Add(L);
             var acrossCuts = new List<float> { 0, W };
             float Grain(float d) => (float)Rules.Mirrored(d, L0);
@@ -587,8 +569,8 @@ namespace EconomyOverhaul
             for (int k = 0; k < 3; k++) { var m = (double[,])a.Clone(); for (int i = 0; i < 3; i++) m[i, k] = r[i]; x[k] = Det(m) / d; }
             return x;
         }
-        // H (the brace key) on a held plank, bought and not nailed (K3, the user: "press H(same as bracing button) to switch attachment
-        // mode, default is current mode"): flat or by one end, upright again, handed to Deft Hands afresh (its kept roll back to 0).
+        // H (the brace key) on a held plank, bought and not nailed: flat or by one end, upright again, handed to Deft Hands afresh
+        // (its kept roll back to 0).
         internal static void ModeKey(GoPointer pointer, ShipItem held)
         {
             if (!pointer || !IsPlank(held) || !held.sold || held.nailed || !GameState.playing || GameState.inCursorMenu || !PoleBrace.KeyDown()) return;
@@ -601,10 +583,8 @@ namespace EconomyOverhaul
             var held = pointer ? pointer.GetHeldItem() as ShipItem : null; bool wall = held && held.wallAttachment;
             foreach (var plank in Live) if (plank) plank.allowPlacingItems = Rules.PlankTable(plank.sold, plank.nailed, Shape(plank).end, wall);
         }
-        // H's two modes as the user names them (2026-10-24, word for word: "add notification when change between mode for plank, placement
-        // mode (after press H), and repair mode"): repair mode flat (today's, the hull repair's), placement mode by one end.
-        // The user's words (2026-10-24): 'Only show "Placement mode (Q/E length, O/L width)"', 'only show "Repair mode"'.
-        // With the thickness and the configurator's keys (BOARD_PLANK_DRAFT.md, 2026-11-08): "Placement mode (Q/E length, O/L width, I/K thickness)"
+        // H's two modes and their notices: repair mode flat (the hull repair's), placement mode by one end. Each notice names only
+        // its mode; placement mode's with its size keys (the configurator's): "Placement mode (Q/E length, O/L width, I/K thickness)"
         // by default.
         internal static string PlacementNotice => "Placement mode (" + RodKeys.LengthPair(false) + " length, " + RodKeys.WidthPair(false) + " width, " + RodKeys.ThickPair() + " thickness)";
         internal const string RepairNotice = "Repair mode";
@@ -615,16 +595,15 @@ namespace EconomyOverhaul
             WoodPoles.ResetLean(plank); DeftHands.Hold(plank);
             Loans.Notify(s.end ? WoodPlanks.PlacementNotice : WoodPlanks.RepairNotice);
         }
-        // No pick-up notice for a plank (the user, 2026-10-24: "cancel this"): H's notices say its mode.
+        // No pick-up notice for a plank: H's notices say its mode.
 
-        // Kicia Bay furniture stall: 8 bundles stacked 2 wide x 4 high on the stall floor between the bed and the stove,
-        // in the stall area's own (scaled) frame: x across, y up, z along. The heights re-spaced for the low-poly bundle (0.117 m
-        // thick, was 0.136; the stall's up scale 4.9341, read by the probe palletshow, 2026-10-24): the bottom bundle's foot kept, the
-        // same 1.8 mm between bundles.
+        // Kicia Bay furniture stall: 8 bundles stacked 2 wide x 4 high on the stall floor between the bed and the stove, in the stall
+        // area's own (scaled) frame: x across, y up, z along. The heights for the low-poly bundle (0.117 m thick; the stall's up scale
+        // 4.9341), 1.8 mm between bundles.
         // A shop slot (or the mod's shop area) under the game's scenery drawn at its real size: scaled against its parent's scale. The
         // game sets a spawned item's local scale to 1 every frame (ItemRigidbody.LateUpdate), so an item takes its slot's world scale;
-        // Gold Rock City's whole island scenery is at 0.5 (its own keepers at 2), and the wood vendor's stock there was drawn at half
-        // size, outside its halved shop area, so nothing could be bought (the user, 2026-10-24). Nothing changes under an unscaled parent.
+        // Gold Rock City's whole island scenery is at 0.5 (its own keepers at 2), so unscaled the wood vendor's stock there is drawn
+        // at half size, outside its halved shop area, and can't be bought. Nothing changes under an unscaled parent.
         internal static void ScaleOne(Transform t)
         {
             var p = t && t.parent ? t.parent.lossyScale : Vector3.one;
@@ -839,7 +818,7 @@ namespace EconomyOverhaul
         // the boat's surface within 1 cm of the pivot, so a plank lying on another plank or on cargo never counts.
         internal static BoatDamage Hull(ShipItem plank)
         {
-            if (!IsPlank(plank) || !plank.sold || plank.held || !plank.currentActualBoat || !plank.currentWalkCol || Shape(plank).end) return null;   // only flat (K3)
+            if (!IsPlank(plank) || !plank.sold || plank.held || !plank.currentActualBoat || !plank.currentWalkCol || Shape(plank).end) return null;   // only flat
             var body = plank.itemRigidbodyC; var walk = plank.currentWalkCol;
             if (!body || !body.attached || !body.transform.IsChildOf(walk)) return null;
             var damage = plank.currentActualBoat.GetComponentInParent<BoatDamage>();
@@ -850,16 +829,18 @@ namespace EconomyOverhaul
                     && !hit.collider.GetComponentInParent<ItemRigidbody>() && !hit.collider.GetComponentInParent<ShipItem>()) return damage;
             return null;
         }
+        // The fixing fee way's planks per 1% (the setting's fixed way: RepairPerPlank).
         internal static int PlanksPerPercent(BoatDamage damage)
         {
-            if (Settings.FixedPlanks) return Rules.FixedPlanksPerPercent;
             var boat = damage.GetComponent<PurchasableBoat>();
             return Rules.PlanksPerPercent(boat ? boat.price : 0, damage.waterUnitsCapacity, LumberValue);
         }
+        // The hull damage one finished plank takes off (0-1): the fixed way the slider's percent, else 1/N of 1%.
+        internal static float RepairPerPlank(BoatDamage damage) => Settings.FixedPlanks ? (float)(Settings.FixedRepairPercent / 100) : .01f / PlanksPerPercent(damage);
         internal static string HullHint(ShipItem plank)
         {
             var hull = plank ? Hull(plank) : null; if (!hull) return null;
-            return Rules.HullHint(Progress(plank), hull.hullDamage, PlanksPerPercent(hull));
+            return Settings.FixedPlanks ? Rules.HullHintFixed(Progress(plank), hull.hullDamage, Settings.FixedRepairPercent) : Rules.HullHint(Progress(plank), hull.hullDamage, PlanksPerPercent(hull));
         }
         private sealed class Job { internal ShipItemHammer hammer; internal ShipItem plank; internal float startOffset; internal bool back; internal int frame; }
         private static Job job;
@@ -878,7 +859,8 @@ namespace EconomyOverhaul
             job.frame = Time.frameCount;
             return false;
         }
-        // OnAltHeld: the setting's seconds per plank (half when caulked; 0 at once); each finished plank restores 1/N of 1% hull.
+        // OnAltHeld: the setting's seconds per plank (half when caulked; 0 at once); each finished plank restores 1/N of 1% hull, or the
+        // fixed way's percent (RepairPerPlank).
         internal static bool HammerHeld(ShipItemHammer hammer)
         {
             if (job == null || job.hammer != hammer) return true;
@@ -899,14 +881,14 @@ namespace EconomyOverhaul
         }
         internal static void Finish(ShipItem plank, BoatDamage hull, bool caulked)
         {
-            float capacity = Mathf.Max(0, hull.waterUnitsCapacity); int planks = PlanksPerPercent(hull);
-            hull.hullDamage = Mathf.Max(0, hull.hullDamage - .01f / planks);
-            if (caulked) hull.oakum = Mathf.Max(0, hull.oakum - .01f * capacity / planks);
+            float capacity = Mathf.Max(0, hull.waterUnitsCapacity), repair = RepairPerPlank(hull);
+            hull.hullDamage = Mathf.Max(0, hull.hullDamage - repair);
+            if (caulked) hull.oakum = Mathf.Max(0, hull.oakum - repair * capacity);
             hull.oakum = Mathf.Min(hull.oakum, hull.hullDamage * capacity);
             if (job != null && job.plank == plank) EndJob();
             // Its physics body switched off first, as for an unbundled bundle (Retire): removed as it is, the game's ExitBoat
             // would put the body back at the visible plank, against the hull, still kinematic for one physics step, and the
-            // boat would be thrown off it once (user, 2026-10-11). Cargo under it is rescanned with the bounds it has now
+            // boat would be thrown off it once. Cargo under it is rescanned with the bounds it has now
             // (Retire hides it, and DestroyItem's own rescan would then see a point).
             CoverEvents.RecheckBeneath(plank, CoverEvents.WorldBounds(plank));
             Retire(plank);
@@ -1001,7 +983,7 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(CrateSealUI), "Activate")] internal static class UnbundleConfirmPatch { static bool Prefix(CrateSealUI __instance) => WoodPlanks.PopupConfirm(__instance); }
     [HarmonyPatch(typeof(CrateSealUI), "HideUI")] internal static class UnbundleClosePatch { static void Postfix() => WoodPlanks.PopupClosed(); }
     [HarmonyPatch(typeof(CrateSealUI), "ShowUI")] internal static class UnbundleCratePatch { static void Prefix() => WoodPlanks.PopupClosed(); }
-    // (a click another mod's prefix already took, Dizzy Nudge's nudge of the pointed item, starts no plank job: the deep review of 2026-11-09)
+    // A click another mod's prefix already took (Dizzy Nudge's nudge of the pointed item) starts no plank job.
     [HarmonyPatch(typeof(ShipItemHammer), "OnAltActivate", new Type[0])] internal static class PlankHammerPatch { static bool Prefix(ShipItemHammer __instance, bool __runOriginal) => __runOriginal && WoodPlanks.HammerStart(__instance); }
     [HarmonyPatch(typeof(ShipItemHammer), "OnAltHeld", new Type[0])] internal static class PlankHammerHeldPatch { static bool Prefix(ShipItemHammer __instance) => WoodPlanks.HammerHeld(__instance); }
     // Taking a plank off a wall, deck or roof resets its hammering progress.
@@ -1022,9 +1004,8 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(LookUI), "ShowLookText")] internal static class PlankLookUIPatch
     {
         private static readonly MethodInfo hideIcons = AccessTools.Method(typeof(LookUI), "HideIcons"), showL = AccessTools.Method(typeof(LookUI), "ShowLicon"), showR = AccessTools.Method(typeof(LookUI), "ShowRicon");
-        // The look UI's pointer, read each frame something is looked at: a field reference, not a reflection read (the deep review of
-        // 2026-11-09). In a class of its own, made at its first read (its static constructor keeps it so): a missing field fails there only,
-        // as the reflection read did.
+        // The look UI's pointer, read each frame something is looked at: a field reference, not a reflection read. In a class of its
+        // own, made at its first read (its static constructor keeps it so): a missing field fails there only.
         private static class LookPointer
         {
             internal static readonly AccessTools.FieldRef<LookUI, GoPointer> Of = AccessTools.FieldRefAccess<LookUI, GoPointer>("pointer");
@@ -1041,7 +1022,7 @@ namespace EconomyOverhaul
                 return;
             }
             var pointer = LookPointer.Of(__instance);
-            // A knife at a pallet it may cut: the game's "cut" line with its R icon, as at food (HALF_PALLET_DRAFT.md §3).
+            // A knife at a pallet it may cut: the game's "cut" line with its R icon, as at food.
             if (global::Settings.controlsTextEnabled && pointer && PalletCut.Knife(pointer.GetHeldItem() as ShipItem) && PalletCut.Cuttable(item) && PalletCut.BlockReason(item) == null)
             {
                 hideIcons.Invoke(__instance, null); showR.Invoke(__instance, null);
@@ -1057,17 +1038,17 @@ namespace EconomyOverhaul
     }
 
     // ---- Wood pole ----
-    // The wood pole (prefab 643; the user, 2026-10-12): a round pole of the lumber's wood, 8 cm across, built like the planks
-    // on the painting (a wall item). Held to a wall it sticks straight out; to a deck, straight up (the game sets a wall item's
-    // +z into the surface: the pole runs from its pivot along -z). Once the hammer has nailed it, tarp corners tie to it, at
-    // any angle (Tarps.Find), aboard and on land. Its length keys (the configurator's, Q and E by default: RodKeys) set its length
-    // while it is held, or attached, not nailed and pointed at (PointedKeys); it is kept in the saved health.
+    // The wood pole (prefab 643): a round pole of the lumber's wood, 8 cm across, built like the planks on the painting (a wall
+    // item). Held to a wall it sticks straight out; to a deck, straight up (the game sets a wall item's +z into the surface: the
+    // pole runs from its pivot along -z). Once the hammer has nailed it, tarp corners tie to it, at any angle (Tarps.Find), aboard
+    // and on land. Its length keys (the configurator's, Q and E by default: RodKeys) set its length while it is held, or attached,
+    // not nailed and pointed at (PointedKeys); it is kept in the saved health.
     internal static class WoodPoles
     {
         internal const int PoleIndex = 643, BundleIndex = 644;
-        internal const float Thickness = .08f;   // 8 cm across (the user, 2026-10-12; was 12)
-        // 8 sides (the user, 2026-10-24: "reduce the poly counts"; was 12: a 2 m pole 48 triangles, now 32; the bundle 240, now 160).
-        // Not 6: a hexagon's bounds are 13% narrower across its flats, and the pole's box collider is its mesh's bounds.
+        internal const float Thickness = .08f;   // 8 cm across
+        // 8 sides: a 2 m pole 32 triangles, the bundle 160. Not 6: a hexagon's bounds are 13% narrower across its flats, and the
+        // pole's box collider is its mesh's bounds.
         private const int Sides = 8;
         // The lumber's material is the items' atlas (senna items paint), mostly black: the pole takes one long board strip of it,
         // the one the planks use (u .7637-.7773, v .236-.861; one dark brown only from v .25 to .61, used from .26: Rules.PoleStrip),
@@ -1085,8 +1066,8 @@ namespace EconomyOverhaul
         internal static float Diameter(ShipItem pole) => Thickness * Rules.PoleDiameterScale(DiameterSteps(pole));
         // Its size as the line under the view and the item's text show it: the length, and the diameter once thicker than 1.0x.
         internal static string SizeText(ShipItem pole) => Format(Length(pole)) + (DiameterSteps(pole) > 0 ? " x " + (Diameter(pole) * 100).ToString("F1", CultureInfo.InvariantCulture) + " cm" : "");
-        // A rod: a pole, or a plank by one end (PALLET_PLANK_DRAFT.md: "it receive same aiming and attaching mechanics as wooden pole
-        // now"): held as the staff, tilted and leaned, Q/E its length, Deft Hands' roll counted.
+        // A rod: a pole, or a plank by one end, aimed and attached as a pole is: held as the staff, tilted and leaned, Q/E its length,
+        // Deft Hands' roll counted.
         internal static bool IsRod(ShipItem item) => IsPole(item) || WoodPlanks.EndMode(item);
         internal static float RodLength(ShipItem item) => IsPole(item) ? Length(item) : WoodPlanks.Length(item);
         internal static bool ShowsHeldLook(ShipItem item) => item && item.held && IsRod(item);
@@ -1116,7 +1097,7 @@ namespace EconomyOverhaul
                 if (dir.Length <= BundleIndex) { var resized = new GameObject[BundleIndex + 1]; Array.Copy(dir, resized, dir.Length); directory.directory = dir = resized; }
                 dir[PoleIndex] = o; Template = o;
                 Plugin.Log?.LogInfo("Registered wood pole (643).");
-                // The bundle the shops sell (user, 2026-10-12): four 2 m poles, carried in both hands, unbundled as the planks' bundle.
+                // The bundle the shops sell: four 2 m poles, carried in both hands, unbundled as the planks' bundle.
                 if (dir[BundleIndex]) Plugin.Log?.LogError("Prefab slot 644 is used by another mod; wood pole bundles are disabled (no poles in shops).");
                 else
                 {
@@ -1139,7 +1120,7 @@ namespace EconomyOverhaul
             float length = tenths / 10f, r = Thickness * Rules.PoleDiameterScale(steps) / 2;
             var v = new List<Vector3>(); var n = new List<Vector3>(); var uv = new List<Vector2>(); var t = new List<int>();
             // Along it the strip's dark wood runs to and fro over 3.4 m lengths, mirrored (Rules.PoleGrain): one colour at any length
-            // (the user, 2026-10-13: a pole changed colour beyond 3.9 m, and an 8 m pole showed a ring where it turned at v .25).
+            // (Rules.PoleStrip).
             var rings = new List<float> { 0 };
             for (double d = Rules.PoleStrip; d < length - .001; d += Rules.PoleStrip) rings.Add((float)d);
             rings.Add(length);
@@ -1245,8 +1226,9 @@ namespace EconomyOverhaul
         internal static void ApplyLength(ShipItem pole) => SetShape(pole, Length(pole), DiameterSteps(pole));
 
         // Held, a wall item points its +z ahead (to aim it at a wall), so the pole, along -z, would run back through the player's
-        // eyes. Held, it is drawn standing up from the hand like a staff, tilted 15 degrees forward, a third of it below the hand, 30 cm right of the crosshair (where the game holds a wall item)
-        // (the user, 2026-10-12). The root keeps its own mesh and direction: the placement ghost shows where it will stand.
+        // eyes. Held, it is drawn standing up from the hand like a staff, tilted 15 degrees forward, a third of it below the hand,
+        // 30 cm right of the crosshair (where the game holds a wall item). The root keeps its own mesh and direction: the placement
+        // ghost shows where it will stand.
         internal const string HeldLookName = "wood pole held look";
         private static readonly Vector3 HeldAxis = new Vector3(0, Mathf.Cos(15 * Mathf.Deg2Rad), Mathf.Sin(15 * Mathf.Deg2Rad));
         // Leaned by the wheel (below): turned about the view's line at the hand, its top to the right for a positive lean.
@@ -1258,21 +1240,21 @@ namespace EconomyOverhaul
         internal static void HeldPose(Transform look, float length, float lean = 0)
         { HeldLocal(length, lean, out var at, out var turn); look.localRotation = turn; look.localPosition = at; look.localScale = Vector3.one; }
 
-        // ---- Tilting and leaning (the user, 2026-10-17) ----
+        // ---- Tilting and leaning ----
         // Held, the mouse wheel tilts the pole toward or away, as the game turns any held item (its heldRotationOffset, about the
         // view's side-to-side axis), and with the game's rotate key held (RotateH, Q by default; the game's own turn with it does
-        // nothing to a small item) it leans the pole left or right in the view. Each 3 degrees a notch (the user, 2026-10-17; the game sends 2.5 a notch:
-        // the scroll axis, 0.1, x 25), at most 90 degrees either way; braced, the wheel tilts the brace, at most 80 (PoleBrace.MaxTilt; TiltLimit).
-        // The staff in the hand shows both, and the pole attaches at both on any surface, the game's green ghost showing it: on a deck
-        // or a roof (its normal more than 0.8 up or down; the game itself tells apart only one facing up) leaned toward the view's right or left and tilted
-        // away or toward; on a wall, leaned along it level and tilted up or down. The length line shows the angle changed last.
-        // Upright again at each pick-up.
+        // nothing to a small item) it leans the pole left or right in the view. Each 3 degrees a notch (the game sends 2.5 a notch:
+        // the scroll axis, 0.1, x 25), at most 90 degrees either way; braced, the wheel tilts the brace, at most 80 (PoleBrace.MaxTilt;
+        // TiltLimit). The staff in the hand shows both, and the pole attaches at both on any surface, the game's green ghost showing
+        // it: on a deck or a roof (its normal more than 0.8 up or down; the game itself tells apart only one facing up) leaned toward
+        // the view's right or left and tilted away or toward; on a wall, leaned along it level and tilted up or down. The length line
+        // shows the angle changed last. Upright again at each pick-up.
         internal const float MaxLean = 90, DegreesPerInput = 1.2f;
         private static ShipItem leanPole; private static float lean; private static char changed;   // 't' tilt, 'l' lean, last changed
         internal static float Lean(ShipItem pole) => pole && pole == leanPole ? lean : 0;
         // The tilt's limit: 90 held, the brace's 80 while braced, so the wheel and the length line stop where the brace does. With
-        // Deft Hands installed no limit held (its tilt turns a held item without one): the pole attaches at the angle it draws
-        // (the user, 2026-10-18: "If deft hand is present, no 90 degree limit"; A-B4). The brace keeps its 80.
+        // Deft Hands installed no limit held (its tilt turns a held item without one): the pole attaches at the angle it draws. The
+        // brace keeps its 80.
         internal const float NoTiltLimit = 180;
         internal static float TiltLimit(ShipItem pole) => pole && PoleBrace.Braced == pole ? PoleBrace.MaxTilt : DeftHands.Installed ? NoTiltLimit : MaxLean;
         internal static float Tilt(ShipItem pole) => pole ? Mathf.Clamp(Mathf.DeltaAngle(0, pole.heldRotationOffset), -TiltLimit(pole), TiltLimit(pole)) : 0;
@@ -1296,8 +1278,8 @@ namespace EconomyOverhaul
         }
         // GoPointer.LateUpdate, before the game's own: the wheel with the rotate key held leans a held pole. The game would turn it
         // about the view's up (undone the same frame for a small item) and set its tilt to 0: the wheel is kept from it this frame
-        // (GameInput.GetScrollAxis 0 until the game's LateUpdate is done). Braced, it leans nothing (the user, 2026-10-17: Q is only
-        // the length key there); the wheel is still kept from the game, whose turn would set the brace's tilt to 0.
+        // (GameInput.GetScrollAxis 0 until the game's LateUpdate is done). Braced, it leans nothing (Q is only the length key there);
+        // the wheel is still kept from the game, whose turn would set the brace's tilt to 0.
         internal static bool KeepScroll;
         private static int leanFrame = -1;   // the frame the wheel last leaned the pole (Keys: Q let go after it lengthens nothing)
         internal static Func<bool> TestLeanKey;   // tests hold the rotate key with this (no key can be pressed in a test)
@@ -1315,10 +1297,10 @@ namespace EconomyOverhaul
             lean = LeanLimit >= NoTiltLimit ? Mathf.DeltaAngle(0, lean + input * DegreesPerInput) : Mathf.Clamp(lean + input * DegreesPerInput, -MaxLean, MaxLean);
             var look = pole.transform.Find(HeldLookName); if (look) HeldPose(look, RodLength(pole), lean);
         }
-        // Other mods' roll of the held pole about the view's line (Deft Hands' "Wall attachment rotation": its Alt and the mouse;
-        // the user, 2026-10-17: attach it at the angle Deft Hands shows), measured after every mod's turn of the frame
-        // (GoPointer.LateUpdate) from its turn in the hand beyond the game's tilt; it adds to the lean (SeenLean). Only a turn about
-        // the view's line counts (the game's pick-up still swinging it into the hand does not).
+        // Other mods' roll of the held pole about the view's line (Deft Hands' "Wall attachment rotation": its Alt and the mouse),
+        // measured after every mod's turn of the frame (GoPointer.LateUpdate) from its turn in the hand beyond the game's tilt; it adds
+        // to the lean (SeenLean), so the pole attaches at the angle Deft Hands shows. Only a turn about the view's line counts (the
+        // game's pick-up still swinging it into the hand does not).
         private static ShipItem rolledPole; private static float otherRoll; private static int rolledFrame = -10;
         internal static void SeeHeld(GoPointer pointer)
         {
@@ -1330,7 +1312,7 @@ namespace EconomyOverhaul
         }
         // The lean the held pole is seen at: its own (on the held look) and other mods' roll of it (a positive roll tips its top left).
         // With Deft Hands installed no 90-degree limit on the lean either (its roll reaches 180): the pole attaches at the angle it
-        // draws (the user, 2026-10-19, Q2 of the deep review: "b", as A-B4 for the tilt).
+        // draws.
         internal static float LeanLimit => DeftHands.Installed ? NoTiltLimit : MaxLean;
         internal static float SeenLean(ShipItem pole)
         {
@@ -1378,9 +1360,9 @@ namespace EconomyOverhaul
         private static readonly MethodInfo setUpTargeter = AccessTools.Method(typeof(ShipItem), "SetUpTargeter");
         // After the game's own wall test of the frame (ShipItem.Update): its spot (in the space of the pole's physics copy, which the
         // drop puts there) tilted and leaned, and the game's ghost drawn again from it (its own SetUpTargeter maps that space to
-        // where the pole is drawn). The game aims its ray along the copy, which the wheel's tilt turns with the pole, so the spot slid
-        // as one tilted; tilted, the ray is cast again as the game casts it with the tilt taken out, and the pole tilts about the spot
-        // it is aimed at, as it leans (the user, 2026-10-17). A spot pole on pole found (AimAtPole) is turned there.
+        // where the pole is drawn). The game aims its ray along the copy, which the wheel's tilt turns with the pole, so the spot
+        // would slide as it tilts: tilted, the ray is cast again as the game casts it with the tilt taken out, and the pole tilts
+        // about the spot it is aimed at, as it leans. A spot pole on pole found (AimAtPole) is turned there.
         internal static void LeanOnWall(ShipItem held)
         {
             float l = SeenLean(held), t = Tilt(held);
@@ -1417,20 +1399,20 @@ namespace EconomyOverhaul
 
         // Q longer, E shorter, 0.1 m a press; E held repeats after 0.4 s. Only a held pole that is bought and isn't nailed (a
         // shop's pole can be picked up before buying it: resized, it would go back to its stall at the new length). Q is also the
-        // game's rotate key, held with the wheel to lean the pole (LeanScroll; the user, 2026-10-17): not braced, a tap lengthens when
-        // it is let go, and Q held without the wheel lengthens after 0.4 s and repeats, both only while the wheel hasn't leaned since
-        // Q went down. Braced, Q is only the length key (the wheel leans nothing then): it lengthens as it goes down and, held,
-        // repeats after 0.4 s, as E does. The keys are the configurator's (RodKeys, 2026-11-08; Q and E by default): the tap and hold
-        // rules of Q are the longer key's whatever it is set to (the lean stays the game's rotate key with the wheel).
+        // game's rotate key, held with the wheel to lean the pole (LeanScroll): not braced, a tap lengthens when it is let go, and Q
+        // held without the wheel lengthens after 0.4 s and repeats, both only while the wheel hasn't leaned since Q went down.
+        // Braced, Q is only the length key (the wheel leans nothing then): it lengthens as it goes down and, held, repeats after
+        // 0.4 s, as E does. The keys are the configurator's (RodKeys; Q and E by default): the tap and hold rules of Q are the longer
+        // key's whatever it is set to (the lean stays the game's rotate key with the wheel).
         private static bool repeating; private static float repeatAt;
         internal const float TapSeconds = .4f;
         private static bool qHeld, qBraced, qRepeated; private static int qDownFrame; private static float qRepeatAt;
         internal static Func<bool> TestQKey;   // tests hold Q with this (no key can be pressed in a test)
         private static bool testQWas;
-        // On a nailed pole (the user, 2026-10-12: only on a nailed one), any wall item (2026-10-13: not only another pole). The game's own wall ray starts at the held pole's base,
-        // about 1 m ahead, and runs along the pole, so it hardly ever meets an 8 cm pole (measured by -PoleAttach). With the
-        // crosshair on a nailed pole within reach (2.55 m, as a tarp's corner) the held pole attaches where it points: on its side
-        // sticking straight out of it, on its end standing on it; loose items are seen through, solid surfaces are not. The game's green ghost shows it, its drop attaches it there
+        // On a nailed pole only, any wall item. The game's own wall ray starts at the held pole's base, about 1 m ahead, and runs
+        // along the pole, so it hardly ever meets an 8 cm pole. With the crosshair on a nailed pole within reach (2.55 m, as a tarp's
+        // corner) the held pole attaches where it points: on its side sticking straight out of it, on its end standing on it; loose
+        // items are seen through, solid surfaces are not. The game's green ghost shows it, its drop attaches it there
         // (ShipItem.OnDrop) and its hammer nails it, as on any wall.
         private static readonly AccessTools.FieldRef<ShipItem, bool> inRangeOfWall = AccessTools.FieldRefAccess<ShipItem, bool>("inRangeOfWall");
         private static readonly AccessTools.FieldRef<ShipItem, Vector3> attachPos = AccessTools.FieldRefAccess<ShipItem, Vector3>("attachPos");
@@ -1442,8 +1424,8 @@ namespace EconomyOverhaul
         // Aimed at a pole aboard a ship: the held pole, that frame, the ship and its place in the ship's frame (OnPoleDrop).
         private static ShipItem aimedBy; private static int aimedFrame; private static Transform aimedShip; private static Pose aimedLocal;
         private static readonly MethodInfo enterBoat = AccessTools.Method(typeof(ShipItem), "EnterBoat");
-        // What a held wall item attaches to by the crosshair: the poles, and the planks (K7, the user: plank on a nailed plank, "yes";
-        // a plank's wide faces are found by the game's own wall ray too, its edges and ends hardly).
+        // What a held wall item attaches to by the crosshair: the poles, and the planks (a plank's wide faces are found by the game's
+        // own wall ray too, its edges and ends hardly).
         private static IEnumerable<ShipItem> Targets()
         {
             foreach (var p in Live) yield return p;
@@ -1451,12 +1433,11 @@ namespace EconomyOverhaul
         }
         internal static void AimAtPole(ShipItem held, Ray eye)
         {
-            // Its aim of an earlier frame is dropped, so a drop just after looking off a pole doesn't land on it (the review of
-            // 2026-10-18, Claude's fix).
+            // Its aim of an earlier frame is dropped, so a drop just after looking off a pole doesn't land on it.
             AimedPole = null; if (aimedBy == held) aimedBy = null;
             if (!held.held) return;
             // The nearest nailed pole the ray meets, from its box where it is drawn: aboard a moving ship the physics of an item's
-            // drawn collider does not follow the ship (measured by -PoleProbe), so the box is taken from its transform.
+            // drawn collider does not follow the ship, so the box is taken from its transform.
             ShipItem target = null; float near = AttachReach; Vector3 normal = default;
             foreach (var pole in Targets())
             {
@@ -1490,7 +1471,7 @@ namespace EconomyOverhaul
             inRangeOfWall(held) = true; attachPos(held) = at; attachRot(held) = turn; AimedPole = target; AimedAt = new Pose(at, turn);
             // The green ghost straight at the spot, by the game's targeter: its own SetUpTargeter takes the spot as relative to the
             // held item's physics copy, which is not where the item is drawn (aboard, on the ship's walk copy; on land, measured 0.9 m
-            // off), so the ghost was drawn far off (until 2026-10-13: the user found pole on pole too hard to use).
+            // off), so it would draw the ghost far off.
             held.held.GetTargeter().DisplayTargeter(at, turn, held.GetComponent<MeshFilter>().sharedMesh);
             aimedBy = held; aimedFrame = Time.frameCount; aimedShip = target.currentActualBoat;
             if (aimedShip) aimedLocal = new Pose(aimedShip.InverseTransformPoint(at), Quaternion.Inverse(aimedShip.rotation) * turn);
@@ -1513,15 +1494,14 @@ namespace EconomyOverhaul
             pole.itemRigidbodyC.ForceRigidbodyToWalkCol(); pole.itemRigidbodyC.attached = true;
         }
 
-        // ---- Attached whatever its own length overlaps (the user, 2026-10-26: "poles and planks will be blocked placing by it's own
-        // length, i want to change to ignore that") ----
+        // ---- Attached whatever its own length overlaps ----
         // The game refuses to let go of a held item whose physics copy reaches 6 cm or more into anything solid not tagged Boat
         // (PickupableItemCollisionChecker; GoPointer.LateUpdate: only the throw key lets go then) and outlines it red while the
         // pick-up key is held. It tests where the item is held, not where its ghost shows. A held rod's copy is its whole box, from
-        // the spot ahead back through the player (drawn as the staff, its root mesh hidden; the outline still draws that hidden body:
-        // the user's red shape on Dhow_large), so a long one was refused wherever it reached into the ship's structure. Aimed where its green
-        // ghost shows (the game's wall spot, a pole's or a plank's: inRangeOfWall), it attaches there whatever it overlaps and is not
-        // outlined red; a loose drop keeps the game's test (let go inside a wall, its body would be shoved out). Braced, it is no wall item.
+        // the spot ahead back through the player (drawn as the staff, its root mesh hidden; the outline still draws that hidden body),
+        // so the game would refuse a long one wherever it reaches into the ship's structure. Aimed where its green ghost shows (the
+        // game's wall spot, a pole's or a plank's: inRangeOfWall), it attaches there whatever it overlaps and is not outlined red; a
+        // loose drop keeps the game's test (let go inside a wall, its body would be shoved out). Braced, it is no wall item.
         private static readonly AccessTools.FieldRef<PickupableItemCollisionChecker, ShipItem> checkerItem = AccessTools.FieldRefAccess<PickupableItemCollisionChecker, ShipItem>("item");
         internal static bool AttachesAnyway(ShipItem item) => item && item.held && item.sold && (IsPole(item) || WoodPlanks.IsPlank(item)) && PoleBrace.Braced != item && inRangeOfWall(item);
         // After the game's test of the frame (PickupableItemCollisionChecker.Update): not outlined red. Every item's copy runs it each
@@ -1538,15 +1518,15 @@ namespace EconomyOverhaul
             if (AttachesAnyway(item) && item.colChecker) item.colChecker.allowObstructedDropping = true;
         }
 
-        // Picked up: its length and the keys, or that things locked on it fix its length (the user, 2026-10-13).
+        // Picked up: its length and the keys, or that things locked on it fix its length.
         internal static string PickupNotice(ShipItem pole) => "Wood pole " + SizeText(pole) + (PoleCarry.Carries(pole) ? " (things on it: size fixed)" : " (" + RodKeys.LengthPair(true) + ": length, " + RodKeys.WidthPair(true) + ": diameter)");
         internal static void Keys(GoPointer pointer)
         {
             var held = pointer ? pointer.GetHeldItem() as ShipItem : null;
             PoleBrace.Keys(pointer, held);
             WoodPlanks.ModeKey(pointer, held);
-            // Q/E the length of a rod (a plank only by one end: the user, "length and width only work in placement mode (after pressing
-            // H)"), O/L a plank's width, I/K its thickness; each the configurator's key (RodKeys).
+            // Q/E the length of a rod (a plank only by one end, in placement mode), O/L a plank's width, I/K its thickness; each the
+            // configurator's key (RodKeys).
             if (!GameState.playing || !IsRod(held) || !held.sold || held.nailed)
             {
                 repeating = false; qHeld = false;
@@ -1575,7 +1555,7 @@ namespace EconomyOverhaul
             if (PoleCarry.Carries(held)) { Loans.Notify(IsPole(held) ? PoleCarry.LengthFixed : PoleCarry.PlankFixed); return; }   // what is on it would be left off it (PoleCarry)
             StepLength(held, step);
         }
-        // One length step on a rod (held, or attached and pointed at): 0.1 m; a notice only at the shortest or longest (user, 2026-10-13: the hint text
+        // One length step on a rod (held, or attached and pointed at): 0.1 m; a notice only at the shortest or longest (the hint text
         // shows its length). Its pivot is its end (a pole's base, a plank's end face): the far end moves.
         private static void StepLength(ShipItem rod, int step)
         {
@@ -1592,16 +1572,14 @@ namespace EconomyOverhaul
             if (after >= Rules.PoleMax || after <= Rules.PoleMin) Loans.Notify("Wood pole " + Format(after) + (after >= Rules.PoleMax ? " (longest)" : " (shortest)"));
         }
 
-        // ---- Resized while pointed at, attached and not nailed (the user, 2026-11-08: "if the pole and plank is attached but not yet nailed, when
-        // pointing at it, player can adjust it's lengh/radius/width/thickness with the same button also, don't change the attached point";
-        // BOARD_PLANK_DRAFT.md, "Attached poles and planks resized while pointed at") ----
+        // ---- Resized while pointed at, attached and not nailed ----
         // The game points at an item that isn't nailed with empty hands, and with the hammer (it may nail any wall item: GoPointer.DoRaycast,
-        // ShipItemHammer.AllowOnItemClick); any other held item points at none. A pole, or a plank by one end (the user: "Placement mode only"), bought,
-        // attached (the game's wall drop; every wall item after a load), not in a slot, a crate or a box. The same keys as held, each acting as it goes
-        // down and, held, repeating after 0.4 s (Q too: with nothing held the wheel leans nothing; the game's own Q only stops its mouse look while held,
-        // MouseLook). Its attached end stays: a length moves only its far end; a tilted one made thicker or wider still rests on its surface, moved out
-        // along the surface's normal by the change of the attach's own lift (RestLift; the user: "Keep it resting"); a straight one doesn't move. None
-        // while things are fixed on it (PoleCarry.ThingsOn: they would be left in the air or inside it).
+        // ShipItemHammer.AllowOnItemClick); any other held item points at none. A pole, or a plank by one end (placement mode), bought,
+        // attached (the game's wall drop; every wall item after a load), not in a slot, a crate or a box. The same keys as held, each acting
+        // as it goes down and, held, repeating after 0.4 s (Q too: with nothing held the wheel leans nothing; the game's own Q only stops its
+        // mouse look while held, MouseLook). Its attached end stays: a length moves only its far end; a tilted one made thicker or wider
+        // still rests on its surface, moved out along the surface's normal by the change of the attach's own lift (RestLift); a straight
+        // one doesn't move. None while things are fixed on it (PoleCarry.ThingsOn: they would be left in the air or inside it).
         internal const KeyCode LongerKey = KeyCode.Q, ShorterKey = KeyCode.E;
         internal static Func<KeyCode, bool> TestLengthKey;   // tests press Q or E on a pointed rod with this, once each call that returns true
         private static int lengthRepeating; private static float lengthRepeatAt;
@@ -1632,15 +1610,15 @@ namespace EconomyOverhaul
             var normal = RestNormal(rod); var turn = rod.transform.rotation;
             float before = normal.HasValue ? RestLift(rod, turn, turn * normal.Value) : 0;
             step();
-            // shortcut: a tilted rod whose surface was found neither at its attach nor by FindRest keeps its pivot (a thicker end may reach into the
-            // surface); replace if the user meets one.
+            // shortcut: a tilted rod whose surface was found neither at its attach nor by FindRest keeps its pivot (a thicker end may reach
+            // into the surface); replace it if a rod is seen reaching into its surface.
             if (normal.HasValue)
             {
                 float lift = RestLift(rod, turn, turn * normal.Value) - before;
                 if (Mathf.Abs(lift) > 1e-5f) MoveAttached(rod, turn * normal.Value * lift);
             }
-            // Its physics copy is a roof (the walk copy's ray aboard, the items' ray on land): cargo under its old or new size reads its cover
-            // again, as after a drop, a pick-up or a removal (CoverEvents; the deep review of 2026-11-09).
+            // Its physics copy is a roof (the walk copy's ray aboard, the items' ray on land): cargo under its old or new size reads its
+            // cover again, as after a drop, a pick-up or a removal (CoverEvents).
             area.Encapsulate(CoverEvents.WorldBounds(rod));
             CoverEvents.RecheckBeneath(rod, area);
         }
@@ -1699,11 +1677,9 @@ namespace EconomyOverhaul
         }
         internal static bool KeepsRest(ShipItem rod) => rod && restNormals.ContainsKey(rod);   // for tests
         internal static void ForgetRest(ShipItem rod) { if (rod) restNormals.Remove(rod); }   // for tests: as after a load
-        // O wider, L narrower (the user, 2026-10-24: "change to O/L instead"; Z/C until then, and C is the game's camera mode key), a
-        // quarter of today's width a press (K4, the user: "K4 use 0.25x then"), held: repeats after 0.4 s, as E. A pole's diameter the
-        // same keys, 0.2x a press from 1.0x to 10.0x, whenever held as Q/E (the user, 2026-10-24: "press O/L to increase/decrease
-        // diameter"; "Whenever held, as Q/E"). The keys the configurator's (RodKeys, 2026-11-08; O and L by default). WiderKey and
-        // NarrowerKey name the two for the tests' hook (TestWidthKey), whatever keys are set.
+        // O wider, L narrower, held: repeats after 0.4 s, as E; a plank's width to the next size on the 50 mm grid (StepPlankWidth). A
+        // pole's diameter the same keys, 0.2x a press from 1.0x to 10.0x, whenever held as Q/E. The keys the configurator's (RodKeys; O
+        // and L by default). WiderKey and NarrowerKey name the two for the tests' hook (TestWidthKey), whatever keys are set.
         internal const KeyCode WiderKey = KeyCode.O, NarrowerKey = KeyCode.L;
         internal const string SizeFixed = "Diameter fixed: things on the pole";
         private static int widthRepeating; private static float widthRepeatAt;
@@ -1751,15 +1727,14 @@ namespace EconomyOverhaul
         }
         private static void StepPlankWidth(ShipItem plank, int step)
         {
-            // to the next size on the 50 mm grid (Rules.PlankWider; the user, 2026-11-08: "50 mm steps"), a notice at 0.05 m and 1 m
+            // to the next size on the 50 mm grid (Rules.PlankWider), a notice at 0.05 m and 1 m
             var s = WoodPlanks.Shape(plank); var to = Rules.PlankWider(s, step);
             if (to.grid != s.grid || to.width != s.width) WoodPlanks.SetShape(plank, to);
             if (to.grid >= Rules.PlankGridSizes || to.grid <= 1) Loans.Notify("Wood plank " + WoodPlanks.Width(plank).ToString("F2", CultureInfo.InvariantCulture) + " m wide" + (to.grid >= Rules.PlankGridSizes ? " (widest)" : " (narrowest)"));
         }
-        // I thicker, K thinner (BOARD_PLANK_DRAFT.md; the user, 2026-11-08: "use IK for control", "placement mode", then the 50 mm grid: "the width
-        // and thickness's step should be matching so player can create proper square beam", "50 mm steps"): today's 45 mm, then 0.05 m to 1 m in
-        // 0.05 m a press, only in placement mode (a plank is a rod only by one end), held: repeating as O/L;
-        // a notice only at the limits; none while things are on it. ThickerKey and ThinnerKey name the two for the tests' hook.
+        // I thicker, K thinner: today's 45 mm, then 0.05 m to 1 m in 0.05 m a press (the width's grid, so square beams can be made),
+        // only in placement mode (a plank is a rod only by one end), held: repeating as O/L; a notice only at the limits; none while
+        // things are on it. ThickerKey and ThinnerKey name the two for the tests' hook.
         internal const KeyCode ThickerKey = KeyCode.I, ThinnerKey = KeyCode.K;
         private static int thickRepeating; private static float thickRepeatAt;
         internal static Func<KeyCode, bool> TestThickKey;   // tests press I or K with this, once each call that returns true
@@ -1779,8 +1754,7 @@ namespace EconomyOverhaul
             if (to >= Rules.PlankMaxThickSteps || to <= 0) Loans.Notify("Wood plank " + WoodPlanks.Thick(plank).ToString("F3", CultureInfo.InvariantCulture) + " m thick" + (to >= Rules.PlankMaxThickSteps ? " (thickest)" : " (thinnest)"));
         }
     }
-    // ---- The pole's and plank's size keys in the configurator (BOARD_PLANK_DRAFT.md; the user, 2026-11-08: "Add hotkey configuration for
-    // length/radius control of poles, and lenght/width/thickness control of plank in configurator") ----
+    // ---- The pole's and plank's size keys in the configurator ----
     // Each a shortcut set by a key press, as the brace key (Settings: "Wood pole" and "Wood plank"), read as the brace key is (PoleBrace.KeyDown):
     // its main key with its modifiers held, not refused while another key is down (walking, or Q held).
     internal static class RodKeys
@@ -1815,8 +1789,7 @@ namespace EconomyOverhaul
         private static string MakeBrace() => Name(Settings.BraceKey?.Value ?? new BepInEx.Configuration.KeyboardShortcut(KeyCode.H));
         // The names above, made once and kept until one of these keys' settings changes: a value changes only through ConfigEntry.Value,
         // which raises the entry's SettingChanged (the configurator, or the file read again). Made afresh at every call while a key isn't
-        // bound yet. The hints asked for them 6 or 7 times a frame, each a KeyboardShortcut.ToString (a LINQ select, an array and a join;
-        // the deep review of 2026-11-09).
+        // bound yet. The hints ask for them 6 or 7 times a frame, each a KeyboardShortcut.ToString (a LINQ select, an array and a join).
         private static string lengthPole, lengthPlank, widthPole, widthPlank, thick, brace;
         private static BepInEx.Configuration.ConfigEntry<BepInEx.Configuration.KeyboardShortcut> hookedTo;   // the bound set the names follow (Settings.Bind runs once; bound again, hooked again)
         private static bool Kept()
@@ -1858,7 +1831,7 @@ namespace EconomyOverhaul
             shown = staff; if (look) look.SetActive(staff); if (root) root.enabled = !staff;
         }
     }
-    // ---- The length while a pole is held (the user, 2026-10-13) ----
+    // ---- The length while a pole is held ----
     // The game's one text holder (LookUI) shows either the held item's text or a pointed thing's (a dock's "push"), one at a time, so
     // the length would vanish while pushing a dock. The mod draws its own line in the game's hint-line style (a copy of LookUI's hint
     // line, where the game shows a pole's length when one looks at it), at a fixed spot 0.75 m ahead of the eye and 0.37 m down (0.12 m below 0.25),
@@ -1884,9 +1857,8 @@ namespace EconomyOverhaul
             var eye = cam.transform;
             root.position = eye.position + eye.forward * Ahead - Vector3.up * (Down + Below);
             root.LookAt(eye);   // as LookUI turns itself to the camera
-            // The line made again only when what it shows changed: the rod, its size (its saved code, health), its weight shown or not and
-            // the weight, the angle changed last and its whole degrees, the font's degree sign. It was made every frame, a few number formats
-            // and joins (the deep review of 2026-11-09).
+            // The line made again only when what it shows changes: the rod, its size (its saved code, health), its weight shown or not and
+            // the weight, the angle changed last and its whole degrees, the font's degree sign.
             bool plank = WoodPlanks.IsPlank(held), weight = Settings.RodWeightShown, angled = WoodPoles.Angle(held, out char kind, out int angle);
             if (lineText == null || !ReferenceEquals(held, lineFor) || plank != linePlank || held.health != lineHealth || weight != lineWeight || weight && held.mass != lineMass ||
                 angled != lineAngled || kind != lineKind || angle != lineAngle || degreeSign != lineDegree)
@@ -1900,8 +1872,8 @@ namespace EconomyOverhaul
         }
         private static string lineText; private static ShipItem lineFor; private static float lineHealth, lineMass; private static char lineKind; private static int lineAngle;
         private static bool linePlank, lineWeight, lineAngled, lineDegree;
-        // Its own weight after its size with the configurator's "Show pole and plank weight" (the user, 2026-11-08: "also add a configurator option, default
-        // off, when enable, show the weight of the current plank/pole on the text also"): ", 10.0 lb" (one decimal under 100 lb, whole pounds above).
+        // Its own weight after its size with the configurator's "Show pole and plank weight": ", 10.0 lb" (one decimal under 100 lb,
+        // whole pounds above).
         internal static string WeightText(ShipItem rod) => !Settings.RodWeightShown || !rod ? "" : Rules.WeightText(rod.mass);
         private static bool Make(LookUI look)
         {
@@ -1919,26 +1891,26 @@ namespace EconomyOverhaul
             return Text;
         }
     }
-    // ---- A braced wood pole (the user, 2026-10-13; as built in CANVAS.md) ----
+    // ---- A braced wood pole ----
     // The brace key (the option "Brace key", H) braces a held pole that is bought and not nailed: from the staff in the hand it is laid
     // down over a second to the brace, held at the right side of the body pointing where one looks, tilted by the mouse wheel as the
     // game tilts any held item (at most 80 degrees), from its butt 0.4 m behind the hand (a length change moves only its far tip). The
-    // key again raises it back over a second, and it is held as before. It is never solid (the user, 2026-10-13: no collision): its
-    // physics copy is a trigger, as the game makes a held item's, and follows the hold exactly, kinematic, as any held item does (the
-    // user: no hands' force); it knocks nothing and nothing catches it. It ignores the water's floating. It lives where items live,
-    // in the world on land and on the ship's walk copy aboard, so aboard it moves with the ship; a jump of the hand no hands could make
-    // (boarding or leaving a ship while braced, a teleport) puts it at the hold at once.
+    // key again raises it back over a second, and it is held as before. It is never solid: its physics copy is a trigger, as the game
+    // makes a held item's, and follows the hold exactly, kinematic, as any held item does (no hands' force); it knocks nothing and
+    // nothing catches it. It ignores the water's floating. It lives where items live, in the world on land and on the ship's walk copy
+    // aboard, so aboard it moves with the ship; a jump of the hand no hands could make (boarding or leaving a ship while braced, a
+    // teleport) puts it at the hold at once.
     // What the pole meets in the world (a 2 cm sphere along it from the hand) its tip rests on, outlined as the game outlines a push
     // part; there, with the pick-up input held, it pushes 1.25 times as hard as the game's own push without one: a boat from land
     // (GPButtonBoatPushCol's push, with its own values), one's own boat off a dock, the ground or the sea bed from aboard
     // (DockPushCol's), and from aboard another boat, both apart. When that closes in on the hand it fends on its own: from land as it
     // pushes, from aboard the dock push 1.908 times over the closing speed (an 8 m pole stops 3.09 m/s), two boats' masses as one.
     // The pick-up input doesn't drop it; the throw key still drops or throws it, which ends the brace.
-    // Deft Hands (com.keevi.defthands), when installed: its tilt of a held item has no 90-degree limit on a pole (A-B4), and the
-    // braced pole is handed back to it after each push (A-B2). Its HeldItemTracker.SetCurrentItem(item, wasAttached) tells its
-    // rotation, push and pull and wall roll which item is held: the game's pick-up sets it, its DropItem prefix clears it, and
-    // that prefix runs on every push of a braced pole (the game's key-up drop path, this mod refusing the drop itself), so its
-    // push and pull and Alt-tilt stopped on the pole until it was picked up again (the user, 2026-10-18: A-B2 (c), A-B4).
+    // Deft Hands (com.keevi.defthands), when installed: its tilt of a held item has no 90-degree limit on a pole, and the braced pole
+    // is handed back to it after each push. Its HeldItemTracker.SetCurrentItem(item, wasAttached) tells its rotation, push and pull
+    // and wall roll which item is held: the game's pick-up sets it, its DropItem prefix clears it, and that prefix runs on every push
+    // of a braced pole (the game's key-up drop path, this mod refusing the drop itself), so without the hand-back its push and pull
+    // and Alt-tilt would stop on the pole until it is picked up again.
     internal static class DeftHands
     {
         internal const string Guid = "com.keevi.defthands";
@@ -1969,13 +1941,13 @@ namespace EconomyOverhaul
     {
         internal const float GripRight = .3f, GripDown = .45f, GripAhead = .35f, Behind = .4f, Radius = .02f, TipGap = .01f;
         internal const float FenderSpeed = .05f, LetGoAngle = 30;
-        // Round 4 (the user, 2026-10-13): laid down and raised over a second each; tilted by the wheel at most 80 degrees; put straight
-        // at the hold on a jump of the hand over 2 m.
+        // Laid down and raised over a second each; tilted by the wheel at most 80 degrees; put straight at the hold on a jump of the
+        // hand over 2 m.
         internal const float LaySeconds = 1, MaxTilt = 80, Jump = 2;
         // The game's DockPushCol value (its own boat pushed back from where one looks): -0.55 in the game, or what a mod writes into
-        // every dock push collider each physics step (the user's Hercules Throw: its "Dock push force multiplier"; the user,
-        // 2026-10-13). Kept from the last active one seen (DockSeen, after the game's step and every mod's prefix: HarmonyX runs them
-        // even when this mod skips the game's own push); away from every dock the last one seen, -0.55 before any.
+        // every dock push collider each physics step (Hercules Throw: its "Dock push force multiplier"). Kept from the last active one
+        // seen (DockSeen, after the game's step and every mod's prefix: HarmonyX runs them even when this mod skips the game's own push);
+        // away from every dock the last one seen, -0.55 before any.
         internal const float GameDockPush = -.55f;
         internal static float DockPush { get; private set; } = GameDockPush;
         private static readonly AccessTools.FieldRef<DockPushCol, float> dockPushMult = AccessTools.FieldRefAccess<DockPushCol, float>("pushForceMult");
@@ -2005,8 +1977,8 @@ namespace EconomyOverhaul
             if (KeyDown()) { if (Braced == held) Raising = !Raising; else Brace(held); }
         }
         // The brace key (the option "Brace key", H) went down this frame: its key and its modifiers, as BepInEx's KeyboardShortcut.IsDown,
-        // but not refused while another key is held: IsDown also fails while any key but its own is down, so the key did nothing while
-        // walking, running or holding Q, E or F (the review of 2026-10-18, Claude's fix). Also a plank's mode key (WoodPlanks.ModeKey).
+        // but not refused while another key is held: IsDown also fails while any key but its own is down, so the key would do nothing
+        // while walking, running or holding Q, E or F. Also a plank's mode key (WoodPlanks.ModeKey).
         internal static Func<bool> TestKey;   // tests press it with this (no key can be pressed in a test)
         internal static bool KeyDown()
         {
@@ -2036,26 +2008,24 @@ namespace EconomyOverhaul
             if (!pole) return;
             ToWalkCopy(pole);
             pole.wallAttachment = true;
-            // Handed back to Deft Hands during the brace (PoleBraceDropPatch), its wall roll took no item (it takes only a wall item,
-            // and a braced pole is none): handed back again now that it is one, so its roll works on the pole again (the deep
-            // review of 2026-10-19, Claude's fix to A-B2).
+            // Handed back to Deft Hands during the brace (PoleBraceDropPatch), its wall roll takes no item (it takes only a wall item,
+            // and a braced pole is none): handed back again now that it is one, so its roll works on the pole again.
             if (HandedBack) { HandedBack = false; DeftHands.Hold(pole); }
             WoodPoles.SetLength(pole, WoodPoles.Length(pole));   // its whole box again, and the held look back in the hand
         }
         internal static bool HandedBack;   // the braced pole was handed back to Deft Hands after a push (PoleBraceDropPatch)
         // Deft Hands' tilt (its Alt and the mouse) adds to the held turn without a limit: while braced, the turn is held at the
-        // brace's 80 as the wheel's is (past 180 the brace would jump from one side's 80 to the other's; the deep review of
-        // 2026-10-19, Claude's fix). Its tilt reads the turn back when another writes it (its RotateQuadrant).
+        // brace's 80 as the wheel's is (past 180 the brace would jump from one side's 80 to the other's). Its tilt reads the turn
+        // back when another writes it (its RotateQuadrant).
         internal static void HoldTilt()
         {
             var pole = Braced; if (!pole) return;
             float t = Mathf.DeltaAngle(0, pole.heldRotationOffset);
             if (Mathf.Abs(t) > MaxTilt) pole.heldRotationOffset = Mathf.Clamp(t, -MaxTilt, MaxTilt);
         }
-        // A pole the game had boarded on a ship the player is not on was held in the world (ToBody: Aboard false), but the game's
-        // own step reads such a body in that ship's walk copy's frame (ItemRigidbody.FixedUpdate: MoveItemToWalkColRigidbody), which put a
-        // pole let go there far off (lost, deleted 600 m away). Its body goes onto that walk copy where it is (the review of
-        // 2026-10-18, Claude's fix).
+        // A pole the game boarded on a ship the player is not on is held in the world (ToBody: Aboard false), but the game's own step
+        // reads such a body in that ship's walk copy's frame (ItemRigidbody.FixedUpdate: MoveItemToWalkColRigidbody), which would put
+        // a pole let go there far off (lost, deleted 600 m away). Its body goes onto that walk copy where it is.
         private static bool worldBody;   // the last step put its body in the world (not by the game's own step, not on the ship's walk copy)
         private static void ToWalkCopy(ShipItem pole)
         {
@@ -2095,7 +2065,7 @@ namespace EconomyOverhaul
             if (braced) { Aim(pole, eye, out var g, out var a, out _); Touch(g, a, length - Behind); } else { ContactCol = null; ContactBoat = null; planted = false; }
             var (butt, turn, grip, axis) = Pose(pole, eye, Lay, braced);
             LastButt = butt; worldBody = !Aboard(pole, copy);
-            // Never solid (the user, 2026-10-13: no collision): a trigger along its whole reach, as the game makes a held item's box.
+            // Never solid: a trigger along its whole reach, as the game makes a held item's box.
             if (box)
             {
                 box.enabled = true; box.isTrigger = true;
@@ -2125,8 +2095,8 @@ namespace EconomyOverhaul
             if (!braced)
             {
                 // From the staff: its line swung to the hold's in the plane the two share, and its turn about itself blended
-                // alongside. A slerp of the two turns whole swung the tip 1.2 m out to the side mid-way, back at the end (the user's
-                // flick, 2026-10-17; measured by -PoleLean), as the two also differ by a twist about the pole.
+                // alongside. A slerp of the two turns whole would swing the tip 1.2 m out to the side mid-way, back at the end,
+                // as the two also differ by a twist about the pole.
                 var (sp, sr) = Staff(pole); float s = (float)Rules.Eased(lay);
                 Vector3 from = sr * Vector3.back, to = turn * Vector3.back, line = Vector3.Slerp(from, to, s);
                 var swung = Quaternion.FromToRotation(from, line) * sr;
@@ -2140,11 +2110,10 @@ namespace EconomyOverhaul
         private static bool Aboard(ShipItem pole, ItemRigidbody copy) => pole.currentWalkCol && pole.currentActualBoat && onBoat(copy) && GameState.currentBoat == pole.currentActualBoat;
         private static (Vector3, Quaternion) ToBody(ShipItem pole, ItemRigidbody copy, Vector3 p, Quaternion r) => !Aboard(pole, copy) ? (p, r) :
             (pole.currentWalkCol.TransformPoint(pole.currentActualBoat.InverseTransformPoint(p)), pole.currentWalkCol.rotation * (Quaternion.Inverse(pole.currentActualBoat.rotation) * r));
-        // To the hold each physics step, exactly, as the game holds any item (kinematic; the user, 2026-10-13: no hands' force). A
-        // jump of the hand no hands could make (boarding or leaving a ship while braced: the hand moves between the world and its walk
-        // copy; a teleport) puts it there at once instead of sweeping it through the frames between; a world shift moves the body with
-        // the hand. The hand, not the hold: the hold slides back along the pole by up to its length when its tip meets something
-        // (pole-brace-45).
+        // To the hold each physics step, exactly, as the game holds any item (kinematic, no hands' force). A jump of the hand no
+        // hands could make (boarding or leaving a ship while braced: the hand moves between the world and its walk copy; a teleport)
+        // puts it there at once instead of sweeping it through the frames between; a world shift moves the body with the hand. The
+        // hand, not the hold: the hold slides back along the pole by up to its length when its tip meets something.
         private static Vector3 lastBody, lastHand; private static bool hasLast;
         internal static int Placed;   // times put at the hold after a jump (for tests)
         internal static Vector3 DrawnAt; internal static bool DrawnPlanted;   // how the pole was last drawn: planted, resting there (for tests)
@@ -2190,7 +2159,7 @@ namespace EconomyOverhaul
             return rb && (rb.GetComponent<PurchasableBoat>() || BoatPart(rb)) ? rb : null;
         }
         // Each boat's own push part, looked up once; a body with none (a visible trader's hull, a rock's body) is remembered as
-        // none too (it was looked up again each physics step while the tip rested on it); one destroyed is looked up again.
+        // none too (else it is looked up again each physics step while the tip rests on it); one destroyed is looked up again.
         private static readonly Dictionary<Rigidbody, GPButtonBoatPushCol> parts = new Dictionary<Rigidbody, GPButtonBoatPushCol>();
         internal static GPButtonBoatPushCol BoatPart(Rigidbody boat)
         {
@@ -2201,8 +2170,8 @@ namespace EconomyOverhaul
         // The push, with the pick-up input held: from land on the boat met, the game's GPButtonBoatPushCol push with its own values;
         // from aboard on one's own boat, DockPushCol's, and the boat met (if any) the equal opposite push; each 1.25 times as hard,
         // and over the pushed boat's speed (at least 1) as the game's. As a fender (the contact closing in on the hand faster than
-        // 5 cm/s, nothing held): from land the same push; from aboard (the user, 2026-10-13) the dock push 1.908 times (Rules.PoleFender:
-        // an 8 m pole stops 3.09 m/s, 6 knots) over the closing speed (at least 1), the ship's mass off a dock or the sea bed, two boats' masses as one
+        // 5 cm/s, nothing held): from land the same push; from aboard the dock push 1.908 times (Rules.PoleFender: an 8 m pole stops
+        // 3.09 m/s, 6 knots) over the closing speed (at least 1), the ship's mass off a dock or the sea bed, two boats' masses as one
         // (the same stop for every ship, from either deck).
         private static void Push(Transform eye, Vector3 grip, Vector3 axis)
         {
@@ -2240,9 +2209,9 @@ namespace EconomyOverhaul
                 ContactBoat.AddForceAtPosition(f, new Vector3(at.x, eye.position.y + below, at.z)); LastForce = f; LastForceOn = ContactBoat;
             }
         }
-        // What its tip rests on is outlined as the game outlines a push part (GoPointerButton.UpdateColor; the user, 2026-10-13): a
-        // boat's push part (GPButtonBoatPushCol) or a dock's (DockPushCol), as looked at while the tip rests there and as pushed (the
-        // game's FlashOutline) while it pushes or fends. The sea bed and other ground: none.
+        // What its tip rests on is outlined as the game outlines a push part (GoPointerButton.UpdateColor): a boat's push part
+        // (GPButtonBoatPushCol) or a dock's (DockPushCol), as looked at while the tip rests there and as pushed (the game's
+        // FlashOutline) while it pushes or fends. The sea bed and other ground: none.
         private static readonly AccessTools.FieldRef<GoPointerButton, bool> outlined = AccessTools.FieldRefAccess<GoPointerButton, bool>("overrideEnableOutline");
         internal static GoPointerButton Lit { get; private set; }
         internal static void Highlight()
@@ -2256,9 +2225,9 @@ namespace EconomyOverhaul
         private static void Unlight() { if (Lit) outlined(Lit) = false; Lit = null; }
         // Drawn each frame, after everything else has moved, from the hand as it is then, as the game draws any held item (its
         // GoPointer.LateUpdate sets a held item's transform every frame); not from its body, which moves only on physics steps and so
-        // was drawn a step behind the view, juddering as it turned (the user, 2026-10-13: glitchy, unlike a held item). Resting on,
-        // pushing or fending off a point, from the hands straight to it, whatever it is (a boat, a dock, the ground, the sea bed: from
-        // aboard it touches what it pushes). Laying down and raising run on smoothly between physics steps.
+        // would be drawn a step behind the view, juddering as it turns. Resting on, pushing or fending off a point, from the hands
+        // straight to it, whatever it is (a boat, a dock, the ground, the sea bed: from aboard it touches what it pushes). Laying
+        // down and raising run on smoothly between physics steps.
         internal static void Draw()
         {
             var pole = Braced; if (!pole || !pole.held) return;
@@ -2312,8 +2281,8 @@ namespace EconomyOverhaul
     // Dropped onto a pole aboard a ship: put on the ship where it was aimed (WoodPoles.OnPoleDrop), after the game's own drop.
     [HarmonyPatch(typeof(ShipItem), "OnDrop")] internal static class PoleDropPatch
     { static void Postfix(ShipItem __instance) { if (WoodPoles.Registered && __instance.wallAttachment) { WoodPoles.OnPoleDrop(__instance); WoodPoles.Attached(__instance); } } }
-    // Any held wall item (a pole, a lantern hook, a hangable...; the user, 2026-10-13: not only poles) aimed at a nailed pole
-    // attaches to it (WoodPoles.AimAtPole), after the game's own wall test of the frame. A braced pole is no wall item.
+    // Any held wall item (a pole, a lantern hook, a hangable...) aimed at a nailed pole attaches to it (WoodPoles.AimAtPole),
+    // after the game's own wall test of the frame. A braced pole is no wall item.
     // After Deft Hands' own turn of the spot (its WallAttachmentRollPatch): the pole's tilt and lean are turned last.
     [HarmonyPatch(typeof(ShipItem), "Update"), HarmonyAfter("com.keevi.defthands")] internal static class PoleOnPolePatch
     { static void Postfix(ShipItem __instance) { if (__instance.held && __instance.wallAttachment && WoodPoles.Registered && __instance.sold) { WoodPoles.AimAtPole(__instance, new Ray(__instance.held.transform.position, __instance.held.transform.forward)); WoodPoles.LeanOnWall(__instance); } } }
@@ -2349,21 +2318,19 @@ namespace EconomyOverhaul
             if (!WoodPoles.IsPole(__instance)) return;
             WoodPoles.ResetLean(__instance);   // upright at each pick-up
             if (__instance.sold) InventoryBrace.TakenOut(__instance);
-            // The keys' notice only when the game's controls text is off: on, the controls line shows them (RodHints; the user, 2026-11-02,
-            // H8: "yes").
+            // The keys' notice only when the game's controls text is off: on, the controls line shows them (RodHints).
             if (__instance.sold && !global::Settings.controlsTextEnabled) Loans.Notify(WoodPoles.PickupNotice(__instance));
         } }
-    // Upright at each pick-up with Deft Hands too (the user, 2026-10-20; POLE_ROUND5_DRAFT.md): Deft Hands keeps an attached item's
-    // roll as it stood when it is picked up (its PickUpItemPatch, WallAttachmentRoll.ReadAttachedRoll), and the pole counts Deft
-    // Hands' roll in its attach (SeenLean), so a pole attached leaning came back leaning and the angle grew with each attach and
-    // pick-up. After Deft Hands' own pick-up, the pole is handed to it again as not attached: its kept roll back to 0, the pole not
-    // turned (its RollHeldItem sees no change).
+    // Upright at each pick-up with Deft Hands too: Deft Hands keeps an attached item's roll as it stood when it is picked up (its
+    // PickUpItemPatch, WallAttachmentRoll.ReadAttachedRoll), and the pole counts Deft Hands' roll in its attach (SeenLean), so a
+    // pole attached leaning would come back leaning and the angle grow with each attach and pick-up. After Deft Hands' own
+    // pick-up, the pole is handed to it again as not attached: its kept roll back to 0, the pole not turned (its RollHeldItem
+    // sees no change).
     [HarmonyPatch(typeof(GoPointer), "PickUpItem")] internal static class PoleDeftPickupPatch
     {
         [HarmonyAfter(DeftHands.Guid)] static void Postfix(PickupableItem item) { if (item is ShipItem pole && WoodPoles.IsRod(pole) && pole.sold) DeftHands.Hold(pole); }
     }
-    // ---- A braced pole kept braced through the inventory (the user, 2026-10-24: "i want to implement brace preserve after taken out
-    // from inventory also"; over saves: "if it's not affect performance, let it save across the saves") ----
+    // ---- A braced pole kept braced through the inventory, and over saves ----
     // Put in an inventory slot braced (GPButtonInventorySlot.InsertItem), the pole is marked in its saved amount (unused on a pole: 1
     // braced), which the game saves with the item; taken out (its pick-up from the slot), it is braced again at once. A plank keeps its
     // attach mode anyway: it is in its saved health.
@@ -2388,8 +2355,8 @@ namespace EconomyOverhaul
     // Removed (the game's clean-up of items left off a ship 600 m away, or any other way): a tarp tied to any nailed item is untied,
     // as the hammer does (TarpUnnailPatch), and one a pole held up drops back to its shape without it. A far ship's or a sunk ship's
     // items the game only unloads are skipped inside Tarps (Tarps.Unloading): they come back where they were.
-    // Only when the destroy goes ahead (another mod's prefix may refuse it and the item stays: New Beginnings' starter items; the deep review of
-    // 2026-11-09, question 4a): a prefix, as it reads the item on its ship before DestroyItem's ExitBoat, run after the other prefixes (Last).
+    // Only when the destroy goes ahead (another mod's prefix may refuse it and the item stays: New Beginnings' starter items): a
+    // prefix, as it reads the item on its ship before DestroyItem's ExitBoat, run after the other prefixes (Last).
     [HarmonyPatch(typeof(ShipItem), "DestroyItem")] internal static class PoleRemovePatch
     {
         [HarmonyPriority(Priority.Last)]
@@ -2408,23 +2375,23 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(ShipItemHammer), "NailItem")] internal static class PoleNailPatch
     { static void Postfix(ShipItem item) { if (item && item.nailed && WoodPoles.IsPole(item)) Tarps.PoleMoved(item, false); } }
 
-    // ---- Things on a pole go with it (the user, 2026-10-13; as built in CANVAS.md) ----
+    // ---- Things on a pole go with it ----
     // Picked up, a pole takes with it what is locked (nailed) on it: the wall items whose attachment point is on it (within 2 cm,
     // facing into it) and the poles nailed on it with what is nailed on those, found by geometry at that moment (no save data); a
     // lantern hung on a carried hook goes with its hook (the game hangs it on the hook's body by a joint and draws it under the hook).
-    // What is on it but not locked is let go and falls (the user, round 4). They keep their place on it as it is drawn (in the hand
-    // on its held look) while it is held, braced, thrown or lying loose, aboard on the pole's ship: their physics copies frozen (as any
-    // fixed wall item) and triggers, so they add no weight and knock nothing. Poles nailed straight on its far end make one longer pole
-    // with it (the user: its reach, its body along the whole length (solid only while loose) and 2 kg a metre, no limit). Attached to a wall again, they stay on it
-    // as plain wall items (found again at its next pick-up) and the nailed poles among them hold up a tarp they stand under (the user:
-    // the reverse case). One picked up leaves it; the pole removed or put away lets them go and they fall. At pick-up a tarp tied to
-    // one of them is untied (its pack dropped, as un-nailing gives it; the user: untie automatically) and one a carried pole held up
-    // drops back to its shape. Its length is fixed while things are on it.
+    // What is on it but not locked is let go and falls. They keep their place on it as it is drawn (in the hand on its held look)
+    // while it is held, braced, thrown or lying loose, aboard on the pole's ship: their physics copies frozen (as any fixed wall
+    // item) and triggers, so they add no weight and knock nothing. Poles nailed straight on its far end make one longer pole with it
+    // (its reach, its body along the whole length (solid only while loose) and 2 kg a metre, no limit). Attached to a wall again,
+    // they stay on it as plain wall items (found again at its next pick-up) and the nailed poles among them hold up a tarp they stand
+    // under. One picked up leaves it; the pole removed or put away lets them go and they fall. At pick-up a tarp tied to one of them
+    // is untied (its pack dropped, as un-nailing gives it) and one a carried pole held up drops back to its shape. Its length is
+    // fixed while things are on it.
     internal static class PoleCarry
     {
         internal const float Near = .02f, Straight = .996f;   // on its surface within 2 cm; straight on within 5 degrees
         internal const string LengthFixed = "Length fixed: things on the pole";
-        // A plank's own (its length, width or thickness), not the pole's text (the deep review of 2026-11-09).
+        // A plank's own (its length, width or thickness), not the pole's text.
         internal const string PlankFixed = "Size fixed: things on the plank";
         internal sealed class Thing { internal ShipItem item, hook; internal Vector3 at; internal Quaternion turn; internal bool hung; }   // at, turn: in the pole's frame; hook: the one it hangs on
         internal sealed class Load
@@ -2467,9 +2434,9 @@ namespace EconomyOverhaul
         // Taken out of storage, a pole takes nothing: put away, its things were let go (Follow), and its frame is not where it is. The
         // game calls OnPickup before it frees an item from an inventory slot (or the port's cart), so the pole is still parked and
         // shrunk for the UI here (0.1 with the panel open, toward 0 with it closed, when every point measured from it comes out at
-        // its base: every thing nailed anywhere facing one way was taken, 2026-10-17's report). Outside storage the game holds every
-        // item at scale 1 each frame (ItemRigidbody.LateUpdate; localScale, so a scaled ship doesn't count); storage shrinks it. A
-        // crate's withdrawal resets all that but leaves it at the crate screen's button: marked (PoleCrateWithdrawPatch).
+        // its base and every thing nailed anywhere facing one way would be taken). Outside storage the game holds every item at
+        // scale 1 each frame (ItemRigidbody.LateUpdate; localScale, so a scaled ship doesn't count); storage shrinks it. A crate's
+        // withdrawal resets all that but leaves it at the crate screen's button: marked (PoleCrateWithdrawPatch).
         private static ShipItem crateWithdrawn; private static int crateWithdrawnFrame = -1;
         internal static void WithdrawnFromCrate(ShipItem pole) { crateWithdrawn = pole; crateWithdrawnFrame = Time.frameCount; }
         internal static bool Stored(ShipItem pole) => pole.itemRigidbodyC.GetCurrentInventorySlot() || pole.transform.localScale != Vector3.one
@@ -2486,7 +2453,7 @@ namespace EconomyOverhaul
             var toLine = new Vector3(-q.x, -q.y, 0);
             return toLine.magnitude > .01f && Vector3.Dot(into, toLine.normalized) > .7f;
         }
-        // On a plank: its attachment point within 2 cm of the plank's box, facing into the face it is nearest (K7).
+        // On a plank: its attachment point within 2 cm of the plank's box, facing into the face it is nearest.
         internal static bool OnBox(ShipItem plank, ShipItem item)
         {
             var box = plank.GetComponent<BoxCollider>(); if (!box) return false;
@@ -2522,7 +2489,7 @@ namespace EconomyOverhaul
         internal static void PickedUp(ShipItem item)
         {
             Leave(item);
-            if (!(WoodPoles.IsPole(item) || WoodPlanks.IsPlank(item)) || !item.sold || !item.itemRigidbodyC || Stored(item)) return;   // a plank too (K7)
+            if (!(WoodPoles.IsPole(item) || WoodPlanks.IsPlank(item)) || !item.sold || !item.itemRigidbodyC || Stored(item)) return;   // a plank too
             var pole = item; Prune(); Forget(Of(pole));   // found afresh
             var all = SaveLoadManager.instance ? SaveLoadManager.instance.GetCurrentPrefabs() : null; if (all == null) return;
             var candidates = new List<ShipItem>();
@@ -2534,13 +2501,12 @@ namespace EconomyOverhaul
                 foreach (var c in candidates)
                 {
                     if (found.Contains(c) || loose.Contains(c) || !On(on, c)) continue;
-                    // on through planks too (the user, 2026-10-24: "let chain goes on plank"; before, what was nailed on a carried
-                    // plank stayed nailed in the air)
+                    // on through planks too: what is nailed on a carried plank goes with it
                     if (c.nailed) { found.Add(c); if (WoodPoles.IsPole(c) || WoodPlanks.IsPlank(c)) open.Enqueue(c); }
                     else loose.Add(c);
                 }
             }
-            // Not locked: let go, they fall (the user, 2026-10-13: only locked things stay on a pole).
+            // Not locked: let go, they fall.
             foreach (var c in loose) { Leave(c); c.itemRigidbodyC.attached = false; }
             if (found.Count == 0)
             {
@@ -2630,8 +2596,8 @@ namespace EconomyOverhaul
         private static void Board(ShipItem item, ShipItem pole) => ChangeShip(item, pole, "A thing on a wood pole");
         // A carried thing (on a pole or a pallet: WoodPallets.Board) onto its carrier's ship, or off any, held as it was: leaving a ship
         // frees it (ItemRigidbody.ExitBoat clears attached) and unhooks a hung one (ShipItem.ExitBoat: HangableItem.DisconnectJoint), so
-        // its attached is put back and a hung one hung again on its hook (the deep review of 2026-11-02, Claude's fix: a lantern on a
-        // carried hook was left unhooked and frozen in the air, and a pallet's crate lost its snap).
+        // its attached is put back and a hung one hung again on its hook (else a lantern on a carried hook is left unhooked and frozen
+        // in the air, and a pallet's crate loses its snap).
         internal static void ChangeShip(ShipItem item, ShipItem carrier, string what)
         {
             var copy = item.itemRigidbodyC; bool attached = copy.attached;
@@ -2719,7 +2685,7 @@ namespace EconomyOverhaul
             Leave(item);
         }
     }
-    // ---- The green ghost of what a held pole carries (the user, 2026-10-20; POLE_ROUND5_DRAFT.md) ----
+    // ---- The green ghost of what a held pole carries ----
     // The game's ghost is one mesh (GoPointerTargeter: DisplayTargeter keeps a mesh, a place and a turn; its Update draws it in the
     // ghost material for that frame). Every way the pole's ghost is shown (the game's wall test, LeanOnWall, AimAtPole) hands it the
     // pole's own mesh at the pole's attach pose; when it is about to draw that, each locked thing on the pole is drawn too, in the
@@ -2781,14 +2747,13 @@ namespace EconomyOverhaul
     { static bool Prefix(ShipItem __instance) => !(PoleCarry.Active && PoleCarry.Riding(__instance)); }
 
     // ---- The wooden pallet ----
-    // Prefab 645 (the user, 2026-10-24): a two-handed item of the planks' wood 15% darker (Data/wood_pallet.obj, written by
-    // MakePallet.py), nailed with the game's hammer as any two-handed item on the floor. Once it is nailed, a held trade crate or
-    // package aimed at it shows the game's green ghost in the next free slot of its size; R puts it there and holds it still (the
-    // game's ItemRigidbody.attached: kinematic, rides with the ship, cleared by a pick-up; PALLET_PLANK_DRAFT.md P1: "held still in it's
-    // slot"). The hammer then nails it there as the game nails a crate on the floor (P2, P3: only a snapped crate). Full and every crate
-    // nailed: ropes round the load (P4). Un-nailed and picked up, the pallet takes its nailed crates (PoleCarry) and lets the others fall.
-    // Nothing new is saved: which slot a crate is in is found from where it stands (within 2 cm), and a snapped crate is held still
-    // again after a load (Rehold).
+    // Prefab 645: a two-handed item of the planks' wood 15% darker (Data/wood_pallet.obj, written by MakePallet.py), nailed with the
+    // game's hammer as any two-handed item on the floor. Once it is nailed, a held trade crate or package aimed at it shows the game's
+    // green ghost in the next free slot of its size; R puts it there and holds it still (the game's ItemRigidbody.attached: kinematic,
+    // rides with the ship, cleared by a pick-up). The hammer then nails it there as the game nails a crate on the floor (only a snapped
+    // crate). Full and every crate nailed: ropes round the load. Un-nailed and picked up, the pallet takes its nailed crates
+    // (PoleCarry) and lets the others fall. Nothing new is saved: which slot a crate is in is found from where it stands (within
+    // 2 cm), and a snapped crate is held still again after a load (Rehold).
     internal static class WoodPallets
     {
         internal const int PalletIndex = 645;
@@ -2832,7 +2797,7 @@ namespace EconomyOverhaul
                 var o = WoodPlanks.Template(dir[WoodPlanks.LumberIndex], holder.transform, "645 wood pallet", mesh, paint, PalletIndex, "wood pallet", Rules.PalletValue, Rules.PalletMass, true);
                 UnityEngine.Object.DestroyImmediate(o.GetComponent<Good>());
                 o.AddComponent<PalletMark>();
-                // The ropes (P4): their own child, drawn in the planks' material (the atlas's black, as the pole bundle's bands), shown
+                // The ropes: their own child, drawn in the planks' material (the atlas's black, as the pole bundle's bands), shown
                 // only while the pallet is full and every crate on it nailed (PalletMark).
                 var ropes = new GameObject(RopesName); ropes.transform.SetParent(o.transform, false);
                 ropes.AddComponent<MeshFilter>(); ropes.AddComponent<MeshRenderer>().sharedMaterial = wood; ropes.SetActive(false);
@@ -2873,7 +2838,7 @@ namespace EconomyOverhaul
             return b;
         }
         // Where an item of `load` stands in slot `slot`, in the pallet's frame: turned to the load's size, its drawn bottom middle on
-        // the slot (as the probe palletshow laid them out).
+        // the slot.
         internal static Pose SlotPose(ShipItem item, Rules.PalletLoad load, int slot, bool half)
         {
             var s = Drawn(item); var (zTo, yTo) = Rules.LoadAxes(s.size, Rules.LoadSize(load, half));
@@ -2891,8 +2856,8 @@ namespace EconomyOverhaul
         internal static Pose World(ShipItem pallet, Pose local) => new Pose(pallet.transform.TransformPoint(local.position), pallet.transform.rotation * local.rotation);
         // The crates in a pallet's slots now (snapped: held still, or nailed) and the slots they take: the saved items within 2 m of
         // it, each matched to a slot where it is drawn (within 2 cm). Found from the drawn items, as PoleCarry.PickedUp finds a pole's
-        // load, not from the physics copies: aboard, a physics overlap at the pallet's copy found nothing at its pick-up under way
-        // (pallet-17), its copy not where the crates' copies were. `any`: also a crate resting there loose (Rehold, after a load).
+        // load, not from the physics copies: aboard, a physics overlap at the pallet's copy finds nothing at its pick-up under way,
+        // its copy not where the crates' copies are. `any`: also a crate resting there loose (Rehold, after a load).
         // `within`: how far from its slot it may be (the pick-up's wider match, PickedUp).
         internal static List<(ShipItem crate, Rules.PalletLoad load, int slot)> Loaded(ShipItem pallet, bool any = false, float within = SlotMatch)
         {
@@ -2963,8 +2928,8 @@ namespace EconomyOverhaul
             var pallet = Aimed(crate, out int slot); if (!pallet) return false;
             var pose = World(pallet, SlotPose(crate, LoadOf(crate), slot, IsHalf(pallet)));
             crate.OnDrop(); pointer.DropItem();
-            // On the pallet's boat, or ashore with it: a held crate can count as aboard a boat whose trigger it passes (the pallet run
-            // of 2026-10-24: a crate carried on the dock beside the starting dhow was the dhow's).
+            // On the pallet's boat, or ashore with it: a held crate can count as aboard a boat whose trigger it passes (a crate carried on
+            // a dock beside a ship can be that ship's).
             if (crate.currentActualBoat != pallet.currentActualBoat)
             {
                 try
@@ -2975,16 +2940,17 @@ namespace EconomyOverhaul
                 }
                 catch (Exception e) { Plugin.Log?.LogWarning("Wood pallet: " + crate.name + " could not change boat: " + (e.InnerException ?? e).Message); }
             }
-            // Held still in its slot, not nailed (P1): the game's attached (kinematic, rides with the ship's walk copy aboard, cleared by leaving
-            // a ship, so set after the boat change; the game's pick-up clears it only for a wall item, so TakenOff does at a pick-up). The hammer nails it there (RaycastHitsFloor below).
+            // Held still in its slot, not nailed: the game's attached (kinematic, rides with the ship's walk copy aboard, cleared by leaving
+            // a ship, so set after the boat change; the game's pick-up clears it only for a wall item, so TakenOff does at a pick-up). The
+            // hammer nails it there (RaycastHitsFloor below).
             if (crate.itemRigidbodyC) crate.itemRigidbodyC.attached = true;
             Place(crate, pose);
             if (UISoundPlayer.instance) UISoundPlayer.instance.PlayUISound(UISounds.winchUnclick, 1f, .6f);
             Plugin.Log?.LogInfo("Wood pallet: " + crate.name + " put in slot " + slot + " (" + LoadOf(crate) + ").");
             return true;
         }
-        // Snapped: held still in a slot of a nailed pallet (not picked up since). Only such a crate may be nailed on a pallet (P3:
-        // "only snapped cargo can be nailed"; a crate put down there by hand stays refused, as the game refuses any item on an item).
+        // Snapped: held still in a slot of a nailed pallet (not picked up since). Only such a crate may be nailed on a pallet (a crate
+        // put down there by hand stays refused, as the game refuses any item on an item).
         // What the game's floor ray (straight down from its physics copy, 4 m) meets first is a pallet, drawn or its physics copy.
         internal static bool StandsOnPallet(ShipItem item)
         {
@@ -3044,7 +3010,7 @@ namespace EconomyOverhaul
             return false;
         }
 
-        // ---- The ropes (P4) ----
+        // ---- The ropes ----
         private static readonly Dictionary<(Rules.PalletLoad, bool), Mesh> ropeMeshes = new Dictionary<(Rules.PalletLoad, bool), Mesh>();
         // Full and every crate nailed: the load it holds, else None.
         internal static Rules.PalletLoad RopedLoad(ShipItem pallet)
@@ -3092,13 +3058,11 @@ namespace EconomyOverhaul
             if (ropes.gameObject.activeSelf != on) ropes.gameObject.SetActive(on);
         }
 
-        // ---- A loaded pallet carried (P5-P7: "you can pick up pallet and all crate on top that is nailed will following the pallet.
-        // Unnailed crate will drop") ----
+        // ---- A loaded pallet carried ----
         // Picked up (ShipItem.OnPickup, before the game frees it): its nailed crates ride it, kept in their slots as it is drawn (in
-        // the hand, thrown or lying loose), aboard on its ship, adding no weight (P5), their physics copies triggers while the pallet is
-        // held and solid while it is down (AfterStep); a snapped crate not nailed is let go and falls. Nailed again (not held), they are plain nailed crates in its slots again.
-        // The pallet itself stays a plain two-handed item (the user: "pallet doesn't need pole behavoir, it should just be normal
-        // shipitem.big").
+        // the hand, thrown or lying loose), aboard on its ship, adding no weight, their physics copies triggers while the pallet is
+        // held and solid while it is down (AfterStep); a snapped crate not nailed is let go and falls. Nailed again (not held), they
+        // are plain nailed crates in its slots again. The pallet itself stays a plain two-handed item.
         internal sealed class Rider { internal ShipItem crate; internal Vector3 at; internal Quaternion turn; internal List<Collider> ignored; }
         private static readonly Dictionary<ShipItem, List<Rider>> carried = new Dictionary<ShipItem, List<Rider>>();
         private static readonly Dictionary<ItemRigidbody, ShipItem> riderCopies = new Dictionary<ItemRigidbody, ShipItem>();   // a rider's copy: its pallet
@@ -3113,8 +3077,8 @@ namespace EconomyOverhaul
             End(item);
             var list = new List<Rider>(); int dropped = 0;
             // Within 10 cm of a slot, and carried exactly in it: un-nailed, the pallet itself can settle under its nailed crates before
-            // it is picked up (pallet-20: aboard, placed on a deck 1.1 cm uneven and nailed at once, it settled 3 cm and 1.5 degrees, and
-            // the 2 cm match found no crate).
+            // it is picked up (aboard, placed on a deck 1.1 cm uneven and nailed at once, it can settle 3 cm and 1.5 degrees, beyond the
+            // 2 cm match).
             foreach (var (crate, load, slot) in Loaded(item, false, PickupMatch))
             {
                 if (!crate.nailed) { crate.itemRigidbodyC.attached = false; dropped++; continue; }
@@ -3132,8 +3096,7 @@ namespace EconomyOverhaul
             if (list.Count + dropped > 0) Plugin.Log?.LogInfo("Wood pallet picked up with " + list.Count + " nailed crate(s)" + (dropped > 0 ? "; " + dropped + " not nailed let go" : "") + ".");
         }
         // A crate or package taken off a pallet by hand, held still in its slot: let go of. The game clears `attached` at a pick-up only for
-        // a wall item (ShipItem.OnPickup), so a snapped crate kept it and hung in the air where it was dropped (the user, 2026-10-24:
-        // "After taking cargo out from pallet, it no longer be affect by gravity, when drop it will stay in air"). Not an item the game
+        // a wall item (ShipItem.OnPickup), so a snapped crate would keep it and hang in the air where it is dropped. Not an item the game
         // holds for its crate after a load (inStove).
         internal static void TakenOff(ShipItem item)
         {
@@ -3143,8 +3106,7 @@ namespace EconomyOverhaul
             Plugin.Log?.LogInfo("Wood pallet: " + item.name + " taken off its slot.");
         }
         // After each physics step of an item's copy: a rider's copy solid while its pallet is down, a trigger while the pallet is held, as
-        // the held pallet is (the user, 2026-10-24: "When unnailed the pallet with crate nailed on top, the crate on top won't have
-        // collision, i want to change that"; asked, solid "when pallet is down"; triggers always until then: P5); a pallet's riders set on it.
+        // the held pallet is; a pallet's riders set on it.
         internal static void AfterStep(ItemRigidbody copy)
         {
             if (riderCopies.TryGetValue(copy, out var on)) { bool held = !on || on.held; foreach (var c in copy.GetComponentsInChildren<Collider>(true)) if (c && c.isTrigger != held) c.isTrigger = held; return; }
@@ -3153,7 +3115,7 @@ namespace EconomyOverhaul
         private static void Follow(ShipItem pallet)
         {
             var list = carried[pallet];
-            // Un-nailed by the hammer on a pallet carried or lying loose: it is let go and falls (P7: "Unnailed crate will drop").
+            // Un-nailed by the hammer on a pallet carried or lying loose: it is let go and falls.
             list.RemoveAll(r =>
             {
                 bool gone = !r.crate || !r.crate.itemRigidbodyC || r.crate.held || !r.crate.nailed; if (!gone) return false;
@@ -3175,7 +3137,7 @@ namespace EconomyOverhaul
             if (!pallet.held && pallet.nailed) End(pallet);   // nailed again: plain nailed crates in its slots
         }
         // A rider on the pallet's ship, or off any (its own boarding skipped while it rides: PalletRiderBoardPatch), its snap kept
-        // (PoleCarry.ChangeShip; the deep review of 2026-11-02, Claude's fix: leaving a ship cleared it).
+        // (PoleCarry.ChangeShip: leaving a ship clears it).
         private static void Board(ShipItem crate, ShipItem pallet) => PoleCarry.ChangeShip(crate, pallet, "Wood pallet: " + crate.name);
         // Drawn each frame on the pallet in the hand (the game sets a held item's transform every frame; the bodies move on physics steps).
         private static bool hooked;
@@ -3220,7 +3182,7 @@ namespace EconomyOverhaul
         }
     }
     // Each pallet in the game (WoodPallets.Live); a snapped crate held again after a load (Rehold); its ropes shown or hidden every
-    // half second (P4).
+    // half second.
     internal sealed class PalletMark : MonoBehaviour
     {
         private ShipItem item; private float next;
@@ -3244,18 +3206,18 @@ namespace EconomyOverhaul
     { static void Postfix(GoPointerButton __instance, GoPointer activatingPointer) { if (WoodPallets.Registered && __instance is ShipItem item && !(item is ShipItemCrate)) WoodPallets.Snap(item, activatingPointer); } }
     [HarmonyPatch(typeof(GoPointer), "LateUpdate")] internal static class PalletPointerPatch
     { static void Postfix(GoPointer __instance) { if (WoodPallets.Registered) WoodPallets.Ghost(__instance); } }
-    // The hammer nails a snapped crate on a pallet (P2: "Cargo snapped on nailed pallet can be nailed, vanilla don't allow this"): the
-    // game's floor test (a ray down from the crate's body, refused when it meets an item) passes for it.
+    // The hammer nails a snapped crate on a pallet, which the game alone refuses: its floor test (a ray down from the crate's body,
+    // refused when it meets an item) passes for it.
     // The pallet itself: its pivot is at its base, so lying on the floor the game's ray starts on the floor's surface and can miss it
-    // ("FALSE Floor raycast NO HIT" on a pallet resting on the dock, pallet-12 and -13; pallet-9 hit). The same test again from 10 cm up
-    // inside the pallet (a ray never meets the collider it starts in), the game's rules: the floor layer (8) or anything not an item.
+    // ("FALSE Floor raycast NO HIT" on a pallet resting on the dock). The same test again from 10 cm up inside the pallet (a ray
+    // never meets the collider it starts in), the game's rules: the floor layer (8) or anything not an item.
     [HarmonyPatch(typeof(ShipItemHammer), "RaycastHitsFloor")] internal static class PalletNailPatch
     {
         static void Postfix(ShipItem item, ref bool __result)
         {
             if (!WoodPallets.Registered || !item) return;
             // Aboard, the game's ray meets a pallet's physics copy (on the ship's walk copy, no ShipItem there) and passes any item standing on
-            // it (pallet-16: "TRUE Floor raycast hit: wood pallet:ItemRigidbody"): one not snapped there is refused, as on land (P3).
+            // it ("TRUE Floor raycast hit: wood pallet:ItemRigidbody"): one not snapped there is refused, as on land.
             if (__result) { if (!WoodPallets.Snapped(item) && WoodPallets.StandsOnPallet(item)) __result = false; return; }
             if (WoodPallets.Snapped(item)) { __result = true; return; }
             if (!WoodPallets.IsPallet(item) || !item.itemRigidbodyC) return;
@@ -3275,19 +3237,18 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(ShipItem), "DestroyItem")] internal static class PalletRemovePatch
     { [HarmonyPriority(Priority.Last)] static void Prefix(ShipItem __instance, bool __runOriginal) { if (__runOriginal && WoodPallets.Registered) WoodPallets.Removed(__instance); } }
 
-    // ---- The knife on a pallet (HALF_PALLET_DRAFT.md §3, §3b; the user, 2026-11-02) ----
+    // ---- The knife on a pallet ----
     // R with a bought knife at a bought pallet cuts it across into two half pallets; at a half pallet, into 5 planks. Refused with a
-    // notice while a crate is snapped or nailed on it, or it is nailed (H6: "refused when crated are snapped or when pallet is nailed").
-    // Silent, as the game's own cut (H6's sound: not chosen). Built the vanilla way of a cut (ShipItemKnife.CutFood: the knife's swing,
-    // the pieces spawned and registered, the item removed), so Keevi Fixes' cut placement (a finalizer on OnAltActivate) lays the
-    // pieces out as it does the game's, with no reference to it. The pallet is retired at once and removed once the pieces have boarded
-    // (H9, the user: "Yes, our own fix": the mod's own fix for the jolt, as an unbundled bundle), their places on the ship read in a
-    // finalizer that runs after every other (Priority.Last), after Keevi's placement.
+    // notice while a crate is snapped or nailed on it, or it is nailed. Silent, as the game's own cut. Built the vanilla way of a cut
+    // (ShipItemKnife.CutFood: the knife's swing, the pieces spawned and registered, the item removed), so Keevi Fixes' cut placement
+    // (a finalizer on OnAltActivate) lays the pieces out as it does the game's, with no reference to it. The pallet is retired at once
+    // (WoodPlanks.Retire: its body removed outright would jolt the boat) and removed once the pieces have boarded, as an unbundled
+    // bundle is; their places on the ship read in a finalizer that runs after every other (Priority.Last), after Keevi's placement.
     internal static class PalletCut
     {
         internal const string NailedNotice = "Un-nail the pallet before cutting it", LoadedNotice = "Take the cargo off the pallet before cutting it";
-        // A half pallet only while the planks are registered: its cut makes planks, and without them the half was retired and then lost
-        // to the cut's error (the deep review of 2026-11-02, Claude's fix).
+        // A half pallet only while the planks are registered: its cut makes planks, and without them the half would be retired and then
+        // lost to the cut's error.
         internal static bool Cuttable(ShipItem item) => WoodPallets.IsPallet(item) && item.sold && !item.held && item.GetCurrentInventorySlot() == -1
             && (!WoodPallets.IsHalf(item) || WoodPlanks.Registered);
         internal static bool Knife(ShipItem held) => held is ShipItemKnife && held.sold;
@@ -3370,14 +3331,13 @@ namespace EconomyOverhaul
         [HarmonyPriority(Priority.Last)] static void Finalizer() => PalletCut.Finish();
     }
 
-    // ---- The pole and plank control hints (HALF_PALLET_DRAFT.md §4; the user, 2026-11-02: "it should follow vanilla setting", "like
-    // vanilla R/F hint, not the white hint like water damage hint", H7 "All 3, but show me picture from test be finalized") ----
+    // ---- The pole and plank control hints ----
     // Held, a bought pole or plank not nailed shows its keys in the game's controls line (LookUI.ShowHoldText, where an oar shows "row"),
     // only under the game's controls text setting (Settings.controlsTextEnabled): a line a key (Rules.RodHintLines), each beside a key
     // box copied from the game's own R icon box with the key's name in it (as the game shows a pick-up bound to a key). The game's
-    // controls text grows upward from its last line, which stands at the R icon (hp-3's pictures: a box placed down from the L icon
-    // stood a line below its word), so the last box stands at the R icon and each one before it a line (R less L) higher; hidden
-    // whenever the game hides its icons (LookUI.HideIcons).
+    // controls text grows upward from its last line, which stands at the R icon (a box placed down from the L icon stands a line below
+    // its word), so the last box stands at the R icon and each one before it a line (R less L) higher; hidden whenever the game hides
+    // its icons (LookUI.HideIcons).
     internal static class RodHints
     {
         private static readonly AccessTools.FieldRef<LookUI, TextMesh> controlsText = AccessTools.FieldRefAccess<LookUI, TextMesh>("controlsText"),
@@ -3401,8 +3361,8 @@ namespace EconomyOverhaul
                 if (boxes[i].gameObject.activeSelf != on) boxes[i].gameObject.SetActive(on);
             }
         }
-        // Pointed at, attached and not nailed (WoodPoles.Pointed; the user, 2026-11-08: "Show them"): its size keys above the game's own lines
-        // (Rules.PointedControlLines), none while things are fixed on it (looked for once a second, not every frame).
+        // Pointed at, attached and not nailed (WoodPoles.Pointed): its size keys above the game's own lines (Rules.PointedControlLines),
+        // none while things are fixed on it (looked for once a second, not every frame).
         private static readonly AccessTools.FieldRef<LookUI, GoPointer> uiPointer = AccessTools.FieldRefAccess<LookUI, GoPointer>("pointer");
         private static ShipItem fixedFor; private static float fixedUntil; private static bool fixedOn;
         internal static void ShowPointed(LookUI ui, GoPointerButton button)
@@ -3434,7 +3394,7 @@ namespace EconomyOverhaul
             var l = textLicon(ui); var r = textRIcon(ui); if (!l || !r) return false;
             lastLine = r.transform.localPosition; lineStep = r.transform.localPosition - l.transform.localPosition;
             var mouse = mouseRIcon(ui); string mousePath = mouse && mouse.transform != r.transform && mouse.transform.IsChildOf(r.transform) ? PathIn(r.transform, mouse.transform) : null;
-            boxes = new TextMesh[4];   // a plank in placement mode: length, width, thickness, H (BOARD_PLANK_DRAFT.md, 2026-11-08)
+            boxes = new TextMesh[4];   // a plank in placement mode: length, width, thickness, H
             for (int i = 0; i < boxes.Length; i++)
             {
                 var o = UnityEngine.Object.Instantiate(r.gameObject, r.transform.parent, false); o.name = "EconomyOverhaul key box " + i;
@@ -3457,10 +3417,10 @@ namespace EconomyOverhaul
 
     // ---- The wood vendors ----
     // A new vendor beside the shipyard keeper of Gold Rock City, Dragon Cliffs and Fort Aestrin's vanilla yard (none at Chronos), and
-    // at Kicia Bay the furniture stall's keeper (the user, 2026-10-24): 8 pallets in a stack, 8 plank bundles and 6 pole bundles, at
-    // fixed places in the island scenery's frame (the probe palletshow found and pictured them by the user's rules, §4 "Placed by the
-    // user's rules"). Vanilla first: the vendor is a copy of the port's nearest other shopkeeper (his look, region and hours), selling
-    // through a ShopArea of his own with one ShopItemSpawner per item (the game's restock 120 s after a sale, by day only).
+    // at Kicia Bay the furniture stall's keeper: 8 pallets in a stack, 12 plank bundles and 9 pole bundles (Kicia Bay 6, beside the
+    // stall's own plank bundles; Rules.VendorPallets and the rest), at fixed places in the island scenery's frame. The vendor is a copy
+    // of the port's nearest other shopkeeper (his look, region and hours), selling through a ShopArea of his own with one
+    // ShopItemSpawner per item (the game's restock 120 s after a sale, by day only).
     internal static class WoodVendors
     {
         // rows: against a building, the pallet stack at z 0..1.28 from its back, the plank bundles at z 1.43..2.11, the pole bundles
@@ -3478,30 +3438,26 @@ namespace EconomyOverhaul
             internal Vector3 poles; internal float polesYaw;        // apart
         }
         internal static readonly Place[] Places = {
-            // The probe palletshow's places by the user's rounds of 2026-10-24 (PALLET_JUNK_CREW_DRAFT.md §4).
-            // Gold Rock City (third round, run 20261024-151333): the stack against the building, the plank and pole bundles in front,
-            // square to the vendor, all on his side (away from the keeper); he stands under the awning beside the keeper, facing out as
-            // he does.
+            // Gold Rock City: the stack against the building, the plank and pole bundles in front, square to the vendor, all on his side
+            // (away from the keeper); he stands under the awning beside the keeper, facing out as he does.
             new Place { port = "Gold Rock City", scene = 1, keeper = "shipyardkeeper (11)", layout = Layout.Rows, block = new Vector3(1561.023f, 5.496f, -322.986f), blockYaw = 56.90f, vendor = new Vector3(1564.179f, 5.492f, -324.767f), vendorYaw = 56.9f },
-            // Dragon Cliffs (third round, run 20261024-152136; the fourth round's 3 x 3 poles, run -155724, the same place): the stock against the wall
-            // across from the keeper (east_house_1 (30), 6 m in front of him), on the sand's mean height; the vendor beside the stack,
-            // facing the keeper.
+            // Dragon Cliffs: the stock against the wall across from the keeper (east_house_1 (30), 6 m in front of him), on the sand's mean
+            // height; the vendor beside the stack, facing the keeper.
             new Place { port = "Dragon Cliffs", scene = 9, keeper = "shipyardkeeper", layout = Layout.Rows, block = new Vector3(-157.266f, 1.534f, -547.594f), blockYaw = 337.07f, vendor = new Vector3(-156.391f, 1.557f, -546.527f), vendorYaw = 313.7f },
             // Fort Aestrin: the stack against the building (ita_building_4 (9)), 0.84 m from the small crates by it, its back 0.40 m off
-            // the wall (run 20261024-113231); the plank bundles and then the pole bundles in front of it, 4 cm lower (third round, run
-            // 20261024-151333; the 9 pole bundles' place run -155724); the vendor's back to the small crates, facing the keeper.
+            // the wall; the plank bundles and then the pole bundles in front of it, 4 cm lower; the vendor's back to the small crates,
+            // facing the keeper.
             new Place { port = "Fort Aestrin", scene = 15, keeper = "shopkeeper (shipyard)", layout = Layout.Apart, block = new Vector3(12.435f, 2.305f, 85.557f), blockYaw = 25.05f, planks = new Vector3(12.871f, 2.264f, 86.492f), planksYaw = 25.05f, poles = new Vector3(13.184f, 2.264f, 87.156f), polesYaw = 25.05f, vendor = new Vector3(10.156f, 2.263f, 87.797f), vendorYaw = 38.2f },
             // Kicia Bay: the stack just outside the furniture stall's front corner by its front table, past the far front post, out
-            // from under the roof, on the sand's mean height (option A, the user: "Option a is fine", run 20261024-153217); the pole
-            // bundles beside the stall's own plank bundles, lying as they do, 0.15 m off them (the user: "place the wood pole beside
-            // wood plank bundle", run 20261024-152047).
+            // from under the roof, on the sand's mean height; the pole bundles beside the stall's own plank bundles, lying as they do,
+            // 0.15 m off them.
             new Place { port = "Kicia Bay", scene = 27, keeper = "shipyardkeeper (12)", layout = Layout.Apart, shared = true, block = new Vector3(-27.633f, 1.324f, 106.543f), blockYaw = 293.65f, poles = new Vector3(-29.547f, 1.360f, 112.627f), polesYaw = 24.02f },
         };
         internal const string VendorName = "EconomyOverhaul wood vendor", AreaName = "EconomyOverhaul wood stock", SlotName = "EconomyOverhaul wood stock item";
         internal const string KiciaStall = "shop area (15)";
 
         // Built when a shop area of the port's scene wakes (ShopArea.Awake, PlankStockPatch): the shipyard keeper found by his name
-        // under the island scenery (he is not a Shopkeeper: the palletkicia run of 2026-10-24 found none of that name), once a scene.
+        // under the island scenery (he is not a Shopkeeper), once a scene.
         internal static void Build(ShopArea any)
         {
             if (!any || Uninstall.Prepared || !WoodPallets.Registered || !WoodPlanks.Registered || !WoodPoles.BundleTemplate) return;
@@ -3572,8 +3528,8 @@ namespace EconomyOverhaul
             var spawner = slot.AddComponent<ShopItemSpawner>(); spawner.itemPrefab = prefab; spawner.availableAtNight = false; spawner.priceMult = 1;
         }
     }
-    // Kicia Bay's pallets and pole bundles sell through the furniture stall's keeper (the user: "kicia bay don't need additional
-    // vendor"): their own shop area outside the stall's tent takes his keeper once the stall has found him.
+    // Kicia Bay's pallets and pole bundles sell through the furniture stall's keeper (no vendor of their own): their own shop area
+    // outside the stall's tent takes his keeper once the stall has found him.
     internal sealed class SharedKeeper : MonoBehaviour
     {
         internal ShopArea source;
@@ -3585,16 +3541,16 @@ namespace EconomyOverhaul
     }
 
     // ---- Canvas tarp ----
-    // The canvas pack (prefab 642): a tarp folded up, drawn with the mail parcel's model while it is an item. Tying its four
-    // corners makes a tarp (as built: CANVAS.md); untying gives a pack back.
+    // The canvas pack (prefab 642): a tarp folded up, drawn with the mail parcel's model while it is an item. Tying it at 3 or more
+    // spots makes a tarp; untying gives a pack back.
     internal static class Tarps
     {
         internal const int PackIndex = 642, MailGood = 51;
-        // Price 500, mass 30 (user, 2026-10-05; oakum is 180 and 9).
+        // Price 500, mass 30 (oakum is 180 and 9).
         internal const int PackValue = 500; internal const float PackMass = 30;
         internal const float PackScale = .7f; internal const string LookName = "canvas pack look";
-        // Wear (user, 2026-10-05): a tied tarp loses 10 health a game day, 100 to 0 in 10 days; a folded pack keeps its health
-        // (in ShipItem.health, which the game saves with every item). The health is never shown.
+        // Wear: a tied tarp loses 10 health a game day, 100 to 0 in 10 days; a folded pack keeps its health (in ShipItem.health,
+        // which the game saves with every item). The health is never shown.
         internal const float FullHealth = Rules.TarpFullHealth;   // the wear a day: Rules.TarpWearPerDay
         internal static double Now => GameState.day + (Sun.sun ? Sun.sun.globalTime / 24.0 : 0);
         internal static GameObject PackTemplate;
@@ -3618,9 +3574,9 @@ namespace EconomyOverhaul
                 o.transform.localPosition = Vector3.zero; o.transform.localRotation = Quaternion.identity; o.transform.localScale = Vector3.one;
                 UnityEngine.Object.DestroyImmediate(o.GetComponent<Good>());
                 var label = o.transform.Find("label"); if (label) UnityEngine.Object.DestroyImmediate(label.gameObject);   // no mail sticker
-                // 70% of the parcel (user, 2026-10-05, to fit the small stalls). The game holds an item's root at scale 1 and the
-                // parcel's mesh can't be read, so a scaled child draws it; the root keeps its mesh (the game reads it) unseen, and
-                // its box (the click box, and the physics copy the game makes from it) shrinks with it.
+                // 70% of the parcel, to fit the small stalls. The game holds an item's root at scale 1 and the parcel's mesh can't be read, so
+                // a scaled child draws it; the root keeps its mesh (the game reads it) unseen, and its box (the click box, and the physics copy
+                // the game makes from it) shrinks with it.
                 var rootLook = o.GetComponent<MeshRenderer>();
                 var look = new GameObject(LookName); look.transform.SetParent(o.transform, false); look.transform.localScale = Vector3.one * PackScale;
                 look.AddComponent<MeshFilter>().sharedMesh = o.GetComponent<MeshFilter>().sharedMesh;
@@ -3694,9 +3650,9 @@ namespace EconomyOverhaul
             }
             if (real != null && Moving(real.Value.collider) && !LandPole(real.Value.collider) && (onShip == null || real.Value.distance < onShip.Value.distance - .05f))
             { Why = "moving part in front: " + Path(real.Value.collider.transform) + " at " + real.Value.distance.ToString("F2") + " m" + (onShip != null ? " (ship part at " + onShip.Value.distance.ToString("F2") + " m)" : ""); return null; }
-            // The ship's own stays as they are in the world, where its walk copy has nothing nearer (user, 2026-10-06): some stays' walk
-            // colliders don't reach their lower ends (the Cog's two forestays start 0.9 and 1.7 m up them, the part in reach
-            // from its bow). The knot goes on the stay's rope line.
+            // The ship's own stays as they are in the world, where its walk copy has nothing nearer: some stays' walk colliders don't
+            // reach their lower ends (the Cog's two forestays start 0.9 and 1.7 m up them, the part in reach from its bow). The knot
+            // goes on the stay's rope line.
             if (frame && walk && real != null && OwnStay(real.Value.collider, frame) && (onShip == null || real.Value.distance < onShip.Value.distance - .3f))
             {
                 var h = real.Value; var at = h.collider is CapsuleCollider c ? OnAxis(c, eye) : h.point;
@@ -3707,8 +3663,8 @@ namespace EconomyOverhaul
             if (onShip != null)
             {
                 var h = onShip.Value;
-                // An item nailed with the hammer is fixed to the ship too (user, 2026-10-10): whatever the game let a hammer nail
-                // (big items such as crates, trade goods and furniture; hangables; wall items). Loose items stay refused.
+                // An item nailed with the hammer is fixed to the ship too: whatever the game let a hammer nail (big items such as crates,
+                // trade goods and furniture; hangables; wall items). Loose items stay refused.
                 if (!NailedItem(h.collider, held) && (h.collider.GetComponentInParent<ItemRigidbody>() || h.collider.GetComponentInParent<ShipItem>()) || MovingWalk(frame, h.collider.transform))
                 { Why = "item, hatch or door on the walk copy: " + Path(h.collider.transform); return null; }
                 Why = null;
@@ -3729,7 +3685,7 @@ namespace EconomyOverhaul
         // A collider of a bought item's physics copy that the hammer has nailed (the game's ShipItem.nailed).
         internal static ShipItem Nailed(Collider c) { var body = c ? c.GetComponentInParent<ItemRigidbody>() : null; var item = body ? body.GetShipItem() : null; return item && item.sold && item.nailed ? item : null; }
         private static bool NailedItem(Collider c, ShipItem held) { var item = Nailed(c); return item && item != held; }
-        // On land, a wood pole nailed with the hammer is a fixed part (user, 2026-10-12); other items on land are not.
+        // On land, a wood pole nailed with the hammer is a fixed part; other items on land are not.
         private static bool LandPole(Collider c) { var item = Nailed(c); return item && WoodPoles.IsPole(item) && !item.currentActualBoat; }
         // A surface a dropped pack may rest on: not an item, unless nailed (or the one given, just un-nailed).
         private static bool Floor(Collider c, ShipItem also)
@@ -3784,8 +3740,7 @@ namespace EconomyOverhaul
             return a + u * s;
         }
 
-        // R on a held pack: sets the tie spot the crosshair points at, as many as wanted (the user, 2026-10-26: "Make Tarp tying
-        // spot unlimited (but atleast 3), still press R to assign tied spot, and player press E or F to confirm"; E only since: F lets go of the pack; TARP_SPOTS_DRAFT.md).
+        // R on a held pack: sets the tie spot the crosshair points at, as many as wanted; E ties them (Confirm), at least 3.
         // Returns the notice shown (null when none).
         internal static string Tie(ShipItem pack, Ray eye, Transform frame, Transform walk)
         {
@@ -3825,8 +3780,8 @@ namespace EconomyOverhaul
             pack.DestroyItem();
             return LastTarp && LastTarp.layout.tallTops.Count > 0 ? TooTall : null;
         }
-        // The outline's order (the user, 2026-10-26: "In tie order"): the spots as tied when no two sides cross, seen square-on to
-        // their plane; otherwise sorted round their middle in it, so the tarp never twists.
+        // The outline's order: the spots in tie order when no two sides cross, seen square-on to their plane; otherwise sorted round
+        // their middle in it, so the tarp never twists.
         internal static int[] Order(Vector3[] p)
         {
             var tied = Enumerable.Range(0, p.Length).ToArray(); if (p.Length < 3) return tied;
@@ -3877,9 +3832,8 @@ namespace EconomyOverhaul
         // ---- The tarp ----
         // Points about every 0.5 m, 8 to 32 across each way of the outline's box; rope cells at most 6 m; cloth laced to the ropes
         // about every 1 m; the modelled sheet drops 9% of a cell's mean span in its middle; a free point may move at most 16% x 1.41 x
-        // its distance to the nearest laced point (meant as a safety net; measured in game, gravity rests the cloth on it between
-        // lacings). Between a side's lacings its edge falls inward up to that far, a softly ragged edge by its rope: kept at the
-        // user's word (2026-10-26, "Old side lacing"; laced at every side point for a few hours that day: CANVAS.md, "Shape").
+        // its distance to the nearest laced point (a safety net: in game, gravity rests the cloth on it between lacings). Between a
+        // side's lacings its edge falls inward up to that far, a softly ragged edge by its rope.
         internal const float Spacing = .5f, CellMax = 6, Lacing = 1, Drop = .09f, Cap = .16f, RopeWidth = .03f;
         internal const int MinPoints = 8, MaxPoints = 32;
         internal sealed class Layout
@@ -3905,12 +3859,12 @@ namespace EconomyOverhaul
         }
         private static readonly Dictionary<string, Sheet> sheets = new Dictionary<string, Sheet>(); private static readonly List<string> sheetsKept = new List<string>();
 
-        // The tarp's layout from its spots in the outline's order (Order) and its parent's down (TARP_SPOTS_DRAFT.md). The sheet runs
-        // through the spots: its height off their plane blended from theirs (mean value coordinates), so each side is the straight
-        // line between its two spots and a flat outline gives a flat sheet. A grid over the outline's box gives the points inside it,
-        // the sides are divided at about the grid's step, and Delaunay triangles join them, each side's pieces kept as edges. Ropes
-        // run along each side and across on grid lines (so no cell exceeds 6 m), each from side to side. `poles`: the nailed wood
-        // poles near it (base, free end), in the same frame (Raise).
+        // The tarp's layout from its spots in the outline's order (Order) and its parent's down. The sheet runs through the spots: its
+        // height off their plane blended from theirs (mean value coordinates), so each side is the straight line between its two spots
+        // and a flat outline gives a flat sheet. A grid over the outline's box gives the points inside it, the sides are divided at about
+        // the grid's step, and Delaunay triangles join them, each side's pieces kept as edges. Ropes run along each side and across on
+        // grid lines (so no cell exceeds 6 m), each from side to side. `poles`: the nailed wood poles near it (base, free end), in the
+        // same frame (Raise).
         internal static Layout Plan(Vector3[] c, Vector3 down, IList<(Vector3 a, Vector3 b)> poles = null)
         {
             var sheet = SheetOf(c, down); var s = sheet.shape; int count = s.flat.Length;
@@ -4152,20 +4106,19 @@ namespace EconomyOverhaul
             for (int n = 1; n < p.Count - 1; n++) if (Vector3.Angle(p[n] - kept[kept.Count - 1], p[n + 1] - p[n]) > .5f) kept.Add(p[n]);
             kept.Add(p[p.Count - 1]); return kept.ToArray();
         }
-        // Nailed wood poles hold it up (user, 2026-10-12), the whole pole wherever it is under the canvas: a standing pole by its
-        // top, a lying or leaning one along its length (a ridge). Each pole is taken as points every 10 cm. Seen square-on to the
-        // tarp (from above for a level one; any number of sides, TARP_SPOTS_DRAFT.md), a point touches the canvas inside its outline,
-        // or up to 15 cm outside a side (under its rope), when it is no lower than the canvas can hang there (its sag and its cap;
-        // at a side, no lower than its rope). Within 0.5 m of a side it holds that side up: the side's rope runs from its spots over
-        // the pole, over its point farthest out toward the side there (a standing pole's top, a lying pole's end), so none of it is
-        // left outside the canvas. A pole that crosses a side holds that side up where it crosses it (the user's picture,
-        // 2026-10-12: the edge was pulled in along the pole): the rope stays on the side's line and rests on the pole's highest point
-        // within 5 cm of it, and the pole's points near that side hold the canvas as further in. Further in it lifts the canvas with
-        // the sides staying. No slope over 45 degrees (the user's limit): a point lifts the canvas over the plain sheet by at most its
-        // distance to the spots and to the sides that stay (not a side the pole holds up where it crosses it, nor at a side its own);
-        // a pole with any point higher holds nothing (tallTops). The canvas rests on the pole (the sheet's point nearest each touching
-        // point fixed 7 cm over its line, the highest first) and runs in straight slopes down to the outline (the highest where
-        // several meet); its sag fades to nothing at a pole, and the ropes across rise with it. Heights are along the tarp's normal.
+        // Nailed wood poles hold it up, the whole pole wherever it is under the canvas: a standing pole by its top, a lying or leaning
+        // one along its length (a ridge). Each pole is taken as points every 10 cm. Seen square-on to the tarp (from above for a level
+        // one; any number of sides), a point touches the canvas inside its outline, or up to 15 cm outside a side (under its rope), when
+        // it is no lower than the canvas can hang there (its sag and its cap; at a side, no lower than its rope). Within 0.5 m of a side
+        // it holds that side up: the side's rope runs from its spots over the pole, over its point farthest out toward the side there (a
+        // standing pole's top, a lying pole's end), so none of it is left outside the canvas. A pole that crosses a side holds that side
+        // up where it crosses it, the edge not pulled in along the pole: the rope stays on the side's line and rests on the pole's
+        // highest point within 5 cm of it, and the pole's points near that side hold the canvas as further in. Further in it lifts the
+        // canvas with the sides staying. No slope over 45 degrees: a point lifts the canvas over the plain sheet by at most its distance
+        // to the spots and to the sides that stay (not a side the pole holds up where it crosses it, nor at a side its own); a pole with
+        // any point higher holds nothing (tallTops). The canvas rests on the pole (the sheet's point nearest each touching point fixed
+        // 7 cm over its line, the highest first) and runs in straight slopes down to the outline (the highest where several meet); its
+        // sag fades to nothing at a pole, and the ropes across rise with it. Heights are along the tarp's normal.
         internal const float EdgeBand = .5f, EdgeOutside = .15f, PoleCap = .07f, PoleStep = .1f, RopeOn = .05f;   // the canvas 7 cm over a pole's line: 3 cm over its top, room for the cloth beside it to dip
         private static void Raise(Layout L, Vector3[] c, Vector3 down, Vector3[] flats, float[] sag, IList<(Vector3 a, Vector3 b)> poles)
         {
@@ -4173,8 +4126,8 @@ namespace EconomyOverhaul
             Vector2 P2(Vector3 x) => new Vector2(Vector3.Dot(x - L.middle, L.axisU), Vector3.Dot(x - L.middle, L.axisV));
             Vector2 OnLine(int k, float f) => Vector2.LerpUnclamped(q[k], q[(k + 1) % n], f);
             float[] ToSides(Vector2 x) => Enumerable.Range(0, n).Select(k => ToSegment(x, q[k], q[(k + 1) % n])).ToArray();
-            // A side's point a pole holds it up at, kept off its spots (at a spot's place it lifted the spot itself off its knot; the
-            // review of 2026-10-18, Claude's fix), and the sheet's point it fixes there: the side's nearest, never a spot.
+            // A side's point a pole holds it up at, kept off its spots (at a spot's place it would lift the spot itself off its knot), and
+            // the sheet's point it fixes there: the side's nearest, never a spot.
             float Off(int k, float f) { int m = L.sides[k].Count; return m < 2 ? f : Mathf.Clamp(f, 1f / m, 1 - 1f / m); }
             int OnSideVertex(int k, float f) { var s = L.sides[k]; int best = -1; float d = float.MaxValue; for (int i = 1; i < s.Count; i++) if (Mathf.Abs(s[i].f - f) < d) { d = Mathf.Abs(s[i].f - f); best = s[i].k; } return best; }
             // The sheet's point nearest a spot: of all, or of those inside.
@@ -4265,7 +4218,7 @@ namespace EconomyOverhaul
                 L.points[k] = flats[k] + up * lift + down * sag[k] * (1 - near);
             }
             // Each touching point fixes the sheet's point nearest it (never a spot; inside, never one on a side), the highest first;
-            // heights within 1 cm a tie, a pole's end first, then the one nearest the sheet point's spot (Rules.TarpClaim, B-B2).
+            // heights within 1 cm a tie, a pole's end first, then the one nearest the sheet point's spot (Rules.TarpClaim).
             foreach (var g in fixes.GroupBy(x => x.k))
             {
                 var by = g.ToList(); var spot = L.flat[g.Key];
@@ -4331,10 +4284,9 @@ namespace EconomyOverhaul
             cloth.clothSolverFrequency = 60; cloth.worldVelocityScale = 0; cloth.worldAccelerationScale = 0;
             tarp.Caps();   // now, or once the ship is switched on (a cloth switched off has no points yet)
             var wind = sheet.AddComponent<WindClothSimple>(); wind.staticMultiplier = 1; wind.shipRigidbody = onShip ? Up<Rigidbody>(parent) : null;
-            // Each rope drawn by the game's own rope code, as its mooring lines and rigging are (user, 2026-10-06): with the game's
-            // "3D ropes" option off the line as before (3 cm, the rope material, tiled), with it on the game's 3D rope; hidden
-            // beyond 250 m as the game's ropes are. Its slack is 0, so it runs straight; the code turns its two ends to face each
-            // other and touches nothing else.
+            // Each rope drawn by the game's own rope code, as its mooring lines and rigging are: with the game's "3D ropes" option off a
+            // line (3 cm, the rope material, tiled), with it on the game's 3D rope; hidden beyond 250 m as the game's ropes are. Its slack
+            // is 0, so it runs straight; the code turns its two ends to face each other and touches nothing else.
             foreach (var r in layout.ropes.SelectMany(l => Enumerable.Range(0, l.Length - 1).Select(n => new[] { l[n], l[n + 1] })))   // bent over a pole: a piece per straight run
             {
                 var o = new GameObject("canvas rope"); o.transform.SetParent(root.transform, false); o.transform.localPosition = r[0];
@@ -4346,8 +4298,8 @@ namespace EconomyOverhaul
             tarp.knots = new GameObject[corners.Length];
             for (int i = 0; i < corners.Length; i++)
             {
-                // The game's mooring knot, 0.15 m (user, 2026-10-06). The button's own object keeps the knot's mesh unseen (the
-                // game's outline is made from it) and a child draws it; PackLook points the outline at the child.
+                // The game's mooring knot, 0.15 m. The button's own object keeps the knot's mesh unseen (the game's outline is made from it)
+                // and a child draws it; PackLook points the outline at the child.
                 var k = new GameObject("canvas knot"); k.transform.SetParent(root.transform, false); k.transform.localPosition = corners[i]; k.transform.localRotation = turns[i];
                 k.AddComponent<MeshFilter>().sharedMesh = KnotMesh; var unseen = k.AddComponent<MeshRenderer>(); unseen.sharedMaterial = KnotMaterial; unseen.enabled = false;
                 KnotLook(k.transform, KnotSize, KnotMaterial, KnotLookName); k.AddComponent<PackLook>().child = KnotLookName; tarp.knots[i] = k;
@@ -4372,7 +4324,7 @@ namespace EconomyOverhaul
             return torn;
         }
 
-        // ---- Wood poles holding tarps up (user, 2026-10-12; as built in CANVAS.md) ----
+        // ---- Wood poles holding tarps up ----
         internal const string TooTall = "Pole too tall for this tarp";
         // The nailed wood poles that could hold up a tarp, each from its base to its free end, in its frame (`root`): aboard a ship
         // (their item on this boarding frame; read from its physics copy on the ship's walk copy, as UntieFrom does) or on land. A pole
@@ -4414,7 +4366,7 @@ namespace EconomyOverhaul
             return fresh;
         }
         // A wood pole nailed, un-nailed or about to be removed (`leaving`): every tarp on its ship (or on land) whose poles holding it
-        // up change is built again at once (the user: it jumps to its new shape). Nailed under a tarp but too tall: the notice.
+        // up change is built again at once, in its new shape. Nailed under a tarp but too tall: the notice.
         internal static int PoleMoved(ShipItem pole, bool leaving)
         {
             if (!Registered || !WoodPoles.Registered || !pole || Unloading(pole)) return 0;
@@ -4436,9 +4388,9 @@ namespace EconomyOverhaul
         }
 
         // ---- Repair ----
-        // R on a corner knot with a bought pack in hand (user, 2026-10-09): the tarp is rebuilt where it hangs (as a tear
-        // rebuilds it) with its health plus the pack's, at most 100: no holes (a pack is never at 0), the colour of that
-        // health, cover again. The pack is always used up; nothing comes back from the old canvas.
+        // R on a corner knot with a bought pack in hand: the tarp is rebuilt where it hangs (as a tear rebuilds it) with its health
+        // plus the pack's, at most 100: no holes (a pack is never at 0), the colour of that health, cover again. The pack is always
+        // used up; nothing comes back from the old canvas.
         internal const string Repaired = "Canvas repaired";
         internal static Tarp LastRepaired;
         internal static string Repair(Tarp old, ShipItem pack)
@@ -4464,12 +4416,11 @@ namespace EconomyOverhaul
             try { return Fields.Get<GoPointerButton>(pointer, "pointedAtButton") as TarpKnot; }
             catch (Exception e) { Plugin.Log?.LogWarning("Canvas: the pointed knot not read; repair is off. " + e.Message); return null; }
         }
-        // Where a torn tarp's holes go (user, 2026-10-05: small frayed holes scattered round the middle section, the edges
-        // mostly intact), seeded by its size, so the same after a load: 2 to 12 small holes (one per 3 m²; 0.15-0.3 m, up to 1.5x
-        // on big tarps) with ragged outlines (waves of 3, 5 and 9 round a circle), scattered over the middle 60% of each side,
-        // their widest reach (2.1x) 0.15 m clear of the edges (smaller holes on a narrow tarp) and apart from each other where
-        // there is room (8 tries); 0-2 short crooked rips out of a hole (0.25-0.6 m from its middle), stopping 0.25 m short of
-        // the edges.
+        // Where a torn tarp's holes go (small frayed holes round the middle, the edges mostly intact), seeded by its size, so the same
+        // after a load: 2 to 12 small holes (one per 3 m²; 0.15-0.3 m, up to 1.5x on big tarps) with ragged outlines (waves of 3, 5
+        // and 9 round a circle), scattered over the middle 60% of each side, their widest reach (2.1x) 0.15 m clear of the edges
+        // (smaller holes on a narrow tarp) and apart from each other where there is room (8 tries); 0-2 short crooked rips out of a
+        // hole (0.25-0.6 m from its middle), stopping 0.25 m short of the edges.
         internal sealed class Tears
         {
             internal readonly List<(Vector2 at, float r, float p1, float p2, float p3)> holes = new List<(Vector2 at, float r, float p1, float p2, float p3)>();
@@ -4477,8 +4428,8 @@ namespace EconomyOverhaul
             // A hole's outline (m from its middle) at angle a.
             internal static float Outline((Vector2 at, float r, float p1, float p2, float p3) h, float a) => h.r * (1 + .3f * Mathf.Sin(3 * a + h.p1) + .18f * Mathf.Sin(5 * a + h.p2) + .1f * Mathf.Sin(9 * a + h.p3));
         }
-        // Any number of sides (TARP_SPOTS_DRAFT.md): in the outline's box (lu x lv), the holes and rips only inside the outline with
-        // the same clearance from its sides (on a rectangle the same as before), their number by its area.
+        // Any number of sides: in the outline's box (lu x lv), the holes and rips only inside the outline with the same clearance
+        // from its sides (on a rectangle the same as in older saves), their number by its area.
         internal static Tears PlanTears(Layout L, float[] sides)
         {
             float lu = L.lu, lv = L.lv;
@@ -4489,7 +4440,7 @@ namespace EconomyOverhaul
             {
                 float r = Mathf.Clamp((.15f + .15f * R()) * grow, .02f, (Mathf.Min(lu, lv) / 2 - .15f) / 2.1f), clear = 2.1f * r + .15f;
                 float U(float side) => side > 2 * clear ? Mathf.Clamp(side * (.2f + .6f * R()), clear, side - clear) : side / 2;
-                // Clear of the sides as far as the box allows (a narrow tarp's hole in its middle, as before).
+                // Clear of the sides as far as the box allows (a narrow tarp's hole in its middle, as in older saves).
                 var at = new Vector2(U(lu), U(lv)); float need = Mathf.Min(clear, Mathf.Min(lu, lv) / 2) - 1e-4f;
                 for (int tries = 1; tries < 8 && (Room(at) < need || T.holes.Any(o => (o.at - at).magnitude < 1.3f * (o.r + r))); tries++) at = new Vector2(U(lu), U(lv));
                 if (Room(at) < need) continue;   // no room inside the outline for it
@@ -4508,7 +4459,7 @@ namespace EconomyOverhaul
             }
             return T;
         }
-        // ---- The torn look from a texture (user, 2026-10-05) ----
+        // ---- The torn look from a texture ----
         // With the game's double-sided cutout cloth shader (the Dhow roof's shader with holes; the game's bamboo wind chimes
         // use it) a torn tarp keeps its whole cloth and gets its own texture: the canvas as on a whole tarp (the strip stretched once),
         // drawn once over the sheet, its holes cut out (alpha 0) where PlanTears puts them, fringed at the pixel: a jagged rim
@@ -4517,20 +4468,19 @@ namespace EconomyOverhaul
         internal const string TornShaderName = "Ciconia Studio/Double Sided/Transparent/Diffuse Bump Cutout";
         internal const float TornPixelsPerMetre = 128; internal const int TornTextureMax = 1024;
         internal static Shader TornShader; private static Material tornKeeper;   // the keeper keeps the shader loaded
-        internal const int RoofQueue = 2000;   // the game's roof cloth's render queue (dhow small cloth paint, measured 2026-10-26)
+        internal const int RoofQueue = 2000;   // the game's roof cloth's render queue (dhow small cloth paint)
         internal static bool FindTornShader()
         {
             if (TornShader) return true;
             TornShader = Resources.FindObjectsOfTypeAll<Shader>().FirstOrDefault(s => s && s.name == TornShaderName) ?? Shader.Find(TornShaderName);
             if (!TornShader) return false;
             tornKeeper = new Material(TornShader) { name = "canvas torn cloth" };
-            // Matte, as cloth (user, 2026-10-06): the shader's defaults shine (glossiness 0.5, white specular 0.2); tarps (whole
-            // and torn) are made from this material.
+            // Matte, as cloth: the shader's defaults shine (glossiness 0.5, white specular 0.2); tarps (whole and torn) are made from
+            // this material.
             tornKeeper.SetFloat("_Glossiness", 0); tornKeeper.SetFloat("_SpecularIntensity", 0); tornKeeper.SetColor("_SpecColor", Color.black);
-            // Drawn with the game's opaque things, as its roof cloth is (queue 2000), not at the shader's own 2450: a ship's bow
-            // mask ("mask_splash", shader Masked/Mask, queue 2010, depth only; it keeps spray out of the bow) hid every part of a
-            // tarp drawn after it and hanging below its top, a hole showing the ship's deck (the user's report, 2026-10-26, the medi
-            // small; run tentandplank_runs/holes-8; CANVAS.md, "Cloth").
+            // Drawn with the game's opaque things, as its roof cloth is (queue 2000), not at the shader's own 2450: a ship's bow mask
+            // ("mask_splash", shader Masked/Mask, queue 2010, depth only; it keeps spray out of the bow) hides every part of a tarp
+            // drawn after it and hanging below its top, a hole showing the ship's deck.
             tornKeeper.renderQueue = RoofQueue;
             Plugin.Log?.LogInfo("Canvas: torn tarps show their holes with " + TornShaderName + ".");
             return true;
@@ -4543,9 +4493,8 @@ namespace EconomyOverhaul
             return m;
         }
         // A whole tarp's cloth: its own material (to fade), drawing the canvas strip once over the sheet with the same double-sided
-        // cutout shader as a torn tarp (no holes: the strip is opaque), so whole and torn tarps light alike (user, 2026-10-06:
-        // with the roof's opaque shader a whole tarp looked dark from above, a torn one bright). Without that shader, a copy of
-        // the roof's material.
+        // cutout shader as a torn tarp (no holes: the strip is opaque), so whole and torn tarps light alike (with the roof's opaque
+        // shader a whole tarp looks dark from above, a torn one bright). Without that shader, a copy of the roof's material.
         internal static Material WholeMaterial()
         {
             if (FindTornShader())
@@ -4557,7 +4506,7 @@ namespace EconomyOverhaul
             return new Material(ClothMaterial) { name = "canvas tarp cloth", mainTexture = Canvas, mainTextureScale = Vector2.one, mainTextureOffset = Vector2.zero };
         }
 
-        // ---- The canvas (user, 2026-10-06) ----
+        // ---- The canvas ----
         // The roof's material draws from a sheet shared by the small Dhow's cloth parts (its lateen sail, its roof, plain grey);
         // the roof uses only its own box of it. A tarp shows one plain strip of the roof's canvas: the inside of the left of its
         // two strips, clear of the hems and the middle seam (10-44% across the box, 14-86% down it; measured: no line in it),
@@ -4677,8 +4626,7 @@ namespace EconomyOverhaul
             tex.SetPixels32(px); tex.Apply(true);
             return tex;
         }
-        // The cloth darkens gently with wear (user, 2026-10-06): new, the light grey of FadedColor (a torn tarp's colour in 0.8.7);
-        // at 0, 25% darker; a torn tarp shows that final colour.
+        // The cloth darkens gently with wear: new, the light grey of FadedColor; at 0, 25% darker; a torn tarp shows that final colour.
         internal const float WornDarker = .25f;
         internal static Color WornColor { get { var c = FadedColor * (1 - WornDarker); c.a = FadedColor.a; return c; } }
         internal static void Fade(Tarp t, float health)
@@ -4732,7 +4680,7 @@ namespace EconomyOverhaul
         // ---- Untying ----
         // A click on any corner knot: the tarp, its ropes and knots go, and a canvas pack comes back with the health left: into
         // free hands, else onto the deck or ground under that corner (on a ship over open water: its deck's middle). A torn
-        // tarp gives nothing back (user, 2026-10-05).
+        // tarp gives nothing back.
         internal static ShipItem LastPack;
         // floor: an item the pack may land on although it is no longer nailed (the one just un-nailed under that corner).
         internal static void Untie(Tarp tarp, int corner, GoPointer pointer, ShipItem floor = null)
@@ -4751,20 +4699,19 @@ namespace EconomyOverhaul
             if (UISoundPlayer.instance) UISoundPlayer.instance.PlayUISound(UISounds.itemPickup, .55f, 1);
             if (health > 0 && Plugin.Instance) Plugin.Instance.StartCoroutine(Give(at, turn, frame, hand ? pointer : null, health));
         }
-        // Un-nailing an item a corner is tied to unties that tarp (user, 2026-10-10): its pack drops under that corner, as a
-        // click on a knot does (a torn tarp gives none). "Tied to it" (TiedTo): the item's physics copy (on the ship's walk copy) lies
-        // just behind the knot, found from geometry, so it holds after a load too. Corners still waiting on it are cleared.
+        // Un-nailing an item a corner is tied to unties that tarp: its pack drops under that corner, as a click on a knot does (a
+        // torn tarp gives none). "Tied to it" (TiedTo): the item's physics copy (on the ship's walk copy) lies just behind the knot,
+        // found from geometry, so it holds after a load too. Corners still waiting on it are cleared.
         internal const float OnItem = .05f, Behind = .01f, OnEdge = .003f;
         // A knot faces into the part it was tied to (Find turns it so, and its turn is saved), so that part lies right behind it:
         // a ray from 5 cm in front of the knot to 1 cm past it meets the collider. A corner tied to the deck beside the item faces
-        // into the deck and misses it (the user, 2026-10-27: "i want to make closed by unlock never drop the tarp"); 1 cm, not
-        // more, so a knot on a thin plank lying on the item misses the item under the plank. Or the knot within 3 mm of it: one
-        // tied on the item's edge, nudged off it by a load.
+        // into the deck and misses it, so un-nailing the item leaves that tarp tied; 1 cm, not more, so a knot on a thin plank lying
+        // on the item misses the item under the plank. Or the knot within 3 mm of it: one tied on the item's edge, nudged off it by a load.
         private static bool TiedTo(Collider c, Vector3 knot, Vector3 facing) =>
             c.Raycast(new Ray(knot - facing * OnItem, facing), out _, OnItem + Behind) || (Closest(c, knot) - knot).sqrMagnitude <= OnEdge * OnEdge;
         // The game destroys a far ship's (or house's) items after caching them (parent -2, BoatLocalItems.CacheCurrentItems), and a
         // sunk ship's after saving them for recovery (-3); they come back from that data, nailed where they were. A tarp tied to them
-        // stays as it is (a player's report on Tent and Plank 1.1.3: a tarp on a pole packed itself up when the ship was left).
+        // stays as it is (else a tarp on a pole packs itself up when its ship is left behind).
         internal static bool Unloading(ShipItem item)
         {
             var save = item ? item.GetComponent<SaveablePrefab>() : null;
@@ -4846,11 +4793,10 @@ namespace EconomyOverhaul
         }
 
         // ---- Shop stock ----
-        // A canvas pack at each vendor that sells oakum (user, 2026-10-06: leaning on a counter or table, its foot on the ground,
-        // facing outward, else at a side, never the shopkeeper's side; else lying under it, half out; Old Ankh Town added, at a side;
-        // Crab Beach: lying on its porch beside the table (its open table and the stock around it leave no other way)) (spots found and pictured by the QA probe -ShopSpots,
-        // clear of the vendor's stock, nothing moved or replaced): the island scene, the vendor's shop area (its name and its
-        // place in the scene's root object) and the pack's pose in the area's frame.
+        // A canvas pack at each vendor that sells oakum (leaning on a counter or table, its foot on the ground, facing outward, else at
+        // a side, never the shopkeeper's side; else lying under it, half out; Crab Beach: lying on its porch beside the table (its open
+        // table and the stock around it leave no other way)), clear of the vendor's stock, nothing moved or replaced: the island scene,
+        // the vendor's shop area (its name and its place in the scene's root object) and the pack's pose in the area's frame.
         internal struct Stock { internal string port; internal int scene; internal string area; internal Vector3 areaInRoot, local; internal Quaternion turn; }
         internal static readonly Stock[] Stocks = {
             new Stock { port = "Gold Rock City", scene = 1, area = "shop (9)", areaInRoot = new Vector3(1542.870f, 8.400f, -381.341f), local = new Vector3(-0.324971974f, -0.211410135f, 0.271434247f), turn = new Quaternion(-0.09504408f, -0.6795426f, -0.0894634947f, 0.7219314f) },   // leaning 15 deg on its long edge against market_stall (5), facing outward, on gold_rock_dock_027
@@ -4872,17 +4818,15 @@ namespace EconomyOverhaul
             new Stock { port = "Crab Beach", scene = 11, area = "shop area (1)", areaInRoot = new Vector3(384.922f, 14.010f, -217.920f), local = new Vector3(0.0482834578f, -0.327959627f, -0.134715319f), turn = new Quaternion(-0.5760863f, 0.410030037f, 0.410030037f, 0.5760863f) },   // lying on the porch 0.33 m from furniture_table_4 (2), at a side, on east_dock (23)
         };
         internal const string StockName = "EconomyOverhaul canvas pack stock";
-        // A wood pole bundle (four 2 m poles; the user, 2026-10-12: bundles, not single poles) beside each canvas pack stall:
-        // leaning on the counter's top edge, else on a post of the
+        // A wood pole bundle (four 2 m poles) beside each canvas pack stall: leaning on the counter's top edge, else on a post of the
         // stall or a post or wall beside it; at New Port and Dead Cove beside the vendor's oar; at Sunspire, Siren Song, Chronos and
-        // Firefly Grotto lying on the ground in front of the pack; at Old Ankh Town on the wall (spots found and pictured by the QA
-        // probe -PoleSpots for the bundle's 10 cm round, clear of the vendor's stock and the pack, nothing moved or replaced). As the
-        // packs: the stall's shop area and the bundle's end and turn in the area's frame. Not at Gold Rock City, Dragon Cliffs, Fort
-        // Aestrin and Kicia Bay since 2026-10-24 (the user: "Remove wood poles that sold in these port to sell here instead"): their
-        // pole bundles are sold by the wood vendors (WoodVendors).
+        // Firefly Grotto lying on the ground in front of the pack; at Old Ankh Town on the wall (clear of the vendor's stock and the
+        // pack for the bundle's 10 cm round, nothing moved or replaced). As the packs: the stall's shop area and the bundle's end and
+        // turn in the area's frame. Not at Gold Rock City, Dragon Cliffs, Fort Aestrin and Kicia Bay: their pole bundles are sold by
+        // the wood vendors (WoodVendors).
         internal static readonly Stock[] PoleStocks = {
             new Stock { port = "Al'Nilem", scene = 2, area = "shop area (3)", areaInRoot = new Vector3(269.461f, 15.300f, 54.128f), local = new Vector3(-0.176211089f, -0.353755534f, -0.316438049f), turn = new Quaternion(-0.438141555f, 0.56051445f, -0.470327467f, -0.5221568f) },   // leaning 10 deg over the top edge of market_stall (3), facing outward, resting 0.90 m up, its foot on Terrain (no renderer on it) 0.70 m from the pack
-            new Stock { port = "Neverdin", scene = 3, area = "shop area (2)", areaInRoot = new Vector3(1.060f, 15.350f, 7.100f), local = new Vector3(0.0790600851f, -0.385084838f, -0.313387871f), turn = new Quaternion(-0.0148007022f, -0.73526746f, 0.016064465f, -0.6774252f) },   // lying on the ground in front of the pack, along the counter, 0.68 m from the pack's middle, on Terrain, 2.5 deg off level, at most 0.6 cm over the ground (2026-10-24, run polespots-neverdin-5; the lean against market_stall (3) rested on its canvas's edge: the user, "it's now lean on the air")
+            new Stock { port = "Neverdin", scene = 3, area = "shop area (2)", areaInRoot = new Vector3(1.060f, 15.350f, 7.100f), local = new Vector3(0.0790600851f, -0.385084838f, -0.313387871f), turn = new Quaternion(-0.0148007022f, -0.73526746f, 0.016064465f, -0.6774252f) },   // lying on the ground in front of the pack, along the counter, 0.68 m from the pack's middle, on Terrain, 2.5 deg off level, at most 0.6 cm over the ground (a lean against market_stall (3) rests on its canvas's edge, in the air)
             new Stock { port = "New Port", scene = 12, area = "shop  supplies", areaInRoot = new Vector3(280.923f, 3.949f, -308.519f), local = new Vector3(-0.1638691f, -0.447944134f, 0.335214168f), turn = new Quaternion(0.608724952f, -0.008688566f, 0.00666696f, 0.7933059f) },   // leaning 15 deg over the top edge of east_market_stall 1, facing outward, resting 0.85 m up, its foot on east_house_platform (no renderer on it) 0.44 m from the oar's foot (1.67 m from the pack)
             new Stock { port = "Sage Hills", scene = 13, area = "shop area", areaInRoot = new Vector3(-47.422f, 4.360f, 24.670f), local = new Vector3(-0.2353538f, -0.291307747f, 0.154015735f), turn = new Quaternion(0.608746052f, -0.005651837f, 0.00433681626f, 0.7933333f) },   // leaning 15 deg over the top edge of east_market_stall 1 (2), facing outward, resting 0.83 m up, its foot on east_house_platform (3) (no renderer on it) 0.86 m from the pack
             new Stock { port = "Sunspire", scene = 16, area = "shop area (2)", areaInRoot = new Vector3(-332.379f, 2.530f, -379.117f), local = new Vector3(0.09982989f, -0.181111723f, 0.00611003442f), turn = new Quaternion(-0.000875937869f, 0.696486056f, 0.0008502014f, 0.7175693f) },   // lying on the ground in front of the pack, along the counter, 0.39 m from the pack's middle (shifted 0.0 m along, 0.00 m out), on Terrain (no renderer on it), 0.1 deg off level, at most 0.9 cm over the ground
@@ -4924,10 +4868,10 @@ namespace EconomyOverhaul
         internal static List<TarpState> Records()
         {
             var list = waiting != null ? new List<TarpState>(waiting) : new List<TarpState>();
-            // Also the tarps rebuilt after a load under a ship the game had already switched off far away
-            // (BoatHorizonPerformanceSwitcher deactivates it): no Awake yet, so not in Tarp.All, and once dropped from this
-            // list they were lost at the next save (Claude's fix, 2026-10-17). Only inactive ones: a tarp just replaced or untied
-            // is still active until the frame ends. Found in Tarp.Made, every tarp built (the destroyed ones dropped here).
+            // Also the tarps rebuilt after a load under a ship the game had already switched off far away (BoatHorizonPerformanceSwitcher
+            // deactivates it): no Awake yet, so not in Tarp.All, and once dropped from this list they would be lost at the next save. Only
+            // inactive ones: a tarp just replaced or untied is still active until the frame ends. Found in Tarp.Made, every tarp built (the
+            // destroyed ones dropped here).
             Tarp.Made.RemoveAll(x => !x);
             var tarps = Tarp.All.Concat(Tarp.Made.Where(x => x.gameObject.scene.IsValid() && !x.gameObject.activeInHierarchy)).Where(x => x).Distinct();
             foreach (var t in tarps)
@@ -4963,7 +4907,7 @@ namespace EconomyOverhaul
         }
         // A new game, a load or the uninstall button: no tarps from before, and no corners waiting. Also the tarps under a ship
         // switched off far away (not in Tarp.All until the ship is switched on; Records saves them too): one left by the uninstall
-        // could give a new pack (item 642) into a save meant to be vanilla-safe (the review of 2026-10-18, Claude's fix).
+        // could give a new pack (item 642) into a save meant to be vanilla-safe.
         internal static void Clear()
         {
             Cancel(false); waiting = null;
@@ -5049,10 +4993,10 @@ namespace EconomyOverhaul
             return false;
         }
         // One cargo's cover scan (CargoCondition.ScanCover, up to 25 rays): each counted roof's mesh, points and their bounds read once
-        // for the scan, not once a ray (each read copied the cloth's points, and a welded roof's mesh points too; up to ~270 KB a scan;
-        // the deep review of 2026-11-09). A scan runs straight through on the main thread, and Unity moves cloth points only in its own
-        // cloth step (PostLateUpdate's PhysicsSkinnedClothBeginUpdate and FinishUpdate, after the scripts' LateUpdate), so every ray
-        // meets the same points as before. Calls outside a scan (the QA's) read them afresh.
+        // for the scan, not once a ray (each read copies the cloth's points, and a welded roof's mesh points too; up to ~270 KB a scan).
+        // A scan runs straight through on the main thread, and Unity moves cloth points only in its own cloth step (PostLateUpdate's
+        // PhysicsSkinnedClothBeginUpdate and FinishUpdate, after the scripts' LateUpdate), so every ray meets the points a fresh read
+        // would. Calls outside a scan (the QA's) read them afresh.
         private static int scanDepth;
         private static readonly Dictionary<Cloth, (int[] tris, Vector3[] v, Bounds b)> scanRoofs = new Dictionary<Cloth, (int[] tris, Vector3[] v, Bounds b)>();
         internal static void BeginScan() => scanDepth++;
@@ -5132,8 +5076,7 @@ namespace EconomyOverhaul
             if (!HoldingPack) { ShowGhost(null); return; }
             // On a knot R repairs rather than ties: no ghost of a corner there.
             if (PointedKnot(pointer)) { ShowGhost(null); return; }
-            // E ties the waiting spots (the user, 2026-10-26: "player press E or F to confirm"; then F dropped, "which button will drop
-            // canvas pack? drop that one as confirmation button": F is the game's own pick-up key, which lets go of the pack).
+            // E ties the waiting spots (not F: F is the game's own pick-up key, which lets go of the pack).
             if (Pending.Count > 0 && PendingPack == pack && GameState.playing && !GameState.inCursorMenu && Input.GetKeyDown(KeyCode.E))
             { var notice = Confirm(pack); if (notice != null) Loans.Notify(notice); if (!pack) { ShowGhost(null); return; } }
             Aboard(out var frame, out var walk);
@@ -5148,11 +5091,10 @@ namespace EconomyOverhaul
             KnotLook(o.transform, GhostSize, GhostMaterial, KnotLookName);
             return o;
         }
-        // ---- Knots (user, 2026-10-06) ----
+        // ---- Knots ----
         // A corner's knot is the game's mooring-line knot ("paint_att_Rope_Att", in its "paint att paint"), 0.15 m across; the
-        // ghost that shows where a corner goes is the same knot at the same size (the user, 2026-10-17; 0.5 m until then), in the
-        // game's targeter green (the game's targeter draws a mesh only at its own size, so the mod draws it). Without the game's
-        // knot, a rope ring of the mod's own.
+        // ghost that shows where a corner goes is the same knot at the same size, in the game's targeter green (the game's targeter
+        // draws a mesh only at its own size, so the mod draws it). Without the game's knot, a rope ring of the mod's own.
         internal const float KnotSize = .15f, GhostSize = KnotSize; internal const string KnotLookName = "canvas knot look";
         private static Mesh knotMesh; private static Material knotMaterial; private static float knotLooked = -10;
         internal static Mesh KnotMesh { get { FindKnot(); return knotMesh ? knotMesh : RingMesh; } }
@@ -5229,7 +5171,7 @@ namespace EconomyOverhaul
     {
         internal static readonly List<Tarp> All = new List<Tarp>();
         // Every tarp Tarps.Build made, also one under a ship switched off far away that never woke (not in All, and no OnDestroy
-        // when it goes): Records reads it instead of searching every loaded object (3 ms a search, twice a save; SAVE_TRIM_DRAFT.md).
+        // when it goes): Records reads it instead of searching every loaded object (3 ms a search, twice a save).
         internal static readonly List<Tarp> Made = new List<Tarp>();
         internal bool onShip; internal Vector3[] corners; internal Quaternion[] turns; internal Tarps.Layout layout; internal Cloth cloth; internal GameObject[] knots;
         // Wear: its health when tied (or loaded) and the game's clock then; torn at 0. Worked out from the clock, so a tarp on a
@@ -5280,7 +5222,7 @@ namespace EconomyOverhaul
     }
 
     // A corner knot: the pointer's look text "untie canvas"; a click unties the tarp. With a bought canvas pack in hand (and
-    // only then, user 2026-10-09) a second line: R repairs it (TarpTiePatch).
+    // only then) a second line: R repairs it (TarpTiePatch).
     internal sealed class TarpKnot : GoPointerButton
     {
         internal const string UntieText = "untie canvas", RepairText = UntieText + "\nR: repair canvas";
@@ -5331,8 +5273,8 @@ namespace EconomyOverhaul
     }
     [HarmonyPatch(typeof(GoPointer), "LateUpdate")] internal static class TarpAimPatch
     { static void Postfix(GoPointer __instance) { if (Tarps.Registered) Tarps.Watch(__instance); } }
-    // A canvas pack is held low (user, 2026-10-06), so the spot a corner would go stays in view: the game keeps a two-handed
-    // item where it was in the view when picked up (GoPointer.PickUpItem); a pack goes 1 m ahead and 0.6 m below the eye, level.
+    // A canvas pack is held low, so the spot a corner would go stays in view: the game keeps a two-handed item where it was in
+    // the view when picked up (GoPointer.PickUpItem); a pack goes 1 m ahead and 0.6 m below the eye, level.
     [HarmonyPatch(typeof(GoPointer), "PickUpItem")] internal static class PackHoldPatch
     {
         internal static readonly Vector3 Hold = new Vector3(0, -.6f, 1);
@@ -5344,9 +5286,9 @@ namespace EconomyOverhaul
         }
     }
 
-    // A tied tarp: its ship's save index (Pledges.Index) or -1 on land, and its tie spots in the outline's order (x, y, z each; four
-    // until 2026-10-26, 3 or more since) with their knots' turns (x, y, z, w each): in the ship's boarding frame, or real world
-    // positions and world turns on land.
+    // A tied tarp: its ship's save index (Pledges.Index) or -1 on land, and its tie spots in the outline's order (x, y, z each; 3
+    // or more, an older save's always four) with their knots' turns (x, y, z, w each): in the ship's boarding frame, or real
+    // world positions and world turns on land.
     [Serializable] public sealed class TarpState
     {
         public int ship = -1;
@@ -5356,11 +5298,11 @@ namespace EconomyOverhaul
         [System.Runtime.Serialization.OptionalField] public float wear;
     }
 
-    // ---- The Cargo Damage Manual (prefab 646) and a new game's starting items (the user, 2026-11-01, TUTORIAL_UI_DRAFT.md §4.2) ----
-    // A copy of the game's manual scroll (prefab 91) with its own pages: the user's text (§8, word for word) drawn in the game's
-    // book font, black ink on a clear page, as the vanilla manual pages are (tutm-1: their pages are 2048 x 2048 textures of ink and
-    // pictures over the scroll's parchment mesh). Its amount is 3 (the navigation manual's, so the game's OnLoad finds pages and
-    // does not count it as the tutorial scroll); a postfix on OnLoad then puts our pages, name and value on it.
+    // ---- The Cargo Damage Manual (prefab 646) and a new game's starting items ----
+    // A copy of the game's manual scroll (prefab 91) with its own pages: its text (Pages) drawn in the game's book font, black ink
+    // on a clear page, as the vanilla manual pages are (2048 x 2048 textures of ink and pictures over the scroll's parchment
+    // mesh). Its amount is 3 (the navigation manual's, so the game's OnLoad finds pages and does not count it as the tutorial
+    // scroll); a postfix on OnLoad then puts our pages, name and value on it.
     internal static class CargoManual
     {
         internal const int ManualIndex = 646, ScrollIndex = 91, Value = 30, PageSize = 2048;
@@ -5425,8 +5367,8 @@ namespace EconomyOverhaul
 
         // The pages drawn once: each line a TextMesh on its own layer, far below the world, taken by a camera of its own into a texture
         // the size of the vanilla pages, then removed in the same frame (DestroyImmediate: nothing is drawn by the game's cameras).
-        // Title centred 1.6 times the body's size, 10% down the page (at 3.6% the held scroll's view cut it, tut-3); the body
-        // left-aligned, a line every 68 of 2048 pixels (the vanilla pages' pitch, tutm-1), wrapped to 88% of the page; a blank line
+        // Title centred 1.6 times the body's size, 10% down the page (at 3.6% the held scroll's view cuts it); the body
+        // left-aligned, a line every 68 of 2048 pixels (the vanilla pages' pitch), wrapped to 88% of the page; a blank line
         // between paragraphs.
         internal const float Pitch = 68f / PageSize * 2f, TitleScale = 1.6f, Margin = .06f, TopMargin = .10f;
         private static Texture[] Drawn()
@@ -5499,10 +5441,10 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(ShipItemScroll), "OnLoad")] internal static class CargoManualLoadPatch
     { static void Postfix(ShipItemScroll __instance) { try { CargoManual.Loaded(__instance); } catch (Exception e) { Plugin.Log?.LogWarning("Cargo Damage Manual: its pages not set: " + e.Message); } } }
 
-    // A new game's two extra items (S2: new games only), put in the start region's StarterSet with the game's own: the set drops its
+    // A new game's two extra items (new games only), put in the start region's StarterSet with the game's own: the set drops its
     // items 15 m onto the start ship as the game starts, marks them sold and saves them (StarterSet.InitiateStarterSet). Each item
-    // at a fixed place on its open deck, in its own frame (x across, z along, the deck's height: its walk collider measured by the
-    // QA's tutdeck, tutm-2), side by side beside the vanilla table; the set's place for it is that point plus the set's 15 m.
+    // at a fixed place on its open deck, in its own frame (x across, z along, the deck's height: its walk collider's, measured),
+    // side by side beside the vanilla table; the set's place for it is that point plus the set's 15 m.
     internal static class StartItems
     {
         internal const float PackHealth = 20f;   // 2 days of a tied tarp's wear (10 a day)
@@ -5512,7 +5454,7 @@ namespace EconomyOverhaul
             new[] { new Spot(-.55f, -2.55f, 1.07f), new Spot(-.45f, -3.55f, 1.16f) },   // Dhow small (10), Al'Ankh
             new[] { new Spot(.55f, 1.0f, 1.10f), new Spot(.55f, 1.5f, 1.13f) },        // Junk small single roof (90), Emerald
             new[] { new Spot(-.8f, -3.7f, 1.32f), new Spot(-.8f, -3.1f, 1.32f) } };    // Medi small (40), Aestrin: in its cabin across from
-                                                                                         // the table (its waist's spot was at the foot of the stairs, start-M-2; tutm-3)
+                                                                                         // the table (a spot on its waist lies at the foot of the stairs)
         internal const float Lift = .005f;
         internal static void Add(StarterSet set)
         {
@@ -5529,22 +5471,22 @@ namespace EconomyOverhaul
                 Plugin.Log?.LogInfo("Starting items: " + what + " in " + set.name + " at set-local " + o.transform.localPosition + " (on " + boat.name + " at " + spot.x + ", " + spot.deck + ", " + spot.z + ").");
                 return o;
             }
-            // the pack lying on its largest face (its box's shortest side up; as its template stands it is on end, tut-3)
+            // the pack lying on its largest face (its box's shortest side up; as its template stands it is on end)
             var pack = Tarps.PackTemplate;
             var box = pack ? pack.GetComponent<BoxCollider>() : null;
             int k = !box ? 1 : box.size.x <= box.size.y && box.size.x <= box.size.z ? 0 : box.size.y <= box.size.z ? 1 : 2;
             var lying = k == 0 ? Quaternion.Euler(0, 0, 90) : k == 2 ? Quaternion.Euler(270, 0, 0) : Quaternion.identity;   // that side to the ship's up
             var p = Put(pack, Spots[region][0], lying, box ? box.center[k] - box.size[k] / 2 : 0, "canvas pack (health " + PackHealth + ")");
             if (p) p.GetComponent<ShipItem>().health = PackHealth;
-            // the scroll lying closed as the game's own lies (turned 270 about x: its box's z is up; tutm-1: z -0.011 +- 0.0395)
+            // the scroll lying closed as the game's own lies (turned 270 about x: its box's z is up, z -0.011 +- 0.0395)
             var sbox = CargoManual.Template ? CargoManual.Template.GetComponent<BoxCollider>() : null;
             Put(CargoManual.Template, Spots[region][1], Quaternion.Euler(270, 0, 0), sbox ? sbox.center.z - sbox.size.z / 2 : -.05f, "Cargo Damage Manual");
         }
     }
     // Added as the game starts the new game's set (it starts only the set of GameState.newGameRegion): after every prefix, before the
     // coroutine's first step shows, lowers and registers what the set holds. Scrambled Seas' prefix here moves everything in the set by
-    // the start island's shift, and its StartNewGame prefix has already moved the start ship: added at StartNewGame (as before), ours
-    // were placed by the moved ship and then moved again, off it (the deep review of 2026-11-02, Claude's fix).
+    // the start island's shift, and its StartNewGame prefix has already moved the start ship: added at StartNewGame, ours would be
+    // placed by the moved ship and then moved again, off it.
     [HarmonyPatch(typeof(StarterSet), "InitiateStarterSet")] internal static class StartItemsPatch
     { static void Postfix(StarterSet __instance) { try { StartItems.Add(__instance); } catch (Exception e) { Plugin.Log?.LogWarning("Starting items not added: " + e); } } }
 }

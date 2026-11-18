@@ -32,23 +32,23 @@ namespace EconomyOverhaul
             double[] limits = { 0, 10000, 20000, 40000, 60000, 80000, 100000, 200000, 400000 };
             return level >= 9 ? double.PositiveInfinity : limits[Math.Max(0, level)];
         }
-        // Respondentia interest by the lending region's level (the user, 2026-10-14): 70% at level 1 (and below), 60, 50, 40, 30,
+        // Respondentia interest by the lending region's level: 70% at level 1 (and below), 60, 50, 40, 30,
         // 25, 20, 15, 10, 5% at level 10. A loan keeps the rate it was taken at.
         private static readonly double[] InterestByLevel = { .70, .70, .60, .50, .40, .30, .25, .20, .15, .10, .05 };
         public static double Interest(int level) => InterestByLevel[Math.Max(0, Math.Min(10, level))];
-        // Reputation for repaid loans (the user, 2026-10-18; LOAN_REP_DRAFT.md). A financed crate repaid at its sale earns the
-        // smaller of a share of the lending region's current level (0.5% of the points it needs) and a share of the distance it
-        // was carried, as missions pay (0.1 x the game's mission distance from where it was financed to where it is sold, counted
-        // up to the region's mission range); once the credit limit is removed (level 9) 0.2% and 0.04 x.
+        // Reputation for repaid loans. A financed crate repaid at its sale earns the smaller of a share of the lending region's
+        // current level (0.5% of the points it needs) and a share of the distance it was carried, as missions pay (0.1 x the game's
+        // mission distance from where it was financed to where it is sold, counted up to the region's mission range); once the
+        // credit limit is removed (level 9) 0.2% and 0.04 x.
         public static double LoanCrateRep(int level, int required, double distance, double range)
         {
             if (level < 1 || required <= 0 || !(distance > 0)) return 0;
             bool unlimited = double.IsPositiveInfinity(CreditLimit(level));
             return Math.Min((unlimited ? .002 : .005) * required, (unlimited ? .04 : .1) * Math.Min(distance, Math.Max(0, range)));
         }
-        // A Bottomry loan repaid in full by its due day, from the day after it was taken (the user, 2026-10-18: no half-term limit,
-        // only not on the same day), earns 10% of the points the lending region's current level needs times its payout (in value
-        // units) over the region's credit limit, at most 1; once the credit limit is removed (level 9) 5%, with level 8's limit.
+        // A Bottomry loan repaid in full by its due day, from the day after it was taken, earns 10% of the points the lending
+        // region's current level needs times its payout (in value units) over the region's credit limit, at most 1; once the
+        // credit limit is removed (level 9) 5%, with level 8's limit.
         public static int BottomryRep(int level, int required, double payoutUnits, int startDay, int dueDay, int day)
         {
             if (level < 1 || required <= 0 || !(payoutUnits > 0) || day > dueDay || day <= startDay) return 0;
@@ -69,8 +69,8 @@ namespace EconomyOverhaul
         public static double NewlyUnpaid(int before, int after, double rate) => Math.Max(0, Math.Max(0, -(double)after) - Math.Max(0, -(double)before)) / rate;
         // Levels a lending region loses when a ship carrying its loans sinks.
         public const int SinkingLevels = 2;
-        // Bottomry terms by the lending region's reputation level: flat interest for the loan (the user, 2026-10-14: 35% at levels
-        // 1-2, then 30, 25, 20, 17, 14, 10, 5, 3% at level 10; a loan keeps its saved rate), and days to repay.
+        // Bottomry terms by the lending region's reputation level: flat interest for the loan (35% at levels 1-2 down to 3% at
+        // level 10; a loan keeps its saved rate), and days to repay.
         public static double BottomryRate(int level) => new[] { 0, .35, .35, .30, .25, .20, .17, .14, .10, .05, .03 }[Math.Max(0, Math.Min(10, level))];
         public static int BottomryTerm(int level) => level < 1 ? 0 : level <= 3 ? 20 : level <= 6 ? 25 : 30;
         // Each day past the due day raises the rate by 10% of itself, up to double on day 10.
@@ -116,9 +116,7 @@ namespace EconomyOverhaul
     public static partial class Rules
     {
         // Virtual Crew's sale price for a crate or barrel times its condition (CargoCondition.Factor: the water damage, how intact
-        // fragile cargo is), floored as this mod's own sale quote (Fx.Quote) floors it (the user, 2026-10-24, C3: "It should
-        // consider fragile goods cargo damage and Water damage, crew mod let crew take a cut so sold price will be lower, leave it
-        // to that mod"): the rest of the crew's price is theirs.
+        // fragile cargo is), floored as this mod's own sale quote (Fx.Quote) floors it; the crew's cut is left to Virtual Crew.
         public static int CrewSalePrice(int price, double condition) => price <= 0 ? price : (int)Math.Floor(price * Math.Max(0, Math.Min(1, condition)));
     }
 
@@ -137,7 +135,7 @@ namespace EconomyOverhaul
             return save && World.Cargo.TryGetValue(save.instanceId, out var c) && c.loan ? c : null;
         }
         // By item id, for a ship's packed cargo: it exists only as data in its cache, where Find can't see it. Called by name from
-        // Shipwright and Transport, whose Sell refuses a ship with financed cargo aboard (guide.md §1; the user, 2026-11-06).
+        // Shipwright and Transport, whose Sell refuses a ship with financed cargo aboard.
         internal static bool Financed(int id) => World.Cargo.TryGetValue(id, out var c) && c.loan;
         internal static string BlockReason(int region, int currency = -1)
         {
@@ -147,7 +145,7 @@ namespace EconomyOverhaul
         }
         internal static void Notify(string text) { if (NotificationUi.instance) NotificationUi.instance.ShowNotification(NoticeText.Wrap(text)); }
         // For a set time: the game's own overload (its plain one shows 3 s). Its own name, not a Notify overload: the QA patches Notify by name
-        // (Regression053.cs), and a second Notify made that patch ambiguous and stopped the QA (runs ocm-3, ouh-1; EconomyOverhaul_FAILED.md).
+        // (Regression053.cs), and a second Notify makes that patch ambiguous and stops the QA.
         internal static void NotifyFor(string text, float seconds) { if (NotificationUi.instance) NotificationUi.instance.ShowNotification(NoticeText.Wrap(text), seconds); }
         // Repayment shortfalls can take an account down to 0 reputation points, never below.
         internal static int DebtPenalty(double penalty, int region, out double remainder) =>
@@ -196,10 +194,9 @@ namespace EconomyOverhaul
             if (result.Shortfall == 0 || PlayerGold.currency[Currency(loan)] >= 0) Reward(loan, market);
             Close(loan); return result.Payout;
         }
-        // Virtual Crew's sale of a financed crate (VirtualCrewCompatibility; PALLET_JUNK_CREW_DRAFT.md §2, the user's C2 "yes it should
-        // repay loan"): the crew put the whole price, gross, into the payment wallet themselves. It is taken out again, the loan
-        // settled as the player's own sale settles it (SettleLoan), and what the seller keeps put back; the debt part is one negative
-        // line in the day log, so the day's total is what the player kept.
+        // Virtual Crew's sale of a financed crate (VirtualCrewCompatibility): the crew put the whole price, gross, into the payment
+        // wallet themselves. It is taken out again, the loan settled as the player's own sale settles it (SettleLoan), and what the
+        // seller keeps put back; the debt part is one negative line in the day log, so the day's total is what the player kept.
         internal static void SettleCrewSale(CargoState loan, int gross, int currency, IslandMarket market)
         {
             if (loan == null || !loan.loan || gross < 0) return;
@@ -222,7 +219,7 @@ namespace EconomyOverhaul
         {
             if (!market || loan.financedPort <= 0 || Port.ports == null || loan.financedPort > Port.ports.Length) return;
             Port from = Port.ports[loan.financedPort - 1], to = market.GetPort(); if (!from || !to) return;
-            // The game's own mission distance (the user, 2026-10-18: "use the one that closet to vanilla").
+            // The game's own mission distance.
             int region = loan.region, level = Reputations.Level(region);
             double rep = Rules.LoanCrateRep(level, Reputations.Required(region, level), Mission.GetDistance(from, to), Reputations.MaxDistance(region));
             if (repCarryState != World.State) { repCarry = new double[4]; repCarryState = World.State; }
@@ -250,8 +247,7 @@ namespace EconomyOverhaul
             var good = item.GetComponent<Good>();
             if (good && Port.ports != null)
             {
-                // a good without the game's save record (another mod's) still leaves the list, its count not touched (the deep review
-                // of 2026-11-02, Claude's fix)
+                // a good without the game's save record (another mod's) still leaves the list, its count not touched
                 var prefab = item.GetComponent<SaveablePrefab>();
                 int g = prefab ? PrefabsDirectory.ItemToGoodIndex(prefab.prefabIndex) : -1;
                 foreach (var port in Port.ports)
@@ -298,7 +294,7 @@ namespace EconomyOverhaul
             var refusal = BankruptcyRefusal(region); if (refusal != null) { Notify(refusal); return; }
             bool rentalEnded = Rentals.Bankruptcy(region);
             Bottomry.Bankruptcy(region);
-            // The region's trade offices close and its treasury goes (the user's Q6; TradeOffice.cs).
+            // The region's trade offices close and its treasury goes (TradeOffice.cs).
             Office.Bankruptcy(region);
             for (int r = 0; r < 4; r++) if (region < 0 || r == region) World.State.fractionalPenalty[r] = 0;
             foreach (var c in World.State.cargo.Where(c => c.loan && (region < 0 || c.region == region)).ToArray()) MarkRemoved(c);
@@ -311,14 +307,14 @@ namespace EconomyOverhaul
             // Each lender owns exactly one wallet, including Chronos / Gold.
             PurgeRemoved();
             // An ended rental's notice names the bankruptcy and the ship taken back; the game's notices have no queue, so this one
-            // would replace it in the same frame (the review of 2026-10-18, Claude's fix).
+            // would replace it in the same frame.
             if (!rentalEnded) Notify(region < 0 ? "Declared bankruptcy in all regions." : "Declared bankruptcy in " + BookUI.RegionName(region) + ".");
             if (EconomyUI.instance) EconomyUI.instance.RefreshPage();
         }
         internal static void Sinking(BoatLocalItems boat)
         {
             if (!World.Ready) return;
-            // a ship without the game's save record (another mod's copy) holds no saved cargo (the deep review of 2026-11-02, Claude's fix)
+            // a ship without the game's save record (another mod's copy) holds no saved cargo
             var so = boat.GetComponent<SaveableObject>(); if (!so) return;
             int parent = so.sceneIndex;
             foreach (var active in CargoCondition.Active) active.CaptureParent();
@@ -374,8 +370,8 @@ namespace EconomyOverhaul
     }
     [HarmonyPatch(typeof(EconomyUI), "SellGood")] internal static class WarehouseSalePatch { static bool Prefix(EconomyUI __instance) { Loans.Sell(__instance); return false; } }
     // Only when the destroy really ran: another mod's prefix may refuse it and the item stays (New Beginnings keeps its starter items through the
-    // game's 600 m clean-up while its start is armed; the deep review of 2026-11-09, question 4a: "a) fix it"). The postfix reads __runOriginal,
-    // which holds every prefix's answer whatever their order; the save parent is read in the prefix, before DestroyItem's ExitBoat sets it to -1.
+    // game's 600 m clean-up while its start is armed). The postfix reads __runOriginal, which holds every prefix's answer whatever their order;
+    // the save parent is read in the prefix, before DestroyItem's ExitBoat sets it to -1.
     [HarmonyPatch(typeof(ShipItem), "DestroyItem")] internal static class RemovalFallbackPatch
     {
         static void Prefix(ShipItem __instance, out int __state) { var save = __instance ? __instance.GetComponent<SaveablePrefab>() : null; __state = save ? save.GetParentObject() : 0; }
@@ -398,10 +394,9 @@ namespace EconomyOverhaul
     }
     // Using financed cargo (unsealing, drinking, salting, pouring) collects its loan. These four run after every other mod's prefix
     // and collect nothing when one of them refused the use (HarmonyX runs every prefix, also after one returned false): HooksHangMore
-    // refuses pouring into a mug or bucket hanging on a hook, Dizzy Bundle Up salting a sausage stack, and the loan was collected
-    // though nothing was used (X-2 of the deep review of 2026-11-02; the user: "Yes, build it"). The priority is on each method: a
-    // class-level one is dropped. A mod that skipped the game's code to do the same use its own way would now use the cargo
-    // without collecting; none in the user's mods (Check-PatchConflicts, 2026-11-02).
+    // refuses pouring into a mug or bucket hanging on a hook, Dizzy Bundle Up salting a sausage stack. The priority is on each method:
+    // a class-level one is dropped. A mod that skips the game's code to do the same use its own way uses the cargo without collecting
+    // (none of the mods it is tested with does).
     [HarmonyPatch(typeof(ShipItemCrate), "UnsealCrate")] internal static class UnsealDebtPatch
     {
         [HarmonyPriority(Priority.Last)]
@@ -506,8 +501,8 @@ namespace EconomyOverhaul
             var block = Default(region); if (block != null) return "No loans while your " + PlayerGold.GetCurrencyName(block.currency) + " are negative";
             return Reputations.Level(region) < 1 ? RepReason : null;
         }
-        // Below reputation 1 the trade book shows these in its place (the user, 2026-11-01, TUTORIAL_UI_DRAFT.md U1): the Loan
-        // button's label, and the line under it (where the interest rate shows from level 1).
+        // Below reputation 1 the trade book shows these in its place: the Loan button's label, and the line under it (where the
+        // interest rate shows from level 1).
         internal const string RepReason = "Requires reputation level 1", RepButton = "Require reputation 1", RepLine = "Interest repaid when sold cargo";
         // The same, short enough for the ledger tables.
         internal static string Status(int region)
@@ -563,7 +558,7 @@ namespace EconomyOverhaul
         // From the save manager's list, as the game's own recovery searches: while playing, the game switches off ships more
         // than 10 km from the player, and a scene search skips switched-off objects. Read once a frame; the array of the frame
         // before is kept while it holds the same boats with the same save numbers in the same order (no LINQ walk and no new array
-        // each frame; the deep review of 2026-11-09), else a new one is made, as before.
+        // each frame), else a new one is made.
         private static int[] cacheIndex = new int[0];
         private static readonly List<PurchasableBoat> found = new List<PurchasableBoat>(); private static readonly List<int> foundIndex = new List<int>();
         internal static PurchasableBoat[] All()
@@ -627,17 +622,16 @@ namespace EconomyOverhaul
         }
         internal static Port PortOf(Transform island) =>
             island && Port.ports != null ? Port.ports.FirstOrDefault(p => p && p.portIndex != 7 && Island(p) == island) : null;
-        // The cleat a moored rope is tied to: the object of the spring it is moored to (PickupableBoatMooringRope.mooredToSpring), or null. The
-        // game's MoorTo set the rope's parent to that spring up to 0.39.2; from 0.40 it sets it to the shifting world (rl-2, 2026-11-08: every ship
-        // read "not tied here" at a loan box), so the spring is read, as AtHomeCleats does.
+        // The cleat a moored rope is tied to: the object of the spring it is moored to (PickupableBoatMooringRope.mooredToSpring), or null.
+        // The game's MoorTo (0.40 on) sets the rope's parent to the shifting world, not to that spring, so the spring is read, as AtHomeCleats does.
         internal static Transform MooredTo(PickupableBoatMooringRope r)
         {
             if (!r || !r.IsMoored()) return null;
             var spring = Fields.Get<SpringJoint>(r, "mooredToSpring");
             return spring ? spring.transform : null;
         }
-        // Tied at that island: a rope's cleat stands on it by Island, the lookup TiedPort and HomePort use (the deep review of 2026-11-09, question
-        // 4b: "B) as you said"; it read the cleat's parents before, which a map mod moving a dock out of its island would make disagree).
+        // Tied at that island: a rope's cleat stands on it by Island, the lookup TiedPort and HomePort use (the cleat's parents can disagree
+        // where a map mod moves a dock out of its island).
         internal static bool TiedAt(PurchasableBoat b, Transform island)
         {
             var ropes = b ? b.GetComponent<BoatMooringRopes>() : null;
@@ -711,8 +705,7 @@ namespace EconomyOverhaul
         internal static void SendHomeLater()
         {
             if (!World.Ready || World.Loading || GameState.currentlyLoading || World.State.homeLater.Count == 0) return;
-            // not while a forced move or the game's recovery runs (the player is being moved: where they stand is not yet known; the
-            // deep review of 2026-11-02, Claude's fix)
+            // not while a forced move or the game's recovery runs (the player is being moved: where they stand is not yet known)
             if (ForcedMove.Busy || GameState.recovering) return;
             var player = Refs.observerMirror ? Refs.observerMirror.transform.position : Vector3.zero;
             foreach (int index in World.State.homeLater.ToArray())
@@ -811,6 +804,9 @@ namespace EconomyOverhaul
             return paid > int.MaxValue ? int.MaxValue : (int)paid;
         }
 
+        // A ship whose original a trade fleet ship keeps in Shipwright and Transport's storage (OfficeFleet.Kept) can't be pledged: it lies there
+        // owned, not the player's to sail.
+        internal static string FleetRefusal(int index, string name) => OfficeFleet.Kept(index) == 1 ? "The " + name + " trades in the fleet" : null;
         // Why this pledge can't take a loan at this box in this currency (null: it can).
         internal static string Refusal(PurchasableBoat b, LoanBox box, int currency)
         {
@@ -832,6 +828,7 @@ namespace EconomyOverhaul
             {
                 int rented = Pledges.RentedFrom(b);
                 if (!Pledges.Owned(b)) return "Not your ship";
+                var fleet = FleetRefusal(index, name); if (fleet != null) return fleet;
                 if (Pledges.Sunk(b)) return "The " + name + " has sunk";
                 if (!Pledges.TiedAt(b, box.island)) return "The " + name + " is not tied here";
                 if (rented == box.region) return "Rented from " + region + ": can't be pledged here";
@@ -894,7 +891,8 @@ namespace EconomyOverhaul
         // The shipyards found once (a search of every loaded object, about 3 ms; the page asks every half second with a loan's row
         // selected), found again each time the Bottomry page opens and after a world reset; each still checked as it is now.
         // shortcut: a shipyard that appears while the page stays open (another mod adding one later) is not seen until the page opens
-        // again; replace with a refresh when yards appear if a mod is found adding yards mid-game.
+        // again; replace with a refresh when yards appear if a mod is found adding yards mid-game. This mod's own, the trade office
+        // wharves' yards (TradeOffice.cs, OfficeWharves), call ForgetYards as each comes and goes.
         private static Shipyard[] yards;
         internal static void ForgetYards() => yards = null;
         internal static bool InShipyard(PurchasableBoat b)
@@ -1016,8 +1014,7 @@ namespace EconomyOverhaul
         }
         // The loans a sinking acts on: none once a lender has taken it (it is no longer the player's; the other lenders' loans on it
         // run on to their own day 11 and are charged then, as without the sinking). It can still sink: water comes into the last ship
-        // the player boarded (BoatDamage.UpdateWaterAndDrag), and a player ashore when it is taken boarded nothing since (LOAN-4 of
-        // the deep review of 2026-11-02, the user: "Fix it").
+        // the player boarded (BoatDamage.UpdateWaterAndDrag), and a player ashore when it is taken boarded nothing since.
         internal static BottomryLoan[] SunkLoans(int index) => Seized(index) != null ? new BottomryLoan[0] : On(index).ToArray();
         // Bankruptcy (one region, or all with -1): each of the bankrupt lender's loans takes back what it paid out from the
         // coins left in that currency (never below 0) and is forgiven; the lender takes the pledge, which can never be pledged
@@ -1096,10 +1093,10 @@ namespace EconomyOverhaul
         static void Postfix(BoatLocalItems __instance, List<ShipItem> __state) => Bottomry.Sinking(__instance.GetComponent<SaveableObject>(), __state);
     }
 
-    // A coroutine run with the coroutines it yields, one step at a time (the deep review's LOAN-2): Unity runs a yielded IEnumerator
-    // as a coroutine of its own, and when that one throws, the one that yielded it is never resumed nor ended, so its finally blocks
-    // never run (a forced move kept Busy and the screen black). Here an error in any of them ends them all, innermost first, each
-    // one's finally blocks run, and is reported; what they yield for Unity (null, a wait) is passed on.
+    // A coroutine run with the coroutines it yields, one step at a time: Unity runs a yielded IEnumerator as a coroutine of its own, and
+    // when that one throws, the one that yielded it is never resumed nor ended, so its finally blocks never run (a forced move would keep
+    // Busy and the screen black). Here an error in any of them ends them all, innermost first, each one's finally blocks run, and is
+    // reported; what they yield for Unity (null, a wait) is passed on.
     internal static class Steps
     {
         internal static IEnumerator Guarded(IEnumerator root, Action<Exception> failed)
@@ -1136,7 +1133,6 @@ namespace EconomyOverhaul
         internal const string BlackScreen = "\n\n\nThey've come\nto take your debt";
         // dark: a trip under the black screen (Queue's), which holds the game's recovery on as its own recovery does; a trip out of
         // the player's sight (Home's) leaves it alone: while it is on the game holds every ship still, the player's under sail too
-        // (the deep review of 2026-11-02, Claude's fix)
         private sealed class Trip { internal PurchasableBoat ship; internal bool sunk, restore, dark; internal List<ShipItem> ghosts; }
         private static bool movePlayer;
         private static readonly List<Trip> trips = new List<Trip>();
@@ -1322,7 +1318,7 @@ namespace EconomyOverhaul
                 yield return new WaitForFixedUpdate();
                 yield return Blackout.FadeTo(0f, .3f); faded = false;
             }
-            // an error never leaves the screen black (the deep review's LOAN-2)
+            // an error never leaves the screen black
             finally { if (faded && Plugin.Instance) Plugin.Instance.StartCoroutine(Blackout.FadeTo(0f, .3f)); }
         }
         // Back to its for-sale berth and tied to its home cleats, the way the game's recovery moves a ship (and refloats a
@@ -1496,7 +1492,7 @@ namespace EconomyOverhaul
         internal void Opened(Component chest)
         {
             Build(); box = LoanBox.Of(chest, FxBooth.For(ui).region);
-            // No Bottomry at an office's box (the user's list items 2 and 4: its treasury button takes this one's place; TradeOffice.cs).
+            // No Bottomry at an office's box: its treasury button takes this one's place (TradeOffice.cs).
             tab.gameObject.SetActive(World.Ready && OfficeBox.HouseOf(chest) == 0);
             if (Open) ShowExchange();
         }
@@ -1552,8 +1548,8 @@ namespace EconomyOverhaul
             list.AddRange(World.State.bottomry.OrderBy(l => l.dueDay).ThenBy(l => l.id).Select(l => new Row { loan = l, pledge = Pledges.Find(l.pledge) }));
             rows = list;
             // The row selected stays selected where it moved: by its loan, else by its pledge (a repaid loan's pledge back among
-            // the pledges); else its place. Was its place only, so after a repay the same place held the next loan or a pledge,
-            // and a second click repaid or took that (the 2026-10-18 review, Claude's fix).
+            // the pledges); else its place. By place alone, after a repay the same place would hold the next loan or a pledge,
+            // and a second click would repay or take that.
             int found = keptLoan >= 0 ? rows.FindIndex(r => r.loan != null && r.loan.id == keptLoan) : -1;
             if (found < 0 && keptPledge >= 0) found = rows.FindIndex(r => r.loan == null && r.pledge && Pledges.Index(r.pledge) == keptPledge);
             if (found >= 0) selected = found;
@@ -1570,8 +1566,8 @@ namespace EconomyOverhaul
         {
             if (!Open || box == null) return;
             bool kept = Rows();
-            // The page goes with the kept row when the rows move it to another page (it stayed, and the half-second refresh put that
-            // page's first row in its place: the deep review of 2026-10-19, Claude's fix); the arrows still turn the page.
+            // The page goes with the kept row when the rows move it to another page (else the half-second refresh puts that page's
+            // first row in its place); the arrows still turn the page.
             if (kept && !paged) page = selected / 4;
             paged = false;
             int pages = Math.Max(1, (rows.Count + 3) / 4); page = Mathf.Clamp(page, 0, pages - 1);
@@ -1626,8 +1622,8 @@ namespace EconomyOverhaul
             }
             else
             {
-                // the payout currency left as chosen: a repaid loan's currency was kept as the next pledge's payout (the deep review
-                // of 2026-11-02, Claude's fix); repaying reads the loan's own
+                // the payout currency left as chosen (a repaid loan's currency is not carried over as the next pledge's payout);
+                // repaying reads the loan's own
                 var l = rows[selected].loan;
                 int due = Bottomry.BoxCost(l, box.region), have = PlayerGold.currency[l.currency], left = l.dueDay - GameState.day;
                 for (int c = 0; c < 4; c++) coins[c].text = PlayerGold.currency[c].ToString();
@@ -1650,7 +1646,7 @@ namespace EconomyOverhaul
         {
             if (!Open || box == null || selected >= rows.Count) return;
             // A double click acts once: the second click of a pair is ignored for half a second after a loan was taken or repaid
-            // (the rows change under the pointer; the review of 2026-10-18, Claude's fix).
+            // (the rows change under the pointer).
             if (Time.unscaledTime < lockedUntil) return;
             var row = rows[selected];
             // Terms that changed since the page was drawn (midnight's late interest, a new daily rate) are shown again first.
@@ -1707,7 +1703,7 @@ namespace EconomyOverhaul
             button = Plate(BookUI.Button(parent, native, font, label, x, y, width, height, Ask, tint, out text)); buttonLabel = text.gameObject;
             float half = (width - .012f) / 2, offset = (width - half) / 2;
             // Yes covers the right half of the button just clicked: a double click there is not a Yes (ignored for half a second
-            // after the question appears; the review of 2026-10-18, Claude's fix).
+            // after the question appears).
             yes = Plate(BookUI.Button(parent, native, font, "Yes", x + offset, y, half, height, () => { if (Time.unscaledTime < asked + BookUI.ClickLock) return; Stop(); Loans.Bankruptcy(region()); after?.Invoke(); }, tint, out var yesText));
             no = Plate(BookUI.Button(parent, native, font, "No", x - offset, y, half, height, Stop, Color.white, out var noText));
             yesLabel = yesText.gameObject; noLabel = noText.gameObject;
@@ -1723,8 +1719,8 @@ namespace EconomyOverhaul
             var refusal = Loans.BankruptcyRefusal(region()); if (refusal != null) { Loans.Notify(refusal); return; }
             Show(true); asked = Time.unscaledTime; until = asked + 15;
         }
-        // Already closed (the button and its label on, the question's four parts off): nothing to set. Asked every frame while the book
-        // or page is closed; six SetActive calls each time before (the deep review of 2026-11-09).
+        // Already closed (the button and its label on, the question's four parts off): nothing to set, which saves six SetActive calls
+        // a frame while the book or page is closed.
         internal void Stop() { if (yes && !(button.activeSelf && buttonLabel.activeSelf && !yes.activeSelf && !yesLabel.activeSelf && !no.activeSelf && !noLabel.activeSelf)) Show(false); }
         // Called while the book is open: the question lapses after 15 seconds.
         internal void Tick() { if (Asking && Time.unscaledTime > until) Stop(); }
@@ -1948,8 +1944,8 @@ namespace EconomyOverhaul
             var font = Fields.Get<TextMesh>(ui, "textBuyPrice").font;
             loan = BookUI.Button(root.transform, source, font, "Loan", -nativeBuy.center.x, loanY, nativeBuy.size.x, nativeBuy.size.z,
                 () => BulkTrade.Execute(ui, TradeAction.Loan, BulkTrade.Quantity(loan)), new Color(.38f, .8f, 1), out loanText, true);
-            // Right end .42, clear of the Loan plate's left tip as seen from the eye (the user, 2026-11-01). At .449 the tip covered
-            // their ends: the plate stands off the page, so from the eye its tip shows left of where it lies in the page's plane (tut-12).
+            // Right end .42, clear of the Loan plate's left tip as seen from the eye: the plate stands off the page, so from the eye its tip
+            // shows left of where it lies in the page's plane (at .449 it covers the text's ends).
             info = BookUI.Text(root.transform, font, "", .42f, .080f, .013f, .24f, TextAnchor.LowerRight); info.lineSpacing = 1.05f;
             warningLabel = BookUI.Text(root.transform, font, "", .205f, .043f, .012f, .20f, TextAnchor.UpperLeft, Color.red);
             warning = BookUI.Text(root.transform, font, "", .205f, .027f, .012f, .20f, TextAnchor.UpperLeft, Color.black);
@@ -1975,8 +1971,7 @@ namespace EconomyOverhaul
         {
             if (!root) return; root.SetActive(ui.uiActive);
             if (!ui.uiActive) bankrupt.Stop(); else bankrupt.Tick();
-            // The trade office's own book: no Loan button and no loan text (the user, 2026-11-08: "Just hide the loan button and related text on
-            // office trade book. Keep the cart transport"; TradeOffice.cs OfficeBook).
+            // The trade office's own book (TradeOffice.cs OfficeBook): no Loan button and no loan text.
             bool officeBook = ui.uiActive && World.Ready && OfficeBook.Active(ui) != 0;
             if (loan && loan.gameObject.activeSelf == officeBook) loan.gameObject.SetActive(!officeBook);
             if (loanText && loanText.gameObject.activeSelf == officeBook) loanText.gameObject.SetActive(!officeBook);
@@ -2287,8 +2282,7 @@ namespace EconomyOverhaul
             }
             bottomryPageLabel.text = "Page " + (bottomryPageIndex + 1) + " / " + pages;
         }
-        // After a repayment the row holds the next loan: a double click repays one (the second click ignored for half a second; the
-        // review of 2026-10-18, Claude's fix).
+        // After a repayment the row holds the next loan: a double click repays only one (the second click ignored for half a second).
         private void RepayRow(int row)
         {
             if (Time.unscaledTime < repaidAt + BookUI.ClickLock) return;
@@ -2589,7 +2583,7 @@ namespace EconomyOverhaul
                 clean = (panel ? PanelClean(b) : Clean(b)) ? 0 : 2 * CleaningFee(b, r.currency), deposit = r.deposit };
         }
         // Each dirt reading copies the ship's dirt texture back from the GPU (a stall): the panel measures when it opens and at most every
-        // 5 s after (the user, 2026-10-17). Display only: Return charges on a fresh reading.
+        // 5 s after. Display only: Return charges on a fresh reading.
         private const float PanelDirtSeconds = 5;
         private static PurchasableBoat panelBoat; private static float panelDirtAt; private static bool panelClean;
         internal static void ForgetPanelDirt() => panelBoat = null;
@@ -2654,7 +2648,7 @@ namespace EconomyOverhaul
         // ---- Forced ends ----
         // The rental ends without the player: the bill is charged, the ship is handed back and goes home to its berth, repaired
         // and cleaned; the player is moved only if aboard it (ForcedMove).
-        // The uninstall button (MIDSAVE_DRAFT.md): the rental ends as a forced end does.
+        // The uninstall button: the rental ends as a forced end does.
         internal static void EndForUninstall()
         {
             var r = Current; if (r == null) return;
@@ -2731,8 +2725,8 @@ namespace EconomyOverhaul
         }
         // The ship's Bottomry loans as it sinks: each lending region first goes to the start of the level 2 below the one it had before the
         // loss (Reputations.Sink), then its loans are charged, a shortfall's reputation loss coming off that start, never below 0, as
-        // the rental bill's after it. The two add up (LOAN-3, the user, 2026-11-02: "this should be adding up", Plan A: "Build Plan
-        // A"); charged first, the drop to the level's start wiped that loss out, or gave points back when it went below.
+        // the rental bill's after it. The two add up: charged first, the drop to the level's start would wipe that loss out, or give
+        // points back when it went below.
         // False: no loan on the ship.
         internal static bool SinkAndCharge(int index)
         {
@@ -2813,7 +2807,7 @@ namespace EconomyOverhaul
             if (!buy) { Destroy(scroll); scroll = null; return; }
             var plate = buy.gameObject; DestroyImmediate(buy);
             foreach (var extra in plate.GetComponents<Component>()) if (extra && extra.GetType().Name == "Outline") DestroyImmediate(extra);
-            // no look text while pointed at (the user, 2026-10-18: the hint removed), as the game's own sale sign
+            // no look text while pointed at, as the game's own sale sign
             button = plate.AddComponent<LoanAction>(); button.action = Open; button.lookText = "";
             var texts = scroll.GetComponentsInChildren<TextMesh>(true);
             label = texts.FirstOrDefault(t => t.transform.parent == plate.transform.parent);
@@ -2847,7 +2841,6 @@ namespace EconomyOverhaul
             bool show = World.Ready && (rented ? Rentals.Moored(boat) : Rentals.ForRent(boat));
             if (scroll.activeSelf != show) scroll.SetActive(show);
             if (!show) return;
-            // a ship is "it" on screen (the user, 2026-11-08: "i don't want to use her to mention ship")
             if (rented) { text.text = "RETURN BOAT\n\nmoored at its berth"; label.text = "Return"; return; }
             int region = Rentals.HomeRegion(boat), currency = Rentals.Currency(region);
             text.text = Reputations.Level(region) < Rules.RentalLevel ? "BOAT RENTAL\n\nneeds " + BookUI.RegionName(region) + " rep. " + Rules.RentalLevel
@@ -2860,7 +2853,7 @@ namespace EconomyOverhaul
         {
             bool aboard = World.Ready && Rentals.Is(boat) && !GameState.currentlyLoading && GameState.currentBoat && GameState.currentBoat.IsChildOf(boat.transform) && Rentals.HasCleats(boat);
             // Every ship's sign asks every 0.25 s; only the rental with the player aboard looks up its ropes and makes a list (the others
-            // share one empty list, never written to; the deep review of 2026-11-09).
+            // share one empty list, never written to).
             var ropes = aboard ? boat.GetComponent<BoatMooringRopes>() : null;
             var cleats = aboard ? new[] { ropes.mooringFront, ropes.mooringBack }.Select(c => c.GetComponent<GPButtonDockMooring>()).Where(c => c).ToArray() : NoCleats;
             foreach (var c in marked) if (c && !cleats.Contains(c)) c.enableRedOutline = false;
@@ -3072,10 +3065,10 @@ namespace EconomyOverhaul
         }
     }
     // Escape (or F10, or the pad's back button) closes the rental scroll, as the game's StartMenu.LateUpdate closes its own trade and
-    // exchange books. It knows only its own, so it opened the settings over the scroll, and leaving them locked the cursor while the
-    // scroll kept the player's control off (the review of 2026-10-18, Claude's fix). The game's own conditions for that key. Not when
-    // an earlier mod's prefix has used the press (it skips the game's handling: Sailwind Player Model closing its own pause menu,
-    // RadFixes leaving the boat camera's settings), so one press closes one thing.
+    // exchange books. It knows only its own, so it would open the settings over the scroll, and leaving them would lock the cursor while
+    // the scroll keeps the player's control off. The game's own conditions for that key. Not when an earlier mod's prefix has used the
+    // press (it skips the game's handling: Sailwind Player Model closing its own pause menu, RadFixes leaving the boat camera's settings),
+    // so one press closes one thing.
     [HarmonyPatch(typeof(StartMenu), "LateUpdate")] internal static class RentalPanelEscapePatch
     {
         static bool Prefix(bool __runOriginal)
@@ -3087,12 +3080,11 @@ namespace EconomyOverhaul
         }
     }
 
-    // ---- Sail Damage (kap.saildamage; optional; 1.0.4, DLL 2BBD8D7B, read in its decompile) on a rented ship (RENTAL.md, "Sail repair") ----
-    // Its yard button "Patch Sails" (ShipyardButton function 1000) is allowed on a rented ship, paid at its own price as the hull's repair is (the
-    // user, 2026-11-09: "allow sail patching on rent ship"); the rental's bill charges double that price for the sails' holes as it charges double
-    // for the hull's repair and cleaning ("also make it pay double if player return the ship without repairing, like clean and hull fixing do"); and
-    // the rental hands the ship over and takes it back with its sails mended, as its hull repaired and cleaned (Rentals.Restore). Reached by name,
-    // looked up once: without Sail Damage nothing changes; if its members changed, one warning and the rental as before.
+    // ---- Sail Damage (kap.saildamage; optional; 1.0.4, DLL 2BBD8D7B) on a rented ship ----
+    // Its yard button "Patch Sails" (ShipyardButton function 1000) is allowed on a rented ship, paid at its own price as the hull's repair is;
+    // the rental's bill charges double that price for the sails' holes as it charges double for the hull's repair and cleaning; and the
+    // rental hands the ship over and takes it back with its sails mended, as its hull repaired and cleaned (Rentals.Restore). Reached by
+    // name, looked up once: without Sail Damage nothing changes; if its members changed, one warning and the rental runs without it.
     internal static class SailDamageCompatibility
     {
         internal const string Guid = "kap.saildamage";
@@ -3246,10 +3238,10 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(ShipyardUI), "ShowUI")] internal static class RentalYardShowPatch { static void Postfix() { if (RentalYard.Limited) RentalYard.Hide(); else RentalYard.Restore(); } }
     [HarmonyPatch(typeof(ShipyardUI), "RefreshButtons")] internal static class RentalYardRefreshPatch { static void Postfix() { if (RentalYard.Limited) RentalYard.Hide(); } }
     [HarmonyPatch(typeof(Shipyard), "DischargeShip")] internal static class RentalYardDischargePatch { static void Postfix() => RentalYard.Restore(); }
-    // Refused in the prefix, the order cancelled in the postfix, after every other mod's postfix (the deep review of 2026-11-09, C6-2): a
-    // CancelOrder inside the prefix reset the order while ConfirmOrder was running, and Sail Damage's ResetOrder postfix took that reset for
-    // a confirmed order, so its ConfirmOrder postfix mended the sails for nothing. An order another mod's prefix already handled (its
-    // original skipped: Swappable Staysail's sailmaker) is left to it.
+    // Refused in the prefix, the order cancelled in the postfix, after every other mod's postfix: a CancelOrder inside the prefix would
+    // reset the order while ConfirmOrder runs, and Sail Damage's ResetOrder postfix takes that reset for a confirmed order, so its
+    // ConfirmOrder postfix would mend the sails for nothing. An order another mod's prefix already handled (its original skipped:
+    // Swappable Staysail's sailmaker) is left to it.
     [HarmonyPatch(typeof(Shipyard), "ConfirmOrder")] internal static class RentalYardConfirmPatch
     {
         private static bool refused;
@@ -3263,14 +3255,15 @@ namespace EconomyOverhaul
         static void Postfix(Shipyard __instance) { if (!refused) return; refused = false; __instance.CancelOrder(); }
     }
 
-    // ---- The loan tutorials (the user, 2026-11-01, TUTORIAL_UI_DRAFT.md §4.3 and §5) ----
+    // ---- The loan tutorials ----
     // The trade office's man (the port dude) speaks once ever of each loan, in the shape of the game's QuestDude dialogue (a line, one
     // reply button, a click shows the next line). QuestDude itself lives only on one far island (level32, the hideout), so the
-    // dialogue is the tavern's own speech UI (its bubble and its reply button, the same parts; tutm-1), copied from the first rumour
+    // dialogue is the tavern's own speech UI (its bubble and its reply button, the same parts), copied from the first rumour
     // NPC that wakes and put over the port dude where the tavern puts it over its NPC, turned to the view as the tavern turns it.
-    // Lines wrapped at QuestDude's 45; a longer line makes the bubble bigger, the font kept (the user's rule for the traders' bubble).
-    // Shown when the player walks into the port dude's own trigger (his 1.5 m sphere; the 4 m one on his animation rig is not it),
-    // gone when the player walks out of it (a tutorial not finished starts again at the next visit). Seen once its last line shows.
+    // Lines wrapped at QuestDude's 45; a longer line makes the bubble bigger, the font kept.
+    // Shown when the player walks into the tutorial's reach (ReachMetres, a sphere centred on the port dude's own 1.5 m trigger; the 4 m
+    // one on his animation rig is not it), gone when the player walks out of it (a tutorial not finished starts again at the next visit).
+    // Seen once its last line shows.
     internal sealed class LoanTutorial : MonoBehaviour
     {
         internal enum Kind { None, Respondentia, Bottomry }
@@ -3306,9 +3299,9 @@ namespace EconomyOverhaul
         }
 
         // ---- Which tutorial a port dude gives now ----
-        // A box the player can see (the user: "the bottomry tutorial dialouge only shows up when you visit the trader with currency exchange box"). Every office's port
-        // dude holds a moneychest, on in the scene at only 8 of the 32 (TUTORIAL_UI_DRAFT.md §10), so one switched off must not count. Asked as the player walks in: a dude
-        // far off is switched off whole (IslandPerformanceSwitcher), so this reads false there.
+        // A currency exchange box the player can see (the Bottomry tutorial is given only there). Every office's port dude holds a moneychest,
+        // on in the scene at only 8 of the 32, so one switched off must not count. Asked as the player walks in: a dude far off is switched off
+        // whole (IslandPerformanceSwitcher), so this reads false there.
         internal static bool HasBox(PortDude dude) => dude && dude.GetComponentsInChildren<CurrencyExchangeUIButton>().Any(b => Fields.Get<object>(b, "function").ToString() == "openUI");
         internal static Kind Due(PortDude dude)
         {
@@ -3319,10 +3312,9 @@ namespace EconomyOverhaul
             if (!s.tutorialBottomry && HasBox(dude) && Pledges.OwnShips().Count() >= 2) return Kind.Bottomry;              // T4, the box only
             return Kind.None;
         }
-        // The reach (the user, 2026-11-01: "let player able to trigger it when player is nearby the other side of table", then
-        // "increase the trigger 0.5m more", "don't make expection for smaller dude, all 3.5"): a sphere of 3.5 m at every port dude,
-        // centred as his own, on a child with its own kinematic Rigidbody so its events don't reach PortDude.OnTriggerEnter (his
-        // cargo delivery; a kinematic Rigidbody is on him). The tables' far sides lie 1.5-2.5 m from him (TUTORIAL_UI_DRAFT.md §10).
+        // The reach: a sphere of 3.5 m at every port dude, whatever his size, so the player sets the tutorial off from the far side of his table
+        // (1.5-2.5 m from him); centred as his own, on a child with its own kinematic Rigidbody so its events don't reach PortDude.OnTriggerEnter
+        // (his cargo delivery; a kinematic Rigidbody is on him).
         internal const float ReachMetres = 3.5f;
         internal static void AddReach(PortDude dude)
         {
@@ -3404,10 +3396,10 @@ namespace EconomyOverhaul
             if (UISoundPlayer.instance) UISoundPlayer.instance.PlayUISound(UISounds.smallPop, .75f, 1f);
             Plugin.Log?.LogInfo("Loan tutorials: " + k + " at " + (dude.GetPort() ? dude.GetPort().GetPortName() : name) + ".");
         }
-        // Over the table toward the player (§10): on the level line from him to the player, 1.5 m short of the player (never behind
+        // Over the table toward the player: on the level line from him to the player, 1.5 m short of the player (never behind
         // him, at most 1.6 m out), at the heights the tavern gives it. The game's pointer reaches 1.8 m (GoPointer.DoRaycast); at him
-        // the reply was 2.2-3.9 m from a player across the table (tutdude), and the mission book's anchor lies up to 1.2 m aside. The
-        // speech layout holds its reply about 0.6 m before its centre: 0.9 m short put the reply 0.3 m from the eye (tut-19).
+        // the reply is 2.2-3.9 m from a player across the table, and the mission book's anchor lies up to 1.2 m aside. The
+        // speech layout holds its reply about 0.6 m before its centre: 0.9 m short puts the reply 0.3 m from the eye.
         private void Place()
         {
             var player = Refs.charController ? Refs.charController.transform.position : transform.position + transform.forward;
@@ -3416,11 +3408,10 @@ namespace EconomyOverhaul
             var local = transform.InverseTransformPoint(at);
             ui.transform.localPosition = placed = new Vector3(local.x, atPos.y, local.z);
         }
-        // Kept out of walls and ceilings (the user, 2026-11-01: "at some port the dialogue spawn clipping into bulding"): turned to
-        // the eye, the bubble's and the reply's own boxes are tested against solid colliders; where one meets a solid the dialogue
-        // moves to the nearest clear place up to 1 m across the view and 0.4 m down (0.1 m steps), else it stays where placed
-        // (clipped). Down too: at most ports the longest line's bubble met the office's roof or upper floor (tutdude dude-3); 0.4 m
-        // down keeps the reply over the tables. Run for each line, as the bubble grows with its text.
+        // Kept out of walls and ceilings: turned to the eye, the bubble's and the reply's own boxes are tested against solid colliders; where
+        // one meets a solid the dialogue moves to the nearest clear place up to 1 m across the view and 0.4 m down (0.1 m steps), else it stays
+        // where placed (clipped). Down too: at most ports the longest line's bubble meets the office's roof or upper floor; 0.4 m down keeps the
+        // reply over the tables. Run for each line, as the bubble grows with its text.
         private Vector3 placed; internal float shift, drop; internal bool clipped; internal string blocker;
         private static readonly Vector2[] Moves = Enumerable.Range(-10, 21).SelectMany(x => Enumerable.Range(0, 5).Select(y => new Vector2(x * .1f, -y * .1f)))
             .OrderBy(v => v.sqrMagnitude).ThenBy(v => -v.y).ToArray();
@@ -3460,7 +3451,7 @@ namespace EconomyOverhaul
             var lines = Lines[(int)kind - 1];
             npcText.text = Rules.Wrap(lines[line], WrapWidth); buttonText.text = Replies[(int)kind - 1][line];
             Fit(); Clear();
-            if (line == lines.Length - 1)   // seen once its last line shows (T5)
+            if (line == lines.Length - 1)   // seen once its last line shows
             { if (kind == Kind.Respondentia) World.State.tutorialRespondentia = true; else World.State.tutorialBottomry = true; }
         }
         // The bubble as big as its text needs (never smaller than the tavern's), its lower edge kept above the reply; the reply's
@@ -3480,7 +3471,7 @@ namespace EconomyOverhaul
                 buttonGfx.localScale = new Vector3(buttonScale.x * w / buttonW, buttonScale.y, buttonScale.z);
             }
         }
-        // The reply: the next line; the last closes the dialogue (T2, T3: nothing opens).
+        // The reply: the next line; the last closes the dialogue, and nothing opens.
         internal void Click()
         {
             if (kind == Kind.None) return;

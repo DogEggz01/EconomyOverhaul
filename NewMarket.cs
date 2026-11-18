@@ -13,9 +13,9 @@ namespace EconomyOverhaul
     // ---- Rules ----
     public static partial class Rules
     {
-        // The game's IslandMarket.Awake gives every market its own report, and its UpdateSelfPriceReport (every sale, purchase
-        // and cycle) reads it unchecked. A save can hold null there (Old Ankh Town, port 31, in a player's 0.10.1 save: the load
-        // hung in the warehouse migration's first sale); an empty report is put back, as Awake does. True when one was made.
+        // The game's IslandMarket.Awake gives every market its own report, and its UpdateSelfPriceReport (every sale, purchase and cycle) reads it
+        // unchecked. A save can hold null there (Old Ankh Town, port 31, in a 0.10.1 save), and its load then hangs at the warehouse migration's first
+        // sale; an empty report is put back, as Awake does. True when one was made.
         public static bool EnsureOwnReport(PriceReport[] known, int self)
         {
             if (known == null || self < 0 || self >= known.Length || known[self] != null) return false;
@@ -547,10 +547,9 @@ namespace EconomyOverhaul
         public static bool Positive(double value) => value > 0 && !double.IsInfinity(value) && !double.IsNaN(value) && (float)value > 0 && !float.IsInfinity((float)value);
         // Base fee B: 5% at rep 0, 0.5% less per level to 0.5% at rep 9, 0.1% at rep 10.
         public static double Fee(int reputation) { int level = Math.Max(0, Math.Min(10, reputation)); return level == 10 ? .001 : .05 - .005 * level; }
-        // At Chronos (HELMSMEN_CHRONOS_DRAFT.md, the user, 2026-10-21: "make chronos all exchange fee be 1/2B"): every exchange at its
-        // booth costs B/2; goods paid in Gold, its own coin, are free both ways ("Only goods free, so selling goods in gold also free");
-        // goods paid in a foreign coin B/2 ("Good paid in foregin coin at chronos also 1/2 B"). Elsewhere selling Gold at the booth is
-        // free and receiving it costs 2B; goods: the port's own coin free, Gold free to pay with and 2B to be paid in, others B.
+        // At Chronos every exchange at its booth costs B/2; goods paid in Gold, its own coin, are free both ways; goods paid in a foreign coin B/2.
+        // Elsewhere selling Gold at the booth is free and receiving it costs 2B; goods: the port's own coin free, Gold free to pay with and 2B to be
+        // paid in, others B.
         public static double BoothFee(int sold, int bought, int reputation, bool chronos = false) => sold == bought ? 0 : chronos ? Fee(reputation) * .5 : sold == 3 ? 0 : Fee(reputation) * (bought == 3 ? 2 : 1);
         public static double GoodsFee(int native, int paid, bool buying, int reputation, bool chronos = false) => chronos ? (paid == 3 ? 0 : .5 * Fee(reputation)) : paid == 3 ? (buying ? 0 : 2 * Fee(reputation)) : native == paid ? 0 : Fee(reputation);
         // Market value in the coins paid, at the daily rate (local or foreign coins alike).
@@ -561,8 +560,8 @@ namespace EconomyOverhaul
             if (double.IsNaN(value) || double.IsInfinity(value) || value < 0 || value > int.MaxValue) throw new OverflowException("Price exceeds wallet limit");
             return (int)value;
         }
-        // Gold at Chronos rounds up at every step (the user, 2026-10-21, G1: "It need to round up no matter what. Even 0.1 gold becomes
-        // 1 gold"; G2: a sale too). A millionth under a whole coin counts as that coin (a product such as 500 x 0.006 lands a hair over).
+        // Gold at Chronos rounds up at every step, a sale too (even 0.1 gold becomes 1). A millionth under a whole coin counts as that coin (a
+        // product such as 500 x 0.006 lands a hair over).
         public static int CoinsUp(double amount)
         {
             double value = Math.Ceiling(amount - 1e-6);
@@ -879,7 +878,7 @@ namespace EconomyOverhaul
         internal static FxBooth For(CurrencyExchangeUI ui)
         { var b=ui.GetComponent<FxBooth>(); if(!b){b=ui.gameObject.AddComponent<FxBooth>(); b.ui=ui;} return b; }
         internal static int? OpeningAccount;
-        // An office's box (TradeOffice.cs): the daily rate, no fee, the live rates untouched (TRADE_OFFICE_DRAFT.md §4.4, Q20).
+        // An office's box (TradeOffice.cs): the daily rate, no fee, the live rates untouched.
         internal int office;
         internal void Open() { region=OpeningAccount ?? Fx.LocalRegion(); office=OfficeBox.HouseOf(OfficeBox.Opening); requested=0; requestBuy=false; Refresh(); }
         private double Fee(int a,int b) => office!=0 ? 0 : FxRules.BoothFee(a,b,Fx.Reputation(region),region==Reputations.Chronos);
@@ -917,9 +916,8 @@ namespace EconomyOverhaul
             int a=Currencies.Sell(ui),b=Currencies.Buy(ui);
             if(lastA!=Rates[a]||lastB!=Rates[b]||lastFee!=Fee(a,b))Refresh();
         }
-        // Read every frame the booth is open: field references, not reflection reads that box each int (the deep review of 2026-11-09).
-        // In a class of their own, made at their first read (its static constructor keeps it so), so a missing field fails there only,
-        // as the reflection read did.
+        // Read every frame the booth is open: field references, not reflection reads that box each int. In a class of their own, made at their
+        // first read (its static constructor keeps it so), so a missing field fails there only, as a reflection read would.
         private static class Currencies
         {
             internal static readonly AccessTools.FieldRef<CurrencyExchangeUI,int> Sell=AccessTools.FieldRefAccess<CurrencyExchangeUI,int>("currentSellCurrency"),
@@ -1296,14 +1294,21 @@ namespace EconomyOverhaul
         internal static int HeldQuantity() => KeyQuantity(Input.GetKey(KeyCode.LeftAlt)||Input.GetKey(KeyCode.RightAlt),
             Input.GetKey(KeyCode.LeftControl)||Input.GetKey(KeyCode.RightControl), Input.GetKey(KeyCode.LeftShift)||Input.GetKey(KeyCode.RightShift));
         internal static int Quantity(GoPointerButton button) => ButtonHover.IsOver(button)?HeldQuantity():1;
+        // Crates lying on the pier of the trade office's wharf at this port count too, at the port's own book and the office's (OfficeWharves.AtPort).
         internal static IEnumerable<Good> SaleGoods(IslandMarket market,int goodIndex,CargoCarrier carrier=null)
         {
             var area=market.GetWarehouseArea();
             if(!area)return Enumerable.Empty<Good>();
             IEnumerable<Good> source=carrier ? carrier.cargo.Where(item=>item&&item.GetCurrentInventorySlot()==carrier.portIndex+100).Select(item=>item.GetComponent<Good>()) :
                 Fields.Get<List<Good>>(area,"goodsInArea").Where(g=>g&&g.GetComponent<ShipItem>().GetCurrentInventorySlot()<100);
-            // A crate bought at this port's trade office can't be sold here (TradeOffice.cs, OfficeBook; Q23). Tested after the good's
-            // index, the cheaper test (both read only; IsGoodValid still runs on the same crates; the deep review of 2026-11-09).
+            if(!carrier)source=source.Concat(OfficeWharves.AtPort(market));
+            return Sellable(source,market,goodIndex,area);
+        }
+        // The goods of these that this market buys now as goodIndex.
+        internal static IEnumerable<Good> Sellable(IEnumerable<Good> source,IslandMarket market,int goodIndex,IslandMarketWarehouseArea area)
+        {
+            // A crate bought at this port's trade office can't be sold here (OfficeBook). Tested after the good's index, the cheaper test (both read only;
+            // IsGoodValid still runs on the same crates).
             return source.Where(g=>g&&g.GetComponent<ShipItem>().sold&&g.GetMissionIndex()==-1&&
                 PrefabsDirectory.ItemToGoodIndex(g.GetComponent<SaveablePrefab>().prefabIndex)==goodIndex&&!OfficeBook.Marked(g,market)&&(bool)Fields.Call(area,"IsGoodValid",g)).Distinct();
         }
@@ -1318,8 +1323,8 @@ namespace EconomyOverhaul
             var prefab=PrefabsDirectory.instance.GetGood(g);
             if(!prefab||g<=0||g==45||g==51){batch.Error="Cargo unavailable";return batch;}
             if(action!=TradeAction.Sell&&!Rules.PurchaseOriginAllowed(m.GetPortIndex(),g)){batch.Error="Saffron can only be purchased at Saffron Island";return batch;}
-            // A trade office's own book (TradeOffice.cs, OfficeBook): no loans (the user's list item 2); a good the port doesn't trade only if
-            // it can be unsealed, at most 10 a day; one it makes but has sold out waits for its stock (OfficeBook.Absent; the deep review of 2026-11-09, 3c).
+            // A trade office's own book (TradeOffice.cs, OfficeBook): no loans; a good the port doesn't trade only if it can be unsealed, at most 10 a
+            // day; one it makes but has sold out waits for its stock (OfficeBook.Absent).
             batch.Office=OfficeBook.Active(ui); batch.Absent=batch.Office!=0&&action!=TradeAction.Sell&&OfficeBook.Absent(m,g);
             if(batch.Office!=0&&action==TradeAction.Loan){batch.Error="No loans at the office's book";return batch;}
             if(batch.Absent&&!OfficeBook.Offered(g)){batch.Error="The office can't get this cargo";return batch;}
@@ -1402,6 +1407,14 @@ namespace EconomyOverhaul
                         if(CargoCondition.Track(item)==null)throw new InvalidOperationException("Cargo registration failed");
                     }
                     if(batch.Carrier)CartDelivery.Stage(batch,staged);
+                    else if(batch.Office!=0&&OfficeWharves.Delivers(batch.Office)){
+                        // The office's wharf (TradeOffice.cs, OfficeWharves): the office book's order on its pier. A bulk order with no room there is
+                        // refused; a single crate goes to the warehouse instead.
+                        if(!OfficeWharves.Place(batch.Office,m,staged,out int onPier)){
+                            if(count>1)throw new CargoPlacement.NoRoom(onPier,count);
+                            if(!CargoPlacement.Place(m,staged,out _))CargoPlacement.Drop(m,staged[0]);
+                        }
+                    }
                     else if(!CargoPlacement.Place(m,staged,out int found)){
                         // No room even turned: a bulk order is refused; a single unit drops the game's own way.
                         if(count>1)throw new CargoPlacement.NoRoom(found,count);
@@ -1564,7 +1577,11 @@ namespace EconomyOverhaul
                 var amounts=Fields.Get<TextMesh>(ui,"textGoodAmounts");
                 int stock=Mathf.FloorToInt(Mathf.Max(0,current.currentSupply[ui.currentSelectedGood]-current.supplyPurchaseLimit+1));
                 if(!Rules.PurchaseOriginAllowed(current.GetPortIndex(),ui.currentSelectedGood))stock=0;
-                int available=CartSelected ? (carrier?BulkTrade.SaleGoods(current,ui.currentSelectedGood,carrier).Count():0) : current.currentPlayerGoods[ui.currentSelectedGood];
+                // The crates on the pier of the trade office's wharf at this port that it buys are counted with the warehouse's, at the port's own book
+                // and the office's (OfficeWharves.AtPort).
+                var area=CartSelected?null:current.GetWarehouseArea();
+                int available=CartSelected ? (carrier?BulkTrade.SaleGoods(current,ui.currentSelectedGood,carrier).Count():0) : current.currentPlayerGoods[ui.currentSelectedGood]+
+                    (area?BulkTrade.Sellable(OfficeWharves.AtPort(current),current,ui.currentSelectedGood,area).Count():0);
                 // At a trade office's book, a good it brings in from other sources: today's 10 left, in dark blue (TradeOffice.cs, OfficeBook).
                 bool other=OfficeBook.FromOtherSources(ui,current,ui.currentSelectedGood,out int office);
                 amounts.text=(other?"<color="+OfficeBook.LeftColor+">"+OfficeBook.Left(office)+"</color>":stock.ToString())+"\n"+available;
@@ -1645,8 +1662,8 @@ namespace EconomyOverhaul
             if (!GameState.inCursorMenu) return button.IsLookedAt();
             return UnderCursor() == button;
         }
-        // Which of three buttons the pointer is over (1, 2 or 3 in that order; 0 none), each tested as IsOver tests it, with the cursor
-        // menu's rays cast once for all three instead of once a button (the bulk labels ask every frame; the deep review of 2026-11-09).
+        // Which of three buttons the pointer is over (1, 2 or 3 in that order; 0 none), each tested as IsOver tests it, with the cursor menu's rays
+        // cast once for all three instead of once a button (the bulk labels ask every frame).
         internal static int Which(GoPointerButton a, GoPointerButton b, GoPointerButton c)
         {
             bool cursor = GameState.inCursorMenu, cast = false; GoPointerButton under = null;
@@ -1817,25 +1834,19 @@ namespace EconomyOverhaul
             }
             return true;
         }
-        // Uneven floors and slopes (the user, 2026-10-08: placed cargo must never slide or move). Where the level test above fails,
-        // the crate rests on the plane through the highest ground under it (an upper face of the ground points' hull with its
-        // centre inside), tilted to that plane, if the tilt is within its shape's limit. Tested in game (-SlopeProbe, 10 s of the
-        // game's physics): nothing slid below 30°; tall thin cargo tips first, at atan(thickness / height) (rabbit furs 16°,
-        // lumber 8°). The limit keeps TipMargin under that, and under MaxTilt (30°, see RoughPorts).
-        // Only at the ports whose warehouses are rough ground (the user, 2026-10-08): Al'Nilem (1) and Mirage Mountain (32) (Dragon Cliffs tried: it lost capacity). Measured
-        // with the game's physics (-WarehouseSurvey, 10 s after a full warehouse): there nothing moved at 3°, a 5 cm dip,
-        // stacked only on level crates (40 and 20 standard crates; 29 and 12 before). MaxStack (no limit) is for measuring.
-        // A crate already placed takes one on top when its top is within about 11° of level, at the rough ports as at every other
-        // (the user, 2026-10-26: "this 2 should follow other port, 11 degree"; 0.57° before, which stopped 20 of Al'Nilem's 26 open
-        // tops, tilted 1-3° as they settled: `alnilem-stacks-1`).
+        // Uneven floors and slopes: placed cargo must never slide or move. Where the level test above fails, the crate rests on the plane through
+        // the highest ground under it (an upper face of the ground points' hull with its centre inside), tilted to that plane, if the tilt is within
+        // its shape's limit. In the game's physics (10 s) nothing slides below 30°; tall thin cargo tips first, at atan(thickness / height) (rabbit
+        // furs 16°, lumber 8°). The limit keeps TipMargin under that, and under MaxTilt.
+        // Only at the ports whose warehouses are rough ground: Al'Nilem (1) and Mirage Mountain (32) (Dragon Cliffs loses capacity with it).
+        // MaxStack (no limit) is for measuring.
+        // A crate already placed takes one on top when its top is within about 11° of level, at the rough ports as at every other (a stricter limit
+        // stops most of Al'Nilem's open tops, which tilt 1-3° as they settle).
         internal static readonly HashSet<int> RoughPorts = new HashSet<int> { 1, 32 };
-        // Areas with no crate, by port, in the market's frame from its origin (x, z): Al'Nilem's grass behind its two buildings, too
-        // hard to see (the user, 2026-10-26: "for al'nhiem, remove the spawn spot on the grassland hide behind the building, those are
-        // too hard to see"; "Magenta area only": `alnilem-grass-zone-proposal.png`): right of the upper building's back wall
-        // (x 7.75) from the gap between the buildings (z 7.75) back, right of the lower building's (x 9.25) beside it (z 1 to 7.75).
-        // The walls from the walk map's roofs (`alnilem-ground-1`). And the gap's grass by the palm from the yard's planks' edge (x 4.6;
-        // the area from 4.75) to the upper building (z 8.75 on): "there is still 2 crate spawning on grassland, beside tree, remove
-        // those" (`alnilem-hidden-1`; from 5.5 a crate took their place at 5.4, `alnilem-hidden-2`).
+        // Areas with no crate, by port, in the market's frame from its origin (x, z): Al'Nilem's grass behind its two buildings, too hard to see:
+        // right of the upper building's back wall (x 7.75) from the gap between the buildings (z 7.75) back, right of the lower building's (x 9.25)
+        // beside it (z 1 to 7.75), the walls from the walk map's roofs; and the gap's grass by the palm from the yard's planks' edge (x 4.6; the area
+        // from 4.75, as one from 5.5 still lets a crate stand there at 5.4) to the upper building (z 8.75 on).
         internal static readonly Dictionary<int, Rect[]> Hidden = new Dictionary<int, Rect[]> {
             { 1, new[] { Rect.MinMaxRect(7.75f, 7.75f, 1000, 1000), Rect.MinMaxRect(4.75f, 8.75f, 1000, 1000), Rect.MinMaxRect(9.25f, 1f, 1000, 7.75f) } } };
         internal static bool InHidden(IslandMarket market, Vector3 center)
@@ -1844,8 +1855,7 @@ namespace EconomyOverhaul
             var local = Quaternion.Inverse(Frame(market)) * (center - market.transform.position);
             return areas.Any(a => a.Contains(new Vector2(local.x, local.z)));
         }
-        // The rough ports' own limits lifted to 30° and a 1 m dip (the user, 2026-10-26: "remove the hardport placement restriction
-        // also"; 3° and 5 cm before), as in the test the user saw (`mirage-free-1`, `alnilem-free-1`: nothing moved by 60 s).
+        // The rough ports' limits: a tilt up to 30° and a 1 m dip (in the game's physics nothing placed so moves in 60 s).
         internal static float MaxTilt = 30f, TipMargin = 4f, MaxStack = float.PositiveInfinity, MaxDip = 1f;
         private static float FloorNormal => Mathf.Cos(MaxTilt * Mathf.Deg2Rad);
         internal static float TiltLimit(Vector3 size) => Mathf.Min(MaxTilt, Mathf.Atan2(Mathf.Min(size.x, size.z), size.y) * Mathf.Rad2Deg - TipMargin);
@@ -1864,8 +1874,7 @@ namespace EconomyOverhaul
                 var hit = Physics.RaycastAll(start, Vector3.down, rise * 2, ~0, QueryTriggerInteraction.Collide).Where(h => !Ignored(h.collider, own)).OrderBy(h => h.distance).Select(h => (RaycastHit?)h).FirstOrDefault();
                 if (!hit.HasValue) return false;   // a hole or an overhang under the crate
                 var c = hit.Value.collider;
-                // A tilted crate rests only on the ground, never on cargo (the user, 2026-10-26: "a tilted crate may rest only on the
-                // ground, never on cargo"; tilted crates on cargo slid with the limits at 30° and 1 m: `EconomyOverhaul_FAILED.md`).
+                // A tilted crate rests only on the ground, never on cargo (tilted crates on cargo slide with the limits at 30° and 1 m).
                 if (Cargo(c) || c.attachedRigidbody != null) return false;
                 points.Add(new Vector3(local.x, hit.Value.point.y, local.z));
             }
@@ -1950,10 +1959,9 @@ namespace EconomyOverhaul
                 height=0;return !float.IsNaN(heights[x,z])&&Surface(point,heights[x,z],out height);
             }
         }
-        // Where a player can walk (the user, 2026-10-26: "i only want the position that player can never reach be removed";
-        // PLACEMENT_REACH_DRAFT.md, R1, R2 "1m both"). Floor points on a 0.5 m grid over the warehouse box, rooms included: every
-        // surface down each column a player stands on (not cargo; within 50° of level, the game's slope limit on land: PlayerClimb's
-        // 25° doubled off a boat). From the floor under the market's origin (the game's own drop point) the walk spreads to each of
+        // Where a player can walk (crates are kept off only the places a player can never reach). Floor points on a 0.5 m grid over the warehouse
+        // box, rooms included: every surface down each column a player stands on (not cargo; within 50° of level, the game's slope limit on land:
+        // PlayerClimb's 25° doubled off a boat). From the floor under the market's origin (the game's own drop point) the walk spreads to each of
         // the eight neighbours whose floor rises or drops 1 m at most and whose line, 1 m over the floors, crosses nothing solid:
         // surfaces count from either side, cargo, triggers, moving bodies and the player don't. No player size. Under something
         // lower than 1 m a point's line runs just under it. Built once per market (the scenery doesn't move), kept in its frame.
@@ -2061,6 +2069,7 @@ namespace EconomyOverhaul
         internal static readonly Dictionary<IslandMarket, WalkMap> Walks = new Dictionary<IslandMarket, WalkMap>();
         internal static WalkMap Walk(IslandMarket market)
         {
+            if (WharfArea) return null;   // an office wharf's open deck (PlaceOnWharf): no walk map, so the port's own isn't made for an order that never reads it
             if (!Walks.TryGetValue(market, out var walk))
             {
                 string port = "port " + market.GetPortIndex() + (market.GetPort() ? " " + market.GetPort().GetPortName() : "");
@@ -2102,8 +2111,8 @@ namespace EconomyOverhaul
             internal const string Notice = "Not enough space for Bulk Trading. Please buy one by one";
             internal NoRoom(int found, int count) : base("Found space for " + found + " of " + count + " cargo; full order needs more clear warehouse space") { }
         }
-        // The whole order as the market faces, else turned a quarter turn one way, else the other (the user, 2026-10-08). At the rough
-        // ports (RoughPorts) crate by crate instead: as many as fit as faced, then the rest turned, until a round places none.
+        // The whole order as the market faces, else turned a quarter turn one way, else the other. At the rough ports (RoughPorts) crate by crate
+        // instead: as many as fit as faced, then the rest turned, until a round places none.
         internal static bool Place(IslandMarket market, List<Good> goods, out int found)
         {
             var frame = Frame(market); var left = new List<Good>(goods); found = 0; bool progress = true;
@@ -2140,16 +2149,48 @@ namespace EconomyOverhaul
             Physics.SyncTransforms();
             CoverDropWatcher.Attach(good.GetComponent<ShipItem>());
         }
+        // The office's wharf (OfficeWharves): an office book's order on the pier's deck, one cargo area after another (the T's crosspiece, then its
+        // stem; the grotto's low pier), each in its own turn, else a quarter turn one way, else the other; the whole order or none (found: the most
+        // placed). Plan takes the area and origin from WharfArea and WharfOrigin while they are set: lines added to it, so its copy in Better Trade
+        // Book (which has no office) stays as it is.
+        internal static BoxCollider WharfArea; internal static Vector3 WharfOrigin;
+        internal static bool PlaceOnWharf(IslandMarket market, List<Good> goods, BoxCollider[] areas, Vector3[] origins, out int found)
+        {
+            found = 0; var start = goods.Select(g => g.transform.position).ToList();
+            try
+            {
+                for (int k = 0; k < 3; k++)
+                {
+                    var left = new List<Good>(goods); int placed = 0;
+                    for (int a = 0; a < areas.Length && left.Count > 0; a++)
+                    {
+                        var turn = areas[a].transform.rotation * Quaternion.Euler(0, k == 0 ? 0 : k == 1 ? 90 : -90, 0);
+                        foreach (var good in left) good.transform.rotation = turn;
+                        WharfArea = areas[a]; WharfOrigin = origins[a];
+                        int n = Plan(market, left, turn, false, true);
+                        placed += n; left.RemoveRange(0, n);
+                    }
+                    found = Math.Max(found, placed);
+                    if (left.Count == 0) return true;
+                    for (int i = 0; i < goods.Count; i++) goods[i].transform.position = start[i];   // back where they were made, for the next turn
+                    Physics.SyncTransforms();
+                }
+                return false;
+            }
+            finally { WharfArea = null; }
+        }
         // Places as many of the goods (in order) as fit with this turn; returns how many.
         // rough: the rough-ground rules above; partial: place what fits (else only a full order is placed).
         private static int Plan(IslandMarket market, List<Good> goods, Quaternion rotation, bool rough, bool partial)
         {
             float floorNormal = rough ? FloorNormal : .98f, stackTop = .98f, maxStack = rough ? MaxStack : float.PositiveInfinity;
             var area = market.GetWarehouseArea().GetComponent<BoxCollider>();
+            if (WharfArea) area = WharfArea;   // the office's wharf (PlaceOnWharf)
             if (!area) throw new InvalidOperationException("Warehouse placement area unavailable");
             Physics.SyncTransforms();
             var own = new HashSet<Collider>(goods.SelectMany(g => g.GetComponentsInChildren<Collider>()));
             var origin = market.transform.position;
+            if (WharfArea) origin = WharfOrigin;
             var walk = Walk(market);   // null: the walk can't start there, placed as before
             // No warehouse floor under the sea (beside Serpent Isle's docks the box takes in the sea bed).
             float sea = Crest.OceanRenderer.Instance ? Crest.OceanRenderer.Instance.transform.position.y : float.NegativeInfinity;
@@ -2316,7 +2357,7 @@ namespace EconomyOverhaul
         internal static float TavernDiscount(Tavern tavern) => .02f * Level(Location(tavern, (int)tavern.region));
         internal static void DeliveryReward(int amount, PortRegion ignored, Mission mission)
         {
-            // A penalty (a ruined Pristine crate, Rules.PristineRuinedRep) falls on both regions too (the user, 2026-10-14).
+            // A penalty (a ruined Pristine crate, Rules.PristineRuinedRep) falls on both regions too.
             int origin = Account(mission.originPort), destination = Account(mission.destinationPort);
             Change(amount, origin); if (destination != origin) Change(amount, destination);
         }

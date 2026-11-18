@@ -7,41 +7,40 @@ using UnityEngine;
 namespace EconomyOverhaul
 {
     // ---- Rules ----
-    // Dynamic demand (the user, 2026-10-16; plan: always 5 events, each a port starved of one good and another glutted with it).
+    // Dynamic demand: always 5 events, each a port starved of one good and another glutted with it.
     public static partial class Rules
     {
         public const int DemandEvents = 5, DemandExpiryDays = 30;
         public const float DemandDoneShare = .2f, LastDepartureKnown = .4f;
         // Saffron Island (33), Chronos (21) and the test ports (7, 8) never take part.
         public static bool DemandPort(int port) => port != 33 && port != 21 && port != 7 && port != 8;
-        // Not the special slots (45, 51), saffron (64), Chronos' own goods (31, 32: only Chronos makes them, supply.csv) or the goods
-        // no port trades (1, 46, 52). Tools (33) take part: they were left out as if Chronos' (the deep review of 2026-11-02, Claude's fix).
+        // Not the special slots (45, 51), saffron (64), Chronos' own goods (31, 32: only Chronos makes them, supply.csv) or the goods no port trades
+        // (1, 46, 52). Tools (33) take part.
         public static bool DemandGood(int good) => good > 1 && good < 64 && good != 45 && good != 51 && good != 31 && good != 32 && good != 46 && good != 52;
         // The demanding port takes a good it doesn't produce, whose supply is below 1 and above the drop's target.
         public static bool DemandFits(float production, float supply, float cap) => production <= 0 && supply < 1 && supply > DemandTarget(cap);
-        // The producing port must make the good, no exception (the user, 2026-10-16; was any port).
+        // The producing port must make the good, no exception.
         public static bool DemandProducer(float production) => production > 0;
-        // The demanding port's supply drops to -its capacity, and the producing port's rises to +its own capacity (kept if already
-        // higher). The user, 2026-10-16: was -100 (-capacity where less) and the same amount added at the producer.
+        // The demanding port's supply drops to -its capacity, and the producing port's rises to +its own capacity (kept if already higher).
         public static float DemandTarget(float cap) => -cap;
         public static float ProducerTarget(float cap, float supply) => Math.Max(supply, cap);
-        // Solved once the demanding port's supply rises above -20% of its capacity (the user, 2026-10-16; was a flat -20).
+        // Solved once the demanding port's supply rises above -20% of its capacity.
         public static float DemandDone(float cap) => -DemandDoneShare * cap;
         public static bool DemandComplete(float supply, float cap) => supply > DemandDone(cap);
         public static bool DemandExpired(int startDay, int day) => day - startDay >= DemandExpiryDays;
         // Units still needed to lift the supply above that, less what other traders already carry there.
         public static int DemandNeed(float supply, int inFlight, float cap) =>
             DemandComplete(supply, cap) ? 0 : Math.Max(0, (int)Math.Floor(DemandDone(cap) - supply) + 1 - inFlight);
-        // A departing trader counts the last departure from its port only on a 40% roll (the user, 2026-10-16; was always).
+        // A departing trader counts the last departure from its port only on a 40% roll.
         public static bool KnowsLastDeparture(float roll) => roll < LastDepartureKnown;
-        // A trader sails to an event's producer to fetch the good while the need is more than the holds already heading there can
-        // carry (the user, 2026-10-16: traders don't over-ship).
+        // A trader sails to an event's producer to fetch the good while the need is more than the holds already heading there can carry, so
+        // traders don't over-ship.
         public static bool DemandFetch(int need, int unitsHeadingThere) => need > unitsHeadingThere;
-        // News travels with the price reports (the user, 2026-10-16): a report of the demanding port, dated on or after the event's
-        // start, that shows the good still short (at -20% of the capacity the report gives, or below).
+        // News travels with the price reports: a report of the demanding port, dated on or after the event's start, that shows the good still short
+        // (at -20% of the capacity the report gives, or below).
         public static bool DemandReported(int reportDay, float reportSupply, int startDay, float reportCap) => reportDay >= startDay && !DemandComplete(reportSupply, reportCap);
-        // A report of the producing port teaches the event too (the user, 2026-10-20): dated on or after the event's start, and showing
-        // the good in stock, by the market's own buy limit at the capacity the report gives (Economy.ApplyPurchaseLimit, HasGood).
+        // A report of the producing port teaches the event too: dated on or after the event's start, and showing the good in stock, by the market's
+        // own buy limit at the capacity the report gives (Economy.ApplyPurchaseLimit, HasGood).
         public static bool ProducerReported(int reportDay, float reportSupply, int startDay, float reportCap, int tier) =>
             reportDay >= startDay && reportSupply >= 1 - PurchaseDeficit(reportCap, tier);
     }
@@ -76,7 +75,7 @@ namespace EconomyOverhaul
             if (!World.Ready || StudyOff) return;
             var s = State;
             s.events.RemoveAll(e => !Supply.Contains(e.demand) || !Supply.Contains(e.producer) || !World.Market(e.demand) || !World.Market(e.producer));
-            // Completion first: an event solved on its last day is complete, not expired (demand-study-9 counted 3 of 47 so).
+            // Completion first: an event solved on its last day is complete, not expired (about 3 events in 47 end so).
             CheckAll();
             foreach (var e in s.events.ToArray()) if (Rules.DemandExpired(e.startDay, day)) End(e, "expired");
             for (int i = s.events.Count; i < Rules.DemandEvents; i++) if (!Create(day)) break;
@@ -111,8 +110,8 @@ namespace EconomyOverhaul
                 {
                     var m = World.Market(port); if (!Supply.TryGet(port, out var row)) continue;
                     float cap = Economy.Cap(port);
-                    // A good fits only if some other eligible port makes it, and not while this port's own event for it runs (a new
-                    // round of goods can pick it again; Claude's fix 2026-10-17: two events would share one shortage).
+                    // A good fits only if some other eligible port makes it, and not while this port's own event for it runs (two events would share one
+                    // shortage; a new round of goods can pick it again).
                     int[] Makers(int g) => ports.Where(p => p != port && Supply.TryGet(p, out var r) && Rules.DemandProducer(r.Production[g])).ToArray();
                     var fit = goods.Where(g => !s.pickedGoods.Contains(g) && g < m.currentSupply.Length && Rules.DemandFits(row.Production[g], m.currentSupply[g], cap) &&
                         !s.events.Any(e => e.demand == port && e.good == g) && Makers(g).Length > 0).ToArray();
@@ -164,7 +163,7 @@ namespace EconomyOverhaul
             int id = Rules.PickNews(list, State.heard);
             return Active.FirstOrDefault(e => e.id == id);
         }
-        // Event goods other traders carry to a port (they know what is on the way, the user's rule).
+        // Event goods other traders carry to a port (they know what is on the way).
         internal static int InFlight(BoatState self, int port, int good) =>
             World.State.fleet.Where(o => o != self && o.destination == port).Sum(o => o.goods.Count(g => g == good));
         // Told of every trader departure and its purpose: 0 normal trade, 1 serving an event, 2 sailing to an event's producer. Set
@@ -209,7 +208,7 @@ namespace EconomyOverhaul
         static void Postfix(IslandMarket __instance, int goodIndex) { if (World.Ready && !Startup.Running) Demand.Check(__instance.GetPortIndex(), goodIndex); }
     }
 
-    // ---- The tavern news (stage 3; DEMAND.md, the approved dialogue) ----
+    // ---- The tavern news ----
     public static partial class Rules
     {
         public const float TavernFoodReach = 10;   // a tavern's own counter: 11-36 spawners within 10 m of every rumour NPC (level files)
@@ -236,8 +235,7 @@ namespace EconomyOverhaul
             "This began {3}. Others will beat you to it if you dally. Much obliged for the food!",
             "It started {3}; the first sails are already over the horizon. Fair winds, and thank you kindly for the meal." };
         public static string When(int days) => days <= 0 ? "this very day" : days == 1 ? "but a day ago" : days + " days ago";
-        // The ruler praised in the NPC's own region (the user, 2026-10-16): the Sultan in Al'Ankh, the Trade Prince in Emerald
-        // (Dragon Cliffs), the King in Aestrin.
+        // The ruler praised in the NPC's own region: the Sultan in Al'Ankh, the Trade Prince in Emerald (Dragon Cliffs), the King in Aestrin.
         public static string Ruler(int region) => region == 0 ? "Sultan" : region == 1 ? "Trade Prince" : "King";
         // kind: 0 demand, 1 producer, 2 age; local: the port in the NPC's own region; ruler: his own region's.
         public static string NewsLine(int kind, bool local, int variant, string port, string good, string region, int days, string ruler = "Sultan")
@@ -245,7 +243,7 @@ namespace EconomyOverhaul
             var set = kind == 0 ? (local ? LocalDemand : ForeignDemand) : kind == 1 ? (local ? LocalProducer : ForeignProducer) : Age;
             return string.Format(set[((variant % set.Length) + set.Length) % set.Length], port, good, region, When(days), ruler);
         }
-        // Which news (the user's rule): the latest unheard event whose demanding port is in this region, else the closest unheard;
+        // Which news: the latest unheard event whose demanding port is in this region, else the closest unheard;
         // with all heard, the latest local one, else the closest. events: (id, local, distance); returns the id or -1.
         public static int PickNews(IList<(int id, bool local, double distance)> events, ICollection<int> heard)
         {
@@ -283,22 +281,20 @@ namespace EconomyOverhaul
             var drink = dude.drinkButton;
             button = Instantiate(drink, drink.transform.parent); button.name = "economic news button";
             var size = drink.GetComponent<BoxCollider>() ? drink.GetComponent<BoxCollider>().size.y * drink.transform.localScale.y : .2f;
-            // In the drink button's place, just under the bubble; one slot lower only while the drink button shows too (the user's
-            // test of 0.10.1: always one slot lower, it stood far from the bubble once the drink button was gone; tavern-10).
+            // In the drink button's place, just under the bubble; one slot lower only while the drink button shows too (always one slot lower, it
+            // stands far from the bubble once the drink button is gone).
             atDrink = drink.transform.localPosition; belowDrink = atDrink - drink.transform.localRotation * Vector3.up * size * 1.3f;
             button.transform.localPosition = atDrink;
-            // The game's button activates the first IGPButton on its target (GPButtonInterface.OnActivate): on the NPC's own object
-            // that is TavernRumorsDude (its drink), so the clone targets itself, where DemandButton passes the click to this talk
-            // (the user's in-game test of 0.10.1: the button did nothing).
+            // The game's button activates the first IGPButton on its target (GPButtonInterface.OnActivate): on the NPC's own object that is
+            // TavernRumorsDude (its drink), so the clone targets itself, where DemandButton passes the click to this talk.
             var hook = button.GetComponentInChildren<GPButtonInterface>(true);
             if (hook) { hook.gameObject.AddComponent<DemandButton>().talk = this; hook.onActivateInterface = hook.gameObject; }
             label = button.GetComponentInChildren<TextMesh>(true);
             button.SetActive(false);
         }
         private Vector3 plateScale, labelScale, atDrink, belowDrink;
-        // Talkative NPCs (TALKATIVE_NPCS_COMPAT.md, conflict 2; the user, 2026-10-21: "only fix 1 and 2"): a rumour NPC hit until his
-        // mood is low says "You owe me a drink." and gives no talk; our button hides while he says it (read from the game's own text,
-        // no reference to that mod) and the step reached shows again once he speaks otherwise.
+        // Talkative NPCs: a rumour NPC hit until his mood is low says "You owe me a drink." and gives no talk; our button hides while he says it
+        // (read from the game's own text, no reference to that mod) and the step reached shows again once he speaks otherwise.
         internal const string OwedLine = "You owe me a drink.";
         private bool owedHidden;
         private bool Owed => dude.text && dude.text.text != null && dude.text.text.Trim() == OwedLine;
@@ -350,8 +346,8 @@ namespace EconomyOverhaul
             Say(Rules.FoodLine(pick ? pick.name : "something hot"));
             step = Step.WaitFood; Hide();
         }
-        // Food sold at this tavern's counter (spawners within 10 m of him), else anywhere in his scene; walked from the scene's
-        // own roots (no scene-wide object search: memory note on native crashes).
+        // Food sold at this tavern's counter (spawners within 10 m of him), else anywhere in his scene; walked from the scene's own roots (a
+        // scene-wide object search can crash the game natively).
         private List<ShipItemFood> Foods(bool counter)
         {
             var result = new List<ShipItemFood>();
@@ -391,8 +387,7 @@ namespace EconomyOverhaul
         }
         // The player went away: the button hides with the speech; the food asked for stays asked for.
         internal void Left() { Hide(); owedHidden = false; if (step == Step.FoodHere) { food = null; step = Step.WaitFood; } }
-        // Back: the button of the step reached shows again (the user's test of 0.10.1: after a drink, the ask button never came back);
-        // food asked for and already lying by him counts as brought.
+        // Back: the button of the step reached shows again (after a drink too); food asked for and already lying by him counts as brought.
         internal void Returned()
         {
             if (step == Step.Asking) Show(Rules.AskButton);
@@ -415,9 +410,8 @@ namespace EconomyOverhaul
     [HarmonyPatch(typeof(TavernRumorsDude), "ClickDrinkButton")] internal static class DemandAskPatch
     {
         static void Prefix(ShipItemBottle ___currentDrink, out bool __state) => __state = ___currentDrink;
-        // Only when the game's own method ran (Harmony's __runOriginal, as every prefix left it: HarmonyX gives a postfix the final
-        // value, Test.ps1): Talkative NPCs' prefix takes an "owed" drink and skips the method, with no rumour, so no news button then
-        // (TALKATIVE_NPCS_COMPAT.md, conflict 1).
+        // Only when the game's own method ran (__runOriginal, as every prefix left it: HarmonyX gives a postfix the final value): Talkative NPCs'
+        // prefix takes an "owed" drink and skips the method, with no rumour, so no news button then.
         static void Postfix(TavernRumorsDude __instance, ShipItemBottle ___currentDrink, bool __state, bool __runOriginal)
         {
             if (!__runOriginal || !__state || ___currentDrink || !World.Ready || !Demand.Active.Any()) return;   // a drink was taken; there is news
