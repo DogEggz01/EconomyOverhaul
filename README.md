@@ -23,8 +23,8 @@
 - In configurator, there is a button for uninstall the mod, it will wipe the modded market, remove all item and mechanic added by this mod and stop progressing market.
 - After clicking the uninstall button in Configurator, you can save and quit game. Next time you load into save it will be vanilla market.(price report date need time to recover)
 ## Recommend mod
-- Mooring Line Fix: For seized ship to properly moored at the port
-  - https://github.com/DogEggz01/MooringLineFix/releases/latest
+- Shipwright and Transportation: For unlocking player trade fleet function
+  - https://github.com/DogEggz01/ShipwrightTransportation/releases/latest
 - Keevi Fixes: Alternative for fixing mooring line, also comes with other QoL changes
   - https://github.com/KeeviDev/SailwindKeeviFixes/releases/latest
 - Postal Expansion: For rep grind 
