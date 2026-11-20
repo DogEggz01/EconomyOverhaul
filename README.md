@@ -436,6 +436,7 @@
 - Water damage: toggle on/off. Default on
 - Water damage hint: show when pointing at cargo. Default on
 - Water damage speed and Drying speed options.
+- Lantern Drying power: default as 70% covered, big lantern -20%
 - Cargo Cover ratio: show when pointing at cargo. Default off
 - Fragile cargo damage: Toggle on/off. Default on.
 - Fragile cargo hint: default on.
