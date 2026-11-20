@@ -167,6 +167,7 @@
 - Add a toggle option in trade book to make bought/loaned cargo directly goes into cart, you will need to hire cart service first
   - Cart Transportation fee will be 10x if using this function
 - Same toggle option can be used to sell cargo directly from cart also, but transportation fee will be 20x.
+- Trade reciept will now show detail at selling day. Where you buy the cargo, how much profit you earn, and how much profit loss from cargo damage/loan(see later readme)
 ## Establish Trade office
 <img width="3840" height="2160" alt="20DAA3~1" src="https://github.com/user-attachments/assets/f06930f4-6917-474e-be98-77daf2c2c824" />
 <img width="3840" height="2160" alt="202611~2" src="https://github.com/user-attachments/assets/8b8ddb90-f0b7-4354-b45a-b6de5f6ab5b1" />
@@ -303,6 +304,8 @@
 - Wetted cargo can be dried. As long as it's water damage is below 80% (include 80%). It can be dried back up to 20%
   - 20% water damage will result in 90% good price
 - Trade good using luxury curve can only be dried up to 50% (60% of good price)
+- Normal lantern will dry cargo as it's 70% covered. Big Lantern from Firefly Grotto will dry cargo as 50% covered.
+- Cargo that is drying will show yellow outline.
 - Liquid cargo cannot be dried. So don't let it reach 100%.
 - Drying requires you to place cargo under open sky. Under full open sky and clear weather, every in game day will dry 30% of water damage.
   - If the cargo is covered by something on top of it partially, it will still dry, but slower.
