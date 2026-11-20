@@ -66,6 +66,14 @@ namespace EconomyOverhaul
         }
         // Only the open share dries, with the weather: drying falls in a straight line to nothing at full cover.
         public static double DryingPerHour(double exposed, double clouds, double hour) => Clamp(exposed, 0, 1) * OpenDryingPerHour(clouds, hour);
+        // Lantern drying reaches out to half light: Unity's point-light falloff 1/(1+25r²), r = distance / the light's range, is half at r = 0.2.
+        public const double HalfLight = .2;
+        // The configurator's "Lantern drying as % covered", 20-90 in whole percent; the Big lantern (prefab 133) dries as 20 points less cover (0-70).
+        public const int LanternCoverLeast = 20, LanternCoverMost = 90, LanternCoverDefault = 70, BigLanternCoverLess = 20, BigLanternPrefab = 133;
+        public static int LanternCover(int option, bool big) => Math.Min(LanternCoverMost, Math.Max(LanternCoverLeast, option)) - (big ? BigLanternCoverLess : 0);
+        // The open share a lit lantern gives cargo whose box is `distance` from its light: 1 - cover out to half light, none beyond.
+        public static double LanternDrying(int cover, double distance, double range) =>
+            range > 0 && distance <= HalfLight * range ? 1 - Clamp(cover, 0, 100) / 100.0 : 0;
         // The configurator's speeds: multipliers on the rates above (water aboard or the sea and rain; drying), nothing else (where cargo wets
         // or dries, the ceilings and the ruin line stay). Indexed by Settings' enums: water damage 0.25x to 1x; drying as the water damage speed
         // (0) or 1x to 3x.
@@ -79,17 +87,18 @@ namespace EconomyOverhaul
         }
         // noDry: sealed liquids (alcohol and water). coverKnown: the shelter scan has run since the
         // cargo settled. exposed: open share of the top face, 0-1. ceiling: how far this good dries back. damageSpeed, dryingSpeed:
-        // the configurator's multipliers (1: as designed).
+        // the configurator's multipliers (1: as designed). lantern: the best lit lantern's open share (LanternDrying), 0 for none; it dries as
+        // the larger of it and the real open share. Nothing dries in rain or in water.
         public static float AdvanceCondition(float health, double gameHours, bool noDry, bool waterContact,
             bool damagingWater, double rain, bool coverKnown, double exposed, double clouds, double hour, float ceiling = DryingCeiling,
-            double damageSpeed = 1, double dryingSpeed = 1)
+            double damageSpeed = 1, double dryingSpeed = 1, double lantern = 0)
         {
             gameHours = Math.Max(0, gameHours);
             double damage = ((damagingWater ? ImmersionPerHour : 0) + (coverKnown ? RainDamagePerHour(rain, exposed) : 0)) * Math.Max(0, damageSpeed);
             if (damage > 0) return (float)Math.Max(0, health - gameHours * damage);
             if (damagingWater || coverKnown && RainDamagePerHour(rain, exposed) > 0) return health;   // getting wetter, only slower: no drying
             if (waterContact || rain > 0 || noDry || !coverKnown || Ruined(health) || health >= ceiling) return health;
-            return (float)Math.Min(ceiling, health + gameHours * DryingPerHour(exposed, clouds, hour) * Math.Max(0, dryingSpeed));
+            return (float)Math.Min(ceiling, health + gameHours * DryingPerHour(Math.Max(exposed, lantern), clouds, hour) * Math.Max(0, dryingSpeed));
         }
         // Whether cargo is getting wetter now, the conditions AdvanceCondition takes condition off under: water at ImmersionStart or more, or rain
         // on a top not fully covered once its cover is known. Wet cargo out of the water and the rain is not.
@@ -105,6 +114,8 @@ namespace EconomyOverhaul
         public const int OpenedBarrelPrice = 25;
         // The outline of a looked-at crate getting wetter, in place of the game's look colour.
         public static readonly Color WetOutlineColor = new Color(.05f, .15f, .75f);
+        // The outline of a looked-at crate drying now (its condition rising, in the open air or by a lantern).
+        public static readonly Color DryingOutlineColor = new Color(1, .75f, .1f);
         // The cargo hint's own lines, added to the item's description below the game's look text. LookUI draws the look text (extraText: name,
         // crate quantity, a mission's destination and due day) down from its anchor, and the description (hintText) centred on an anchor 1.3 look
         // lines lower, in lines 0.6 as tall. So a blank line before our lines moves them down only half a hint line, 0.3 of a look line, and each
@@ -190,6 +201,11 @@ namespace EconomyOverhaul
         [System.Runtime.Serialization.OptionalField] public bool opened;
         // Bought at a trade office's book (TradeOffice.cs): its port + 1, where it can't be sold; 0 for every other crate.
         [System.Runtime.Serialization.OptionalField] public int officePort;
+        // Bought at a trade book: the cash paid for it (a financed crate's price less its loan), in paidCurrency, at port paidPort - 1; paidPort 0 when
+        // unknown (found, from a shop or a mission, or in an older save).
+        [System.Runtime.Serialization.OptionalField] public int paid;
+        [System.Runtime.Serialization.OptionalField] public int paidCurrency;
+        [System.Runtime.Serialization.OptionalField] public int paidPort;
     }
     public sealed class CargoCondition : MonoBehaviour
     {
@@ -243,6 +259,18 @@ namespace EconomyOverhaul
         private string suffix;
         // Getting wetter at the last condition update (Rules.WettingNow); the blue look outline (WetOutline) follows it.
         internal bool Wetting { get; private set; }
+        // Its condition rose at the last condition update; the yellow-orange look outline follows it.
+        internal bool Drying { get; private set; }
+        // The best lit lantern's share (Rules.LanternDrying), measured when Lanterns.Version has changed since lanternsSeen or the cargo came to rest.
+        private double lanternShare; private int lanternsSeen = -1;
+        private Bounds? localBox;
+        private double LanternShare()
+        {
+            if (lanternsSeen == Lanterns.Version) return lanternShare;
+            if (localBox == null) localBox = LocalMeshBounds();
+            lanternShare = Lanterns.Drying(transform, localBox.Value); lanternsSeen = Lanterns.Version;
+            return lanternShare;
+        }
         private string hintDescription;
         private string hintLookText;
         private int hintPercent = -2, hintCover = -2, hintDamage = -2;
@@ -276,7 +304,7 @@ namespace EconomyOverhaul
             if (state == null || state.opened || !bottle && !crate) return;
             if (fullUnits < 0) fullUnits = FullUnits();
             if (!Rules.Opened(bottle ? bottle.health : crate.amount, fullUnits)) return;
-            state.opened = true; Wetting = false; visualHealth = -1; RefreshAppearance(); RefreshHint();
+            state.opened = true; Wetting = Drying = false; visualHealth = -1; RefreshAppearance(); RefreshHint();
         }
         internal Bounds WorldBounds => Bounds();
         internal float CoveredFraction => coveredFraction;
@@ -354,13 +382,16 @@ namespace EconomyOverhaul
             return save && World.Cargo.TryGetValue(save.instanceId, out var c) ? c.health : 100;
         }
         // The cargo's value factor: its water condition (when water damage is on) x, for fragile cargo, how intact it is.
-        internal static float Factor(ShipItem item)
+        internal static float Factor(ShipItem item) { Factors(item, out float water, out float intact); return water * intact; }
+        // The two parts of Factor: the water condition's and the intact share's.
+        internal static void Factors(ShipItem item, out float water, out float intact)
         {
-            if (!item) return 1;
+            water = intact = 1;
+            if (!item) return;
             var save = item.GetComponent<SaveablePrefab>();
-            if (!save || !World.Cargo.TryGetValue(save.instanceId, out var c)) return 1;
-            float water = Settings.WaterEnabled ? (float)Rules.ConditionFactor(c.health, LiquidCargo.Contains(c.good), Immune.Contains(c.good) || c.opened) : 1;
-            return water * (Fragile(item, c) ? Rules.IntactFactor(c.impact) : 1);
+            if (!save || !World.Cargo.TryGetValue(save.instanceId, out var c)) return;
+            if (Settings.WaterEnabled) water = (float)Rules.ConditionFactor(c.health, LiquidCargo.Contains(c.good), Immune.Contains(c.good) || c.opened);
+            if (Fragile(item, c)) intact = Rules.IntactFactor(c.impact);
         }
         // Opened at 100% water damage (Rules.OutOfTrade): not sold as cargo even when topped up full. Only with water damage on.
         internal static bool OutOfTrade(ShipItem item)
@@ -454,7 +485,7 @@ namespace EconomyOverhaul
             // Sample once the placement settles, not at the hand position before a throw lands.
             // Ship movement itself does not invalidate a placement fixed relative to its boat.
             if (settled || (exposureSettling += Time.deltaTime) < .35f) return;
-            settled = resting = true;
+            settled = resting = true; lanternsSeen = -1;   // its lanterns measured again where it now rests
             beneath = CoverEvents.Beneath(item, Bounds());
             // Came to rest after being pushed off another spot: rescan that spot again (the two-second
             // rescan may have caught it half way off) and the cargo it now rests on.
@@ -629,8 +660,8 @@ namespace EconomyOverhaul
             float targetHealth = Settings.WaterEnabled && !WaterOff ? state.health : 100;
             if (appearanceTimer >= .35f || visualHealth >= 0 && Math.Abs(visualHealth - targetHealth) >= .1f || visualWaterEnabled != Settings.WaterEnabled)
                 RefreshAppearance();
-            if (!Settings.WaterEnabled || !Placed) Wetting = false;   // held, stored, or water damage off: not getting wetter
-            if (Wetting && item.IsLookedAt()) WetOutline.Want();
+            if (!Settings.WaterEnabled || !Placed) Wetting = Drying = false;   // held, stored, or water damage off: neither
+            if ((Wetting || Drying) && item.IsLookedAt()) WetOutline.Want(Wetting);
             if (!Settings.WaterEnabled) { ResetConditionClock(); return; }
             if (!Placed || GameState.loadingBoatLocalItems || GameState.loadingScenes != 0) { ResetConditionClock(); return; }
             // A rescan after something was set on, lifted off or removed from above also runs while the
@@ -639,10 +670,10 @@ namespace EconomyOverhaul
             if (!Sun.sun || Sun.SunPaused()) { ResetConditionClock(); return; }
             // Immune or opened cargo tracks where it rests too, so cargo under it is rescanned when it is pushed off.
             UpdateExposure();
-            if (WaterOff) { Wetting = false; ResetConditionClock(); return; }
+            if (WaterOff) { Wetting = Drying = false; ResetConditionClock(); return; }
             // After a load or a wake nothing is counted for Rules.WaterHoldSeconds: water, sea, rain or drying (the ship's physics is rough then); its cover is
             // still scanned above. The clock starts from 0 when the hold ends.
-            if (WaterHold.Active) { Wetting = false; ResetConditionClock(); return; }
+            if (WaterHold.Active) { Wetting = Drying = false; ResetConditionClock(); return; }
             // Crest's asynchronous height queries must be submitted every frame to
             // receive the previous frame's result; quarter-second polling never settles.
             bool loose = !item.currentActualBoat;
@@ -676,17 +707,22 @@ namespace EconomyOverhaul
             // Stains: open cells get the full rain rate, covered cells none (the history applies the mask).
             double rainDamage = coverKnown && exposed > 0 ? elapsedHours * Rules.RainDamagePerHour(rain, 1) * damageSpeed : 0;
             // Surface moisture may finish evaporating at the ceiling; the permanent stain never decreases. Liquids and
-            // ruined cargo cannot dry; open cells dry with the weather and time of day, covered cells not at all.
-            bool canDry = near && !LiquidCargo.Contains(state.good) && !Rules.Ruined(state.health) && depth <= 0 && rain == 0
-                && coverKnown && exposed > 0;
-            double dryOpen = canDry ? elapsedHours * Rules.OpenDryingPerHour(clouds, hour) * dryingSpeed : 0;
-            if (waterDamage > 0 || rainDamage > 0 || history != null && canDry)
+            // ruined cargo cannot dry; open cells dry with the weather and time of day, covered cells not at all, except near a lit lantern,
+            // which dries every cell at its share of that rate. Nothing dries in rain or with any water at the cargo.
+            bool mayDry = near && !LiquidCargo.Contains(state.good) && !Rules.Ruined(state.health) && depth <= 0 && coverKnown && rain == 0;
+            double lantern = mayDry ? LanternShare() : 0;
+            bool canDry = mayDry && exposed > 0;
+            double openRate = Rules.OpenDryingPerHour(clouds, hour) * dryingSpeed;
+            double dryOpen = canDry ? elapsedHours * openRate : 0, dryLantern = elapsedHours * openRate * lantern;
+            if (waterDamage > 0 || rainDamage > 0 || history != null && (canDry || dryLantern > 0))
             {
                 EnsureHistory();
-                history.Accumulate(wetVolumes, waterDamage, rainDamage, dryOpen, coveredCells, transform.localToWorldMatrix, b);
+                history.Accumulate(wetVolumes, waterDamage, rainDamage, dryOpen, coveredCells, transform.localToWorldMatrix, b, dryLantern);
             }
+            float before = state.health;
             state.health = Rules.AdvanceCondition(state.health, elapsedHours, LiquidCargo.Contains(state.good) || !near, depth > 0,
-                damagingWater, rain, coverKnown, exposed, clouds, hour, Rules.Ceiling(state.good), damageSpeed, dryingSpeed);
+                damagingWater, rain, coverKnown, exposed, clouds, hour, Rules.Ceiling(state.good), damageSpeed, dryingSpeed, lantern);
+            Drying = state.health > before;
             CaptureParent(); if (Math.Abs(visualHealth - state.health) >= .1f) RefreshAppearance();
         }
         private float WaterDepth(Bounds bounds)
@@ -940,17 +976,73 @@ namespace EconomyOverhaul
         // Within 1 km of the player.
         internal static bool Near(Vector3 p) { Read(); return !hasPlayer || (p - player).sqrMagnitude <= Reach * Reach; }
     }
-    // The look outline of a crate getting wetter drawn blue. The game draws every looked-at outline in one colour, slot 1 of the main camera's
-    // OutlineEffect (its scene colour, a pale tan); only one item is looked at at a time, so that colour is set to Rules.WetOutlineColor while
-    // the looked-at item is a wet crate (CargoCondition.Want each frame) and given back its scene colour otherwise, just before the camera
-    // draws. Other outlines in that slot at that moment (a new mission's crates, outlined until first picked up) turn blue with it.
+    // The lit lanterns, kept as the game switches them (LanternLitPatch), so no scene search. Version goes up when one is switched on or off,
+    // a lit one is put down or hung (LanternDropPatch) or the option changes; each cargo measures its lanterns again only then or when it comes to
+    // rest (CargoCondition.LanternShare). One whose object is gone is dropped when next measured.
+    // shortcut: a lit lantern that leaves without being switched off or put down (destroyed, or sailing away on its ship from cargo left
+    // ashore) still counts for cargo measured before until the next change; replace if players meet it.
+    internal static class Lanterns
+    {
+        private sealed class Lit { internal ShipItemLight item; internal Light light; internal bool big; }
+        private static readonly List<Lit> lit = new List<Lit>();
+        private static readonly AccessTools.FieldRef<ShipItemLight, Light> lightOf = AccessTools.FieldRefAccess<ShipItemLight, Light>("light");
+        internal static int Version { get; private set; }
+        internal static void Changed() => Version++;
+        internal static void Switched(ShipItemLight item)
+        {
+            int at = lit.FindIndex(l => l.item == item);
+            bool on = item && item.amount >= 1;   // SetLight leaves amount 1 when lit, 0 when out
+            if (!on) { if (at >= 0) { lit.RemoveAt(at); Version++; } return; }
+            if (at >= 0) return;
+            var light = lightOf(item); if (!light) return;
+            var save = item.GetComponent<SaveablePrefab>();
+            lit.Add(new Lit { item = item, light = light, big = save && save.prefabIndex == Rules.BigLanternPrefab }); Version++;
+        }
+        internal static void Moved(ShipItemLight item) { if (item && item.amount >= 1) Version++; }
+        // The strongest lit, bought lantern's open share for the cargo whose own box (cargo-local) is `local` (Rules.LanternDrying), 0 for none in range.
+        internal static double Drying(Transform cargo, Bounds local)
+        {
+            if (lit.Count == 0) return 0;
+            double best = 0; int option = Settings.LanternCover; bool gone = false;
+            for (int n = lit.Count - 1; n >= 0; n--)
+            {
+                var l = lit[n];
+                if (!l.item || !l.light) { lit.RemoveAt(n); gone = true; continue; }
+                if (!l.item.sold || !l.light.isActiveAndEnabled) continue;
+                Vector3 p = l.light.transform.position, nearest = cargo.TransformPoint(local.ClosestPoint(cargo.InverseTransformPoint(p)));
+                best = Math.Max(best, Rules.LanternDrying(Rules.LanternCover(option, l.big), Vector3.Distance(p, nearest), l.light.range));
+            }
+            if (gone) Version++;
+            return best;
+        }
+    }
+    [HarmonyPatch(typeof(ShipItemLight), "SetLight")] internal static class LanternLitPatch
+    {
+        static void Postfix(ShipItemLight __instance) => Lanterns.Switched(__instance);
+    }
+    // Put down, hung on a hook or placed (the pointer calls OnDrop for each).
+    [HarmonyPatch(typeof(ShipItemLight), "OnDrop")] internal static class LanternDropPatch
+    {
+        static void Postfix(ShipItemLight __instance) => Lanterns.Moved(__instance);
+    }
+    // The look outline of a crate getting wetter drawn blue, and of one drying drawn yellow-orange. The game draws every looked-at outline in
+    // one colour, slot 1 of the main camera's OutlineEffect (its scene colour, a pale tan); only one item is looked at at a time, so that
+    // colour is set to Rules.WetOutlineColor or Rules.DryingOutlineColor while the looked-at item is such a crate (CargoCondition
+    // calls Want each frame) and given back its scene colour otherwise, just before the camera draws. Other outlines in that slot at that moment
+    // (a new mission's crates, outlined until first picked up) take the colour with it.
     internal static class WetOutline
     {
         private static int wanted = -1;
+        private static Color colour;
         private static cakeslice.OutlineEffect effect;
         private static Color scene;
-        private static bool blue, hooked;
-        internal static void Want() => wanted = Time.frameCount;
+        private static bool recoloured, hooked;
+        // wet: getting wetter (blue), else drying (yellow-orange); each with its own option.
+        internal static void Want(bool wet)
+        {
+            if (!(wet ? Settings.WetOutlineEnabled : Settings.DryingOutlineEnabled)) return;
+            wanted = Time.frameCount; colour = wet ? Rules.WetOutlineColor : Rules.DryingOutlineColor;
+        }
         internal static void Hook() { if (!hooked) { Camera.onPreCull += PreCull; hooked = true; } }
         internal static void Unhook() { if (hooked) { Camera.onPreCull -= PreCull; hooked = false; } Restore(); }
         private static void PreCull(Camera camera)
@@ -958,15 +1050,18 @@ namespace EconomyOverhaul
             if (!camera || !camera.CompareTag("MainCamera")) return;
             var fx = camera.GetComponent<cakeslice.OutlineEffect>(); if (!fx) return;
             if (fx != effect) { Restore(); effect = fx; }
-            bool on = wanted == Time.frameCount && Settings.WetOutlineEnabled && World.Ready;
-            if (on && !blue) { scene = fx.lineColor1; fx.lineColor1 = Rules.WetOutlineColor; blue = true; }
-            else if (!on && blue) Restore();
+            if (wanted == Time.frameCount && World.Ready)
+            {
+                if (!recoloured) { scene = fx.lineColor1; recoloured = true; }
+                if (fx.lineColor1 != colour) fx.lineColor1 = colour;
+            }
+            else if (recoloured) Restore();
         }
         // The scene's colour back (the option off, the uninstall, another camera).
         internal static void Restore()
         {
-            if (blue && effect) effect.lineColor1 = scene;
-            blue = false;
+            if (recoloured && effect) effect.lineColor1 = scene;
+            recoloured = false;
         }
     }
     [HarmonyPatch(typeof(BoatDamageWater), "Start")] internal static class WaterRegisterPatch { static void Postfix(BoatDamageWater __instance) => BoatWater.Register(__instance); }
@@ -1124,6 +1219,32 @@ namespace EconomyOverhaul
     }
     [HarmonyPatch(typeof(ShipItem), "OnPickup")] internal static class CargoPickupPatch { static void Postfix(ShipItem __instance) => __instance.GetComponent<CargoCondition>()?.ClearExposure(); }
     [HarmonyPatch(typeof(ShipItem), "OnEnterInventory")] internal static class CargoInventoryPatch { static void Postfix(ShipItem __instance) => __instance.GetComponent<CargoCondition>()?.ClearExposure(); }
+    // With empty hands the game points at a nailed item only if it is exactly a crate, a barrel or a bed (GoPointer.DoRaycast), so other nailed
+    // cargo showed no look text or hint lines. The method's one read of ShipItem.nailed goes through NailedHidden, false for cargo, which sends
+    // that cargo down the game's branch for an item it points at.
+    [HarmonyPatch(typeof(GoPointer), "DoRaycast")] internal static class NailedCargoPointPatch
+    {
+        internal static bool NailedHidden(ShipItem item) => item.nailed && !item.GetComponent<CargoCondition>();
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var nailed = AccessTools.Field(typeof(ShipItem), nameof(ShipItem.nailed));
+            var list = instructions.ToList();
+            var reads = list.Where(c => c.LoadsField(nailed)).ToList();
+            if (reads.Count != 1) { Plugin.Log?.LogWarning("Pointer's nailed test not found; nailed cargo other than crates and barrels shows no hint lines."); return list; }
+            reads[0].opcode = System.Reflection.Emit.OpCodes.Call; reads[0].operand = AccessTools.Method(typeof(NailedCargoPointPatch), nameof(NailedHidden));
+            return list;
+        }
+    }
+    // The game's controls line for a plain item or salt reads "pick up", which a nailed item refuses: on nailed cargo it is taken off with its icon.
+    [HarmonyPatch(typeof(LookUI), "ShowLookText")] internal static class NailedCargoControlsPatch
+    {
+        private static readonly Action<LookUI> HideIcons = AccessTools.MethodDelegate<Action<LookUI>>(AccessTools.Method(typeof(LookUI), "HideIcons"));
+        static void Postfix(LookUI __instance, GoPointerButton button, TextMesh ___controlsText)
+        {
+            if (!(button is ShipItem item) || !item.nailed || !___controlsText || ___controlsText.text != "pick up\n" || !item.GetComponent<CargoCondition>()) return;
+            ___controlsText.text = ""; HideIcons(__instance);
+        }
+    }
     // Opened at 100% water damage (Rules.OutOfTrade): the market's area counts it as a barrel not full (its own "Failed to sell -
     // crate/barrel not full"), and a shopkeeper pays an empty barrel's 25 even when it is full again.
     [HarmonyPatch(typeof(IslandMarketWarehouseArea), "IsGoodValid")] internal static class OpenedCargoMarketPatch
@@ -1178,8 +1299,8 @@ namespace EconomyOverhaul
         private sealed class Exposure
         {
             internal CargoWetVolume[] water;
-            internal double immersion,rain,dryOpen;
-            internal bool[] cover;                        // per cell, true = under cover: no rain, no drying
+            internal double immersion,rain,dryOpen,dryLantern;
+            internal bool[] cover;                        // per cell, true = under cover: no rain, and only a lantern's drying
             internal Vector3 heightDirection;
             internal float heightOffset,heightScale;
         }
@@ -1198,26 +1319,27 @@ namespace EconomyOverhaul
             int v=(int)Math.Round(Math.Max(0,Math.Min(1,value))*65535);
             data[offset]=(byte)(v&255);data[offset+1]=(byte)(v>>8);
         }
+        // dryLantern: a lit lantern's drying, on every cell, covered ones too.
         internal void Accumulate(List<CargoWetVolume> water,double immersion,double rain,double dryOpen,
-            bool[] cover,Matrix4x4 matrix,Bounds worldBounds)
+            bool[] cover,Matrix4x4 matrix,Bounds worldBounds,double dryLantern=0)
         {
-            if(immersion<=0 && rain<=0 && dryOpen<=0)return;
+            if(immersion<=0 && rain<=0 && dryOpen<=0 && dryLantern<=0)return;
             var up=new Vector3(matrix.m10,matrix.m11,matrix.m12);
             var sample=new Exposure { water=immersion>0 ? water.ToArray() : null,immersion=immersion,rain=rain,
-                dryOpen=dryOpen,cover=cover,
+                dryOpen=dryOpen,dryLantern=dryLantern,cover=cover,
                 heightDirection=up,heightOffset=matrix.m13-worldBounds.min.y,heightScale=1/Math.Max(.001f,worldBounds.size.y) };
             // Capture exposure poses cheaply between grid updates. Stationary adjacent
             // samples coalesce; rotation history is retained across the three-second interval.
             if(pending.Count>0 && Equivalent(pending[pending.Count-1],sample))
             {
                 var previous=pending[pending.Count-1];previous.immersion+=immersion;previous.rain+=rain;
-                previous.dryOpen+=dryOpen;
+                previous.dryOpen+=dryOpen;previous.dryLantern+=dryLantern;
             }
             else pending.Add(sample);
         }
         private static bool Equivalent(Exposure a,Exposure b)
         {
-            if((a.dryOpen>0)!=(b.dryOpen>0) || a.cover!=b.cover ||
+            if((a.dryOpen>0)!=(b.dryOpen>0) || (a.dryLantern>0)!=(b.dryLantern>0) || a.cover!=b.cover ||
                 (a.rain>0)!=(b.rain>0) || (a.immersion>0)!=(b.immersion>0) ||
                 (a.heightDirection-b.heightDirection).sqrMagnitude>.000001f || Math.Abs(a.heightOffset-b.heightOffset)>.001f ||
                 Math.Abs(a.heightScale-b.heightScale)>.001f || (a.water?.Length ?? 0)!=(b.water?.Length ?? 0)) return false;
@@ -1247,7 +1369,7 @@ namespace EconomyOverhaul
                         double exposure=Rules.Clamp((height-.15)/.7,0,1); exposure=exposure*exposure*(3-2*exposure);
                         amount+=sample.rain*exposure;
                     }
-                    double dry=sheltered?0:sample.dryOpen;
+                    double dry=Math.Max(sheltered?0:sample.dryOpen,sample.dryLantern);
                     stain=Math.Min(1,stain+amount/40);wet=Math.Max(0,Math.Min(1,wet+amount/25)-dry/20);
                 }
                 if(stain!=oldStain || wet!=oldWet)

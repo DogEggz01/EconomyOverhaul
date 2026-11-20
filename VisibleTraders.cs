@@ -195,6 +195,9 @@ namespace EconomyOverhaul
         // furled by the awa, at sea or on the harbour legs (AllSquareBraceMost); in port it furls them all with SailsOut
         public static bool SquareSet(bool set, double awa, double heldFor, bool atSea, bool allSquare) => allSquare || SquareSet(set, awa, heldFor, atSea);
         public static bool AllSquare(IEnumerable<int> kinds) => kinds.Any() && kinds.All(k => k == 3);
+        // A trader with a square sail and no jib-type sail (the game's staysail category: jibs, genoas, staysails) keeps its square sails set
+        // the whole harbour way whatever the awa, braced as at sea; at sea the awa rule; waiting, at a berth or the anchorage furled with the others.
+        public static bool SquaresKept(IEnumerable<int> kinds) => kinds.Contains(3) && !kinds.Contains(2);
         // Whether a trader's sails are out (VisibleTraders.Sails; the furl and set at FurlRate). underWay: sailing, or on a harbour leg not held;
         // berthed: at a berth or the anchorage. Every trader sets them under way and furls them otherwise; one with square sails only keeps them
         // set waiting too, and furls them at a berth or the anchorage.
@@ -1577,6 +1580,7 @@ namespace EconomyOverhaul
         internal int Lanterns;   // the lanterns hung on it (the hull's places, a plan's on its own masts: Rules.LanternsOnMasts)
         internal readonly List<SailRig> Sails = new List<SailRig>();
         internal bool AllSquare;   // every sail a square sail (kind 3): set at sea, on the harbour legs and waiting, furled at a berth or the anchorage, braced to 80 (Rules.AllSquare, Rules.SailsOut)
+        internal bool SquaresKept;   // a square sail and no jib: its square sails set the whole harbour way (Rules.SquaresKept)
         internal bool[] RendererOn;
         internal string Report;
         internal List<int[]> MergedPaths = new List<int[]>();   // the parts drawn as the merged meshes (TraderHulls.MergeStatic)
@@ -2091,6 +2095,7 @@ namespace EconomyOverhaul
             // each sail's place in the template as it is now (dropping parts changes the children's order numbers)
             t.Sails.RemoveAll(s => !s.T);
             t.AllSquare = Rules.AllSquare(t.Sails.Select(s => s.Kind));
+            t.SquaresKept = Rules.SquaresKept(t.Sails.Select(s => s.Kind));
             foreach (var s in t.Sails) s.Path = IndexPath(s.T, copy.transform);
             t.Flags.RemoveAll(f => !f.T);
             foreach (var f in t.Flags) f.Path = IndexPath(f.T, copy.transform);
@@ -2138,7 +2143,7 @@ namespace EconomyOverhaul
                        "; " + materials + " materials its own, " + ropes + " mooring parts and " + unbound + " meshes bound outside it taken off, ropes drawn " + ropeLines +
                        " (" + reefAnchor + " reef and anchor ropes and " + ropesOff + " not drawn on it taken off, " + frozenRopes + " cloth ropes as captured taken off), purchase paper " + (paperOff ? "taken off" : "none") +
                        ", player collider " + (forPlayer ? "yes" : "none") + ", lantern " + lanternKind + lanternWhy + "; drawn outside the hull: " + Outside(copy, hull) +
-                       "; sails trimmed (kind, goosewing order from aft, sheeted in): " + trim + (t.AllSquare ? " (square sails only: never furled under way, furled at a berth or the anchorage, braced to " + Rules.AllSquareBraceMost.ToString("F0") + ")" : "") + "; their faces: " + faces +
+                       "; sails trimmed (kind, goosewing order from aft, sheeted in): " + trim + (t.AllSquare ? " (square sails only: never furled under way, furled at a berth or the anchorage, braced to " + Rules.AllSquareBraceMost.ToString("F0") + ")" : t.SquaresKept ? " (no jib: square sails set on the harbour legs)" : "") + "; their faces: " + faces +
                        "; trimmed past the range: " + (pastLimit.Count > 0 ? string.Join(", ", pastLimit.ToArray()) : "none") +
                        "; flags driven: " + (t.Flags.Count > 0 ? string.Join(", ", t.Flags.Select(f => f.T.name + " " + (f.Drive == 0 ? "its apparent wind" : f.Drive == 1 ? "sail " + f.Sail : "the wind") + " x" + f.Mult.ToString("F2")).ToArray()) : "none") + (plan != null ? "; parts unlike the stock rig: " + (partsDiffer.Length > 0 ? partsDiffer : "none") : "");
             return t;
@@ -5072,13 +5077,13 @@ namespace EconomyOverhaul
             }
             // the square sails: at sea set from awa 36 and furled under 33 (7 s held); leaving, set at the approach point at once from
             // 36; off the sea furled. A trader with square sails only: set always here; at a berth or the anchorage its v.Unroll furls
-            // them (Sails, Rules.SailsOut)
-            bool allSquare = c.Template.AllSquare;
-            if (snap || (atSea && v.TrimPhase != Phase.Sail)) { v.SquareSet = allSquare || atSea && Rules.SquareAtApproach(awa); v.SquareFor = 0; }
+            // them (Sails, Rules.SailsOut). One with no jib (Rules.SquaresKept): set on the harbour legs too
+            bool keptSet = c.Template.AllSquare || c.Template.SquaresKept && (v.Phase == Phase.LegOut || v.Phase == Phase.LegIn);
+            if (snap || (atSea && v.TrimPhase != Phase.Sail)) { v.SquareSet = keptSet || atSea && Rules.SquareAtApproach(awa); v.SquareFor = 0; }
             else
             {
                 v.SquareFor = Rules.SquareTurns(v.SquareSet, awa) ? v.SquareFor + dt : 0;
-                bool set = Rules.SquareSet(v.SquareSet, awa, v.SquareFor, atSea, allSquare); if (set != v.SquareSet) { v.SquareSet = set; v.SquareFor = 0; }
+                bool set = Rules.SquareSet(v.SquareSet, awa, v.SquareFor, atSea, keptSet); if (set != v.SquareSet) { v.SquareSet = set; v.SquareFor = 0; }
             }
             v.TrimPhase = v.Phase;
             v.SquareUnroll = snap ? (v.SquareSet ? 1f : 0f) : Mathf.MoveTowards(v.SquareUnroll, v.SquareSet ? 1f : 0f, (float)Rules.FurlRate * dt);

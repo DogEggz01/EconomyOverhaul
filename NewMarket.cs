@@ -1242,7 +1242,7 @@ namespace EconomyOverhaul
     {
         internal Good Cargo;
         internal MoneyQuote Quote;
-        internal int Principal, Interest, Payout, Shortfall, DebtCurrency;
+        internal int Raw, Principal, Interest, Payout, Shortfall, DebtCurrency;
     }
     internal sealed class TradeBatch
     {
@@ -1361,7 +1361,7 @@ namespace EconomyOverhaul
                     float basePrice=m.GetGoodPriceAtSupply(g,(float)(stock+(buy?0:1)));
                     int raw=buy&&batch.Office!=0?OfficeBook.BuyRaw(m,g,stock,batch.Absent):Mathf.RoundToInt(basePrice*(1+(buy?1:-1)*(float)Rules.Spread(basePrice)));
                     var cargo=buy?null:eligible[i];
-                    var u=new TradeUnit {Cargo=cargo,Quote=Fx.Quote(raw,m,batch.Currency,buy,cargo?CargoCondition.Factor(cargo.GetComponent<ShipItem>()):1)};
+                    var u=new TradeUnit {Cargo=cargo,Raw=raw,Quote=Fx.Quote(raw,m,batch.Currency,buy,cargo?CargoCondition.Factor(cargo.GetComponent<ShipItem>()):1)};
                     if(action==TradeAction.Loan){
                         u.Principal=(int)Math.Min(u.Quote.Total,Math.Floor(credit*Loans.Rate(batch.Currency)));
                         if(u.Principal<=0){batch.Error="Not enough credit for the full batch";return batch;}
@@ -1425,6 +1425,8 @@ namespace EconomyOverhaul
                     Plugin.Log?.LogWarning(e);Loans.Notify(e is CargoPlacement.NoRoom?CargoPlacement.NoRoom.Notice:e.Message+"; no trade was charged.");return;
                 }
             }
+            // The receipt's details read before the commit: the crates' condition, loans and prices paid, at the rates the quote used.
+            var receiptUnits=TradeReceipts.Units(batch);
             int[] walletBefore=(int[])PlayerGold.currency.Clone();
             float stockBefore=m.currentSupply[g];
             float tradedBefore=m.debugTotalGoodsTraded;
@@ -1451,6 +1453,7 @@ namespace EconomyOverhaul
                         // A trade office's book: half the supply drop, none for a good the port doesn't trade; the crate marked for this port.
                         if(batch.Office!=0){m.currentSupply[g]=batch.Absent?supplyBefore:supplyBefore-.5f;var record=CargoRecords.Of(item);if(record!=null)record.officePort=m.GetPortIndex()+1;}
                         Fx.RememberPurchase(item,currency,Fx.Record(currency,u.Quote.Gross,true,TradeSource.Cargo));
+                        var paid=CargoRecords.Of(item);if(paid!=null){paid.paid=u.Quote.Total-u.Principal;paid.paidCurrency=currency;paid.paidPort=m.GetPortIndex()+1;}
                     }
                 }
             }catch(Exception e){
@@ -1470,7 +1473,8 @@ namespace EconomyOverhaul
                     var u=batch.Units[i];bool sale=action==TradeAction.Sell;
                     var item=(sale?u.Cargo:staged[i]).GetComponent<ShipItem>();
                     if(DayLogs.instance)DayLogs.instance.dayLogs[currency].LogTransaction(sale?u.Payout:-(u.Quote.Total-u.Principal),item);
-                    if(EconomyUIReceiptScribe.instance)EconomyUIReceiptScribe.instance.AddTransaction(g,sale?-1:1,sale?u.Payout:u.Quote.Total,currency);
+                    if(receiptUnits!=null)TradeReceipts.Add(g,sale,currency,receiptUnits[i]);
+                    else if(EconomyUIReceiptScribe.instance)EconomyUIReceiptScribe.instance.AddTransaction(g,sale?-1:1,sale?u.Payout-(u.DebtCurrency==currency?u.Shortfall:0):u.Quote.Total-u.Principal,currency);
                 }
             }catch(Exception e){Plugin.Log?.LogError("Trade completed, but receipt display failed: "+e);}
             if(batch.Carrier){
@@ -1480,6 +1484,329 @@ namespace EconomyOverhaul
             Economy.Refresh(m); if(UISoundPlayer.instance)UISoundPlayer.instance.PlayGoldSound();ui.RefreshPage();
         }
     }
+    // ---- Trade receipts ----
+    // A printed receipt's details (TradeReceipts), with a copy of its rows (its fingerprint): drawn only on the receipt whose rows match.
+    [Serializable] public sealed class ReceiptState
+    {
+        public string port;
+        public int day;
+        public int[] goods, amounts, totals, currencies;
+        // Per row of the receipt, by its index; null for a row the mod did not write.
+        public ReceiptRowState[] rows;
+    }
+    // One receipt row's crates, financed (Respondentia) or own, bought or sold; amounts in the row's coins.
+    [Serializable] public sealed class ReceiptRowState
+    {
+        public bool financed, sale;
+        // A purchase: the crates' price; a sale: their price at full condition.
+        public int price;
+        // A sale: the value lost to water damage and to cargo damage, the crates' loans and interest.
+        public int water, cargo, loan, interest;
+        // A sale's shortfall taken from a lender's coins other than the row's, by currency; null when none.
+        public int[] shortfall;
+        // A sale: the cash the crates were bought for (paidKnown: every crate's known), and by purchase port, in the order first sold: the port + 1, the
+        // cash paid there and its crates.
+        public int paid;
+        public bool paidKnown;
+        public int[] boughtPort, boughtPaid, boughtCount;
+    }
+    // One crate of a trade-book trade as its receipt counts it; Wallet: what it changed in the row's coins.
+    internal struct ReceiptUnit
+    {
+        internal bool Financed, PaidKnown;
+        internal int Wallet, Price, Water, Cargo, Loan, Interest, Shortfall, ShortfallCurrency, Paid, PaidPort;
+    }
+    internal enum ReceiptLineKind { Plain, Shortfall, Rule, Profit }
+    internal struct ReceiptLine
+    {
+        internal string Label; internal ReceiptLineKind Kind; internal long Value; internal int Currency, Port; internal double Each;
+    }
+    // The trade book's receipts: each crate written into the game's current receipt (EconomyUIReceiptScribe) by the mod, financed and own crates
+    // of one good in rows of their own, each row's total what reached the wallet (so the game alone still draws a receipt that adds up); each row's
+    // details in a side record, kept per printed receipt in SaveState.receipts and drawn on the log's Trade receipts page (ReceiptPage).
+    internal static class TradeReceipts
+    {
+        internal const int Kept = 12, PageLines = 14;
+        private static TradeReceipt current; private static ReceiptRowState[] rows;
+        // Before the trade's commit: what each crate's sale or purchase gives the receipt. Prices at full condition and at its water condition alone
+        // are quoted from the unit's raw price as the batch's quote was (the rates before the trade). Null when it fails: the receipt then gets only
+        // the wallet's amounts.
+        internal static ReceiptUnit[] Units(TradeBatch batch)
+        {
+            try
+            {
+                var units = new ReceiptUnit[batch.Units.Count]; bool sale = batch.Action == TradeAction.Sell; int coin = batch.Currency; double rate = Loans.Rate(coin);
+                for (int i = 0; i < units.Length; i++)
+                {
+                    var u = batch.Units[i]; var r = new ReceiptUnit();
+                    if (!sale) { r.Financed = u.Principal > 0; r.Price = u.Quote.Total; r.Wallet = u.Quote.Total - u.Principal; units[i] = r; continue; }
+                    var item = u.Cargo.GetComponent<ShipItem>();
+                    r.Wallet = u.Payout - (u.DebtCurrency == coin ? u.Shortfall : 0);
+                    CargoCondition.Factors(item, out float water, out float intact);
+                    int full = Fx.Quote(u.Raw, batch.Market, coin, false).Total, wet = intact < 1 ? Fx.Quote(u.Raw, batch.Market, coin, false, water).Total : u.Quote.Total;
+                    r.Price = full; r.Water = full - wet; r.Cargo = wet - u.Quote.Total;
+                    var loan = Loans.Find(item);
+                    if (loan != null)
+                    {
+                        double k = rate / Loans.Rate(Loans.Currency(loan));
+                        r.Financed = true; r.Loan = (int)Math.Round(loan.principal * k); r.Interest = (int)Math.Round(loan.interest * k);
+                        if (u.DebtCurrency != coin) { r.Shortfall = u.Shortfall; r.ShortfallCurrency = u.DebtCurrency; }
+                    }
+                    var record = CargoRecords.Of(item);
+                    r.PaidKnown = record != null && record.paidPort > 0 && record.paidCurrency >= 0 && record.paidCurrency < 4;
+                    if (r.PaidKnown) { r.Paid = (int)Math.Round(record.paid * rate / Loans.Rate(record.paidCurrency)); r.PaidPort = record.paidPort; }
+                    units[i] = r;
+                }
+                return units;
+            }
+            catch (Exception e) { Plugin.Log?.LogError("Trade receipt details unavailable; this trade's receipt rows hold only the wallet's amounts. " + e); return null; }
+        }
+        // One crate into the scribe's current receipt; a full receipt is printed and a new one started, as the game's AddTransaction does.
+        internal static void Add(int good, bool sale, int currency, ReceiptUnit u)
+        {
+            var scribe = EconomyUIReceiptScribe.instance; var ui = EconomyUI.instance;
+            if (!scribe || !ui || scribe.currentReceipt == null) return;
+            if (scribe.currentReceipt != current) { current = scribe.currentReceipt; rows = new ReceiptRowState[current.goods.Length]; }
+            string port = ui.GetCurrentPortName();
+            if (AddUnit(current, rows, good, sale, currency, u, port, GameState.day)) return;
+            scribe.RequestCurrentReceipt();
+            current = scribe.currentReceipt; rows = new ReceiptRowState[current.goods.Length];
+            AddUnit(current, rows, good, sale, currency, u, port, GameState.day);
+        }
+        // TradeReceiptsUI.ReceiveReceipt: a receipt whose rows the mod wrote keeps its details, newest first.
+        internal static void Printed(TradeReceipt receipt)
+        {
+            if (receipt == null || receipt != current || rows == null || !World.Ready) return;
+            if (World.State.receipts == null) World.State.receipts = new List<ReceiptState>();
+            Keep(World.State.receipts, Record(receipt, rows));
+            current = null; rows = null;
+        }
+        // The crate added to its row (same good, coins, direction and kind); a new row in the first empty one. False when the receipt has none left.
+        // A row the mod did not write (no detail) is never added to.
+        internal static bool AddUnit(TradeReceipt r, ReceiptRowState[] details, int good, bool sale, int currency, ReceiptUnit u, string port, int day)
+        {
+            int at = -1;
+            for (int i = 0; i < r.goods.Length && at < 0; i++)
+                if (details[i] != null && r.goods[i] == good && r.tradeCurrencies[i] == currency && details[i].sale == sale && details[i].financed == u.Financed) at = i;
+            if (at < 0)
+            {
+                for (int i = 0; i < r.goods.Length && at < 0; i++) if (r.goods[i] <= 0) at = i;
+                if (at < 0) return false;
+                r.goods[at] = good; r.tradeAmounts[at] = 0; r.tradeTotals[at] = 0; r.tradeCurrencies[at] = currency; r.portName = port;
+                details[at] = new ReceiptRowState { financed = u.Financed, sale = sale, paidKnown = true };
+            }
+            var row = details[at];
+            r.tradeAmounts[at] += sale ? -1 : 1; r.tradeTotals[at] += u.Wallet; r.day = day;
+            row.price += u.Price; row.water += u.Water; row.cargo += u.Cargo; row.loan += u.Loan; row.interest += u.Interest; row.paid += u.Paid;
+            row.paidKnown &= u.PaidKnown;
+            if (sale && u.PaidKnown)
+            {
+                int k = row.boughtPort == null ? -1 : Array.IndexOf(row.boughtPort, u.PaidPort);
+                if (k < 0)
+                {
+                    k = row.boughtPort?.Length ?? 0;
+                    Array.Resize(ref row.boughtPort, k + 1); Array.Resize(ref row.boughtPaid, k + 1); Array.Resize(ref row.boughtCount, k + 1);
+                    row.boughtPort[k] = u.PaidPort;
+                }
+                row.boughtPaid[k] += u.Paid; row.boughtCount[k]++;
+            }
+            if (u.Shortfall > 0 && u.ShortfallCurrency != currency) { if (row.shortfall == null) row.shortfall = new int[4]; row.shortfall[u.ShortfallCurrency] += u.Shortfall; }
+            return true;
+        }
+        internal static ReceiptState Record(TradeReceipt r, ReceiptRowState[] details) => new ReceiptState { port = r.portName, day = r.day, goods = (int[])r.goods.Clone(),
+            amounts = (int[])r.tradeAmounts.Clone(), totals = (int[])r.tradeTotals.Clone(), currencies = (int[])r.tradeCurrencies.Clone(), rows = details };
+        internal static void Keep(List<ReceiptState> list, ReceiptState s) { list.Insert(0, s); if (list.Count > Kept) list.RemoveRange(Kept, list.Count - Kept); }
+        // At load: an empty list for an older save; a damaged record is dropped (its receipt drawn as the game draws it).
+        internal static List<ReceiptState> Clean(List<ReceiptState> list)
+        {
+            if (list == null) return new List<ReceiptState>();
+            list.RemoveAll(s => s == null || s.goods == null || s.amounts?.Length != s.goods.Length || s.totals?.Length != s.goods.Length ||
+                s.currencies?.Length != s.goods.Length || s.rows?.Length != s.goods.Length || s.currencies.Any(c => c < 0 || c > 3) ||
+                s.rows.Any(x => x != null && (x.shortfall != null && x.shortfall.Length != 4 || (x.boughtPort?.Length ?? 0) != (x.boughtPaid?.Length ?? 0) ||
+                    (x.boughtPort?.Length ?? 0) != (x.boughtCount?.Length ?? 0))));
+            if (list.Count > Kept) list.RemoveRange(Kept, list.Count - Kept);
+            return list;
+        }
+        internal static bool Matches(ReceiptState s, TradeReceipt r) => s != null && r != null && s.day == r.day && s.port == r.portName &&
+            Same(s.goods, r.goods) && Same(s.amounts, r.tradeAmounts) && Same(s.totals, r.tradeTotals) && Same(s.currencies, r.tradeCurrencies);
+        private static bool Same(int[] a, int[] b)
+        {
+            if (a == null || b == null || a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+            return true;
+        }
+        // The record of the receipt shown at `index` of the page's list: the one at the same place first, else any that matches.
+        internal static ReceiptState Find(List<ReceiptState> list, TradeReceipt r, int index)
+        {
+            if (list == null || r == null) return null;
+            if (index >= 0 && index < list.Count && Matches(list[index], r)) return list[index];
+            foreach (var s in list) if (Matches(s, r)) return s;
+            return null;
+        }
+        // An opened sale row's lines: sold, the damage, a financed row's loan and interest and a shortfall in other coins, what the crates were bought
+        // for at each port; then, when every crate's price is known, a rule and the profit, the sum of the lines above it in the row's coins.
+        internal static List<ReceiptLine> Lines(ReceiptRowState row, int count, int currency)
+        {
+            var lines = new List<ReceiptLine>();
+            if (row == null || !row.sale) return lines;
+            void Add(string label, long value, ReceiptLineKind kind = ReceiptLineKind.Plain, int coin = -1, int port = 0, double each = 0) =>
+                lines.Add(new ReceiptLine { Label = label, Value = value, Kind = kind, Currency = coin < 0 ? currency : coin, Port = port, Each = each });
+            Add("sold", row.price);
+            if (row.water > 0) Add("water damage", -row.water);
+            if (row.cargo > 0) Add("cargo damage", -row.cargo);
+            if (row.financed) { Add("loan", -row.loan); Add("interest", -row.interest); }
+            if (row.shortfall != null) for (int c = 0; c < row.shortfall.Length; c++) if (row.shortfall[c] > 0) Add("shortfall", -row.shortfall[c], ReceiptLineKind.Shortfall, c);
+            if (row.paidKnown && row.boughtPort != null)
+                for (int k = 0; k < row.boughtPort.Length; k++)
+                    if (row.boughtPaid[k] > 0) Add("bought", -row.boughtPaid[k], port: row.boughtPort[k], each: (double)row.boughtPaid[k] / Math.Max(1, row.boughtCount[k]));
+            if (row.paidKnown) { Add("", 0, ReceiptLineKind.Rule); Add("profit", Profit(row), ReceiptLineKind.Profit); }
+            return lines;
+        }
+        internal static long Profit(ReceiptRowState row) => (long)row.price - row.water - row.cargo - (row.financed ? (long)row.loan + row.interest : 0) - row.paid;
+        // The page's total per coin, the wallets' change: each row's total (a purchase's paid, a sale's received) and a sale's shortfall in other coins.
+        internal static long[] Totals(TradeReceipt r, ReceiptState s)
+        {
+            var sums = new long[4];
+            for (int i = 0; i < r.goods.Length; i++)
+            {
+                int c = r.tradeCurrencies[i]; if (r.goods[i] == 0 || c < 0 || c > 3) continue;
+                sums[c] += r.tradeAmounts[i] > 0 ? -(long)r.tradeTotals[i] : r.tradeTotals[i];
+                var owed = s?.rows != null && i < s.rows.Length ? s.rows[i]?.shortfall : null;
+                if (owed != null) for (int k = 0; k < owed.Length && k < 4; k++) sums[k] -= owed[k];
+            }
+            return sums;
+        }
+        // Which of `count` rows show with row `open` (-1 none) opened to `extra` lines: at most PageLines lines, the rows after the open one hidden
+        // first, then those before it.
+        internal static bool[] Shown(int count, int open, int extra)
+        {
+            var shown = new bool[count]; for (int i = 0; i < count; i++) shown[i] = true;
+            int lines = count + (open >= 0 ? extra : 0);
+            for (int i = count - 1; i > open && lines > PageLines; i--) { shown[i] = false; lines--; }
+            for (int i = 0; i < open && lines > PageLines; i++) { shown[i] = false; lines--; }
+            return shown;
+        }
+    }
+    // The log's Trade receipts page drawn from a receipt's record: each row as the game draws it with the price per crate, "(R)" after a financed row's
+    // name, "▸" on a sale row ("▾" when open) and the open row's lines under it near-black, profit green or red under a rule. Only sale rows open, one
+    // at a time, by an invisible box over the row's line (LoanAction on a hidden renderer, the page's layer). A receipt with no record keeps the game's
+    // drawing.
+    internal static class ReceiptPage
+    {
+        internal const string Detail = "<color=#030303>", Green = "<color=#003000>", Red = "<color=#B00000>", End = "</color>", Mark = " <size=40>(R)</size>",
+            Closed = " ▸", Opened = " ▾", Rule = "────────";
+        // In the page background's frame, as measured on the page: the text's line pitch; the item column's reach past its right-aligned origin to the
+        // spine, where long names end (the left page's list buttons start beyond it). The boxes' depth spans the text on both sides.
+        internal const float Pitch = .0247f, NameReach = .16f, BoxDepth = .02f;
+        private static readonly AccessTools.FieldRef<TradeReceiptsUI, GameObject> Background = AccessTools.FieldRefAccess<TradeReceiptsUI, GameObject>("background");
+        private static readonly AccessTools.FieldRef<TradeReceiptsUI, TextMesh> NameText = AccessTools.FieldRefAccess<TradeReceiptsUI, TextMesh>("goodNameText"),
+            AmountText = AccessTools.FieldRefAccess<TradeReceiptsUI, TextMesh>("amountText"), PriceText = AccessTools.FieldRefAccess<TradeReceiptsUI, TextMesh>("priceText"),
+            TotalText = AccessTools.FieldRefAccess<TradeReceiptsUI, TextMesh>("totalText"), CoinText = AccessTools.FieldRefAccess<TradeReceiptsUI, TextMesh>("currencyText"),
+            FinalText = AccessTools.FieldRefAccess<TradeReceiptsUI, TextMesh>("finalTotalText");
+        private static readonly AccessTools.FieldRef<TradeReceiptsUI, TradeReceipt[]> Receipts = AccessTools.FieldRefAccess<TradeReceiptsUI, TradeReceipt[]>("receipts");
+        private static TradeReceiptsUI page; private static int shownIndex = -1, open = -1; private static bool redrawing;
+        private static LoanAction[] boxes; private static readonly int[] boxRow = new int[TradeReceipts.Kept];
+        internal static int OpenRow => open;   // for tests
+        // For tests: the box over a receipt row's line, null when it has none.
+        internal static LoanAction BoxOf(int row)
+        {
+            if (boxes == null) return null;
+            for (int k = 0; k < boxes.Length; k++) if (boxes[k] && boxes[k].gameObject.activeSelf && boxRow[k] == row) return boxes[k];
+            return null;
+        }
+        private static string Signed(long v) => v >= 0 ? "+" + v : v.ToString(CultureInfo.InvariantCulture);
+        private static string Ink(string s) => Detail + s + End;
+        private static string PortName(int port) => Port.ports != null && port >= 0 && port < Port.ports.Length && Port.ports[port] ? Port.ports[port].GetPortName() : "";
+        internal static void Show(TradeReceiptsUI ui, int index)
+        {
+            try
+            {
+                if (!redrawing || ui != page || index != shownIndex) open = -1;
+                page = ui; shownIndex = index;
+                if (boxes != null) foreach (var b in boxes) if (b && b.gameObject.activeSelf) b.gameObject.SetActive(false);
+                var all = Receipts(ui); var r = all != null && index >= 0 && index < all.Length ? all[index] : null;
+                var record = r != null && World.Ready ? TradeReceipts.Find(World.State.receipts, r, index) : null;
+                if (record == null) { open = -1; return; }
+                var drawn = new List<int>(); for (int i = 0; i < r.goods.Length; i++) if (r.goods[i] != 0) drawn.Add(i);
+                int openAt = drawn.IndexOf(open); if (openAt < 0) open = -1;
+                var lines = open >= 0 ? TradeReceipts.Lines(record.rows[open], Math.Abs(r.tradeAmounts[open]), r.tradeCurrencies[open]) : null;
+                var shown = TradeReceipts.Shown(drawn.Count, openAt, lines?.Count ?? 0);
+                System.Text.StringBuilder names = new System.Text.StringBuilder(), amounts = new System.Text.StringBuilder(), prices = new System.Text.StringBuilder(),
+                    totals = new System.Text.StringBuilder(), coins = new System.Text.StringBuilder();
+                bool boxed = Boxes(ui); int line = 0, used = 0;
+                for (int k = 0; k < drawn.Count; k++)
+                {
+                    if (!shown[k]) continue;
+                    int i = drawn[k], n = r.tradeAmounts[i], t = r.tradeTotals[i]; var row = record.rows[i]; bool opens = row != null && row.sale;
+                    names.Append(PrefabsDirectory.instance.GetGood(r.goods[i]).name).Append(row != null && row.financed ? Mark : "").Append(opens ? i == open ? Opened : Closed : "").Append('\n');
+                    amounts.Append(n > 0 ? "+" : "").Append(n).Append('\n');
+                    prices.Append(((float)(row != null ? row.price : t) / Math.Max(1, Math.Abs(n))).ToString("0.0")).Append('\n');
+                    totals.Append(n < 0 ? Signed(t) : t == 0 ? "0" : "-" + t).Append('\n');
+                    coins.Append(PlayerGold.GetCurrencyName(r.tradeCurrencies[i])).Append('\n');
+                    if (opens && boxed && used < boxes.Length) Place(ui, boxes[used], line, i, used++);
+                    line++;
+                    if (i != open) continue;
+                    foreach (var l in lines)
+                    {
+                        string label = l.Kind == ReceiptLineKind.Rule ? "" : l.Port > 0 ? l.Label + " <size=40>(" + PortName(l.Port - 1) + ")</size>" : l.Label;
+                        names.Append(label == "" ? "" : Ink(label)).Append('\n');
+                        amounts.Append('\n');
+                        prices.Append(l.Each > 0 ? Ink(l.Each.ToString("0.0")) : "").Append('\n');
+                        totals.Append(l.Kind == ReceiptLineKind.Rule ? Ink(Rule) : l.Kind == ReceiptLineKind.Profit ? (l.Value >= 0 ? Green : Red) + Signed(l.Value) + End :
+                            l.Kind == ReceiptLineKind.Shortfall ? Red + Signed(l.Value) + End : Ink(Signed(l.Value))).Append('\n');
+                        coins.Append(l.Kind == ReceiptLineKind.Rule ? "" : Ink(PlayerGold.GetCurrencyName(l.Currency))).Append('\n');
+                        line++;
+                    }
+                }
+                var sums = TradeReceipts.Totals(r, record); var final = new System.Text.StringBuilder();
+                for (int j = 0; j < sums.Length; j++) if (sums[j] != 0) final.Append(sums[j] > 0 ? "+" : "").Append(sums[j]).Append(' ').Append(PlayerGold.GetCurrencyName(j)).Append('\n');
+                NameText(ui).text = names.ToString(); AmountText(ui).text = amounts.ToString(); PriceText(ui).text = prices.ToString();
+                TotalText(ui).text = totals.ToString(); CoinText(ui).text = coins.ToString(); FinalText(ui).text = final.ToString();
+            }
+            catch (Exception e)
+            {
+                if (boxes != null) foreach (var b in boxes) if (b) b.gameObject.SetActive(false);
+                open = -1; Plugin.Log?.LogError("Trade receipt page: the receipt is drawn as the game draws it. " + e);
+            }
+        }
+        // The row boxes, made once under the page's background (so they hide with it).
+        private static bool Boxes(TradeReceiptsUI ui)
+        {
+            var bg = Background(ui); if (!bg) return false;
+            if (boxes != null && boxes[0] && boxes[0].transform.parent == bg.transform) return true;
+            boxes = new LoanAction[TradeReceipts.Kept];
+            for (int k = 0; k < boxes.Length; k++)
+            {
+                var go = new GameObject("EconomyOverhaul receipt row " + k); go.layer = bg.layer; go.transform.SetParent(bg.transform, false);
+                var hidden = go.AddComponent<MeshRenderer>(); hidden.sharedMaterials = new Material[0]; hidden.enabled = false;
+                go.AddComponent<BoxCollider>().isTrigger = true;
+                int slot = k; boxes[k] = OfficeUiParts.Action(go, () => Toggle(slot), ""); go.SetActive(false);
+            }
+            return true;
+        }
+        // Box `slot` over display line `line` (row `row`): from the coin column's origin to the page's edge past the item column.
+        private static void Place(TradeReceiptsUI ui, LoanAction box, int line, int row, int slot)
+        {
+            var frame = box.transform.parent;
+            Vector3 name = frame.InverseTransformPoint(NameText(ui).transform.position), coin = frame.InverseTransformPoint(CoinText(ui).transform.position);
+            float a = coin.x, b = name.x + NameReach;
+            box.transform.localPosition = new Vector3((a + b) / 2, name.y - (line + .5f) * Pitch, name.z);
+            box.GetComponent<BoxCollider>().size = new Vector3(Math.Abs(b - a), Pitch, BoxDepth);
+            boxRow[slot] = row; box.gameObject.SetActive(true);
+        }
+        private static void Toggle(int slot)
+        {
+            if (!page || slot < 0 || slot >= boxRow.Length) return;
+            int row = boxRow[slot]; open = open == row ? -1 : row;
+            redrawing = true;
+            try { page.ShowReceipt(shownIndex); } finally { redrawing = false; }
+        }
+    }
+    [HarmonyPatch(typeof(TradeReceiptsUI), "ShowReceipt")] internal static class ReceiptShowPatch
+    { static void Postfix(TradeReceiptsUI __instance, int receipt) => ReceiptPage.Show(__instance, receipt); }
+    [HarmonyPatch(typeof(TradeReceiptsUI), "ReceiveReceipt")] internal static class ReceiptPrintPatch
+    { static void Postfix(TradeReceipt receipt) => TradeReceipts.Printed(receipt); }
+
     [HarmonyPatch(typeof(EconomyUI),"BuyGood")] internal static class BulkBuyPatch
     { static bool Prefix(EconomyUI __instance){BulkTrade.Execute(__instance,TradeAction.Buy,BulkTrade.Quantity(Fields.Get<EconomyUIButton>(__instance,"buyButton")));return false;} }
     // The trade book uses Ctrl for x10 (HeldQuantity), and vanilla toggles crouch on the crouch key whenever the

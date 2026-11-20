@@ -40,7 +40,7 @@ namespace EconomyOverhaul
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "DogEggz.EconomyOverhaul";
-        public const string Version = "1.2.1";
+        public const string Version = "1.2.2";
         internal static ManualLogSource Log;
         internal static Plugin Instance;
         private Harmony harmony;
@@ -452,6 +452,9 @@ namespace EconomyOverhaul
         internal static ConfigEntry<DryingSpeedChoice> DryingSpeedOption;
         internal static double WaterDamageSpeed => Rules.WaterDamageSpeed(WaterDamageSpeedOption != null ? (int)WaterDamageSpeedOption.Value : 3);
         internal static double DryingSpeed => Rules.DryingSpeed(DryingSpeedOption != null ? (int)DryingSpeedOption.Value : 0, WaterDamageSpeed);
+        // Lantern drying: cargo near a lit lantern dries as if its cover were at most this, 20-90% in 1% steps (Rules.LanternCover).
+        internal static ConfigEntry<int> LanternCoverOption;
+        internal static int LanternCover => LanternCoverOption?.Value ?? Rules.LanternCoverDefault;
         private static readonly string[] WaterSpeedNames = { "0.25x", "0.5x", "0.75x", "1x" };
         private static readonly string[] DryingSpeedNames = { "1x", "1.5x", "2x", "2.5x", "3x" };
         private static void WaterSpeedButtons(ConfigEntryBase entry)
@@ -477,6 +480,9 @@ namespace EconomyOverhaul
         // The blue look outline of cargo getting wetter (WetOutline), on by default.
         internal static ConfigEntry<bool> WetOutlineOption;
         internal static bool WetOutlineEnabled => WetOutlineOption?.Value ?? true;
+        // The yellow-orange look outline of cargo drying now (WetOutline), on by default.
+        internal static ConfigEntry<bool> DryingOutlineOption;
+        internal static bool DryingOutlineEnabled => DryingOutlineOption?.Value ?? true;
         // Visible traders, on by default; off, the traders run the same, unseen.
         internal static ConfigEntry<bool> VisibleTraders;
         internal static bool VisibleTradersEnabled => VisibleTraders?.Value ?? true;
@@ -493,6 +499,10 @@ namespace EconomyOverhaul
             DryingSpeedOption = config.Bind("Cargo", "Drying speed", DryingSpeedChoice.AsWaterDamage, new ConfigDescription(
                 "How fast wet cargo dries: as the water damage speed (the default), or 1x, 1.5x, 2x, 2.5x or 3x. How far cargo dries back stays the same. No effect while water damage is disabled.",
                 null, new ConfigurationManagerAttributes { CustomDrawer = DryingSpeedButtons }));
+            LanternCoverOption = config.Bind("Cargo", "Lantern drying as % covered", Rules.LanternCoverDefault, new ConfigDescription(
+                "Lantern drying speed same as how many % covered. Big Lantern will be this value -20%.",
+                new AcceptableValueRange<int>(Rules.LanternCoverLeast, Rules.LanternCoverMost)));
+            LanternCoverOption.SettingChanged += (s,e) => Lanterns.Changed();
             CoverHint = config.Bind("Cargo", "Show cover percentage", false,
                 "Show how much of vulnerable cargo's top is under cover (a deck, a roof or a canvas tarp), 0% to 100%, below its water damage line. Hidden when water damage is disabled. This setting only changes the hint.");
             CoverHint.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshHint(); };
@@ -501,6 +511,8 @@ namespace EconomyOverhaul
             CargoDamageHint.SettingChanged += (s,e) => { foreach(var c in CargoCondition.Active) c.RefreshHint(); };
             WetOutlineOption = config.Bind("Cargo", "Deep blue outline on wet cargo", true,
                 "When you look at cargo that is getting wetter right now (in water aboard or in the sea, or in rain with its top not fully covered), its outline is deep blue instead of the usual colour. Cargo that is already wet but out of the water and the rain shows the usual outline. Hidden when water damage is disabled.");
+            DryingOutlineOption = config.Bind("Cargo", "Yellow outline for drying cargo", true,
+                "When you look at wet cargo that is drying right now (in the open air or by a lit lantern), its outline is yellow instead of the usual colour, until it has dried as far as it can. Hidden when water damage is disabled.");
             // On by default; off stops fragile damage and the Fragile mission modifier.
             FragileCargo = config.Bind("Cargo", "Enable fragile cargo", true,
                 "Fragile cargo (gems, sculptures, marble, a fragile mission's tools) is damaged by hull impacts, and fragile missions pay x2 when delivered intact. When off, no mission is fragile: missions already taken lose their fragile x2 for good; saved damage pauses and cargo has full value. Re-enabling resumes the saved damage.");
@@ -677,6 +689,9 @@ namespace EconomyOverhaul
         // The trade offices' fleet: the player's own traders, apart from the 53 (an older build skips the list instead of refusing the whole
         // economy); null until the first ship joins.
         [System.Runtime.Serialization.OptionalField] public List<BoatState> playerFleet;
+        // The trade book's printed receipts' details (TradeReceipts), newest first, at most 12: optional, none in older saves (their receipts drawn as
+        // the game draws them).
+        [System.Runtime.Serialization.OptionalField] public List<ReceiptState> receipts = new List<ReceiptState>();
         internal SaveState Copy() => (SaveState)MemberwiseClone();
     }
 
@@ -875,6 +890,7 @@ namespace EconomyOverhaul
         {
             if (result != null && result.tarps == null) result.tarps = new List<TarpState>();   // a 0.8.5 save
             if (result != null && result.otherTarps == null) result.otherTarps = new List<TarpState>();   // an older save
+            if (result != null) result.receipts = TradeReceipts.Clean(result.receipts);   // none in an older save; a damaged record dropped, not the save
             // Demand data from a build before the tavern (stage 3) has no heard list: an empty one, not a refused save.
             if (result?.demand != null && result.demand.heard == null) result.demand.heard = new List<int>();
             // A fleet short of the table (an older save, from before a trader was added) gets its new traders before the check.
